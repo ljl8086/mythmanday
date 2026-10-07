@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/paraday-core",
+    "crates/paraday-db",
+    "crates/paraday-git",
+    "crates/paraday-ai",
+    "crates/paraday-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["ParaDay Authors <authors@paraday.dev>"]
+license = "MIT"
+repository = "https://github.com/paraday-dev/paraday"
+homepage = "https://paraday.dev"
+description = "Parallel multi-channel time tracker & man-day billing desktop engine for developers."
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled", "chrono", "uuid"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

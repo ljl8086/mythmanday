@@ -1,0 +1,18 @@
+[package]
+name = "paraday-db"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Embedded SQLite persistence layer for ParaDay."
+
+[dependencies]
+paraday-core = { path = "../paraday-core" }
+rusqlite.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"

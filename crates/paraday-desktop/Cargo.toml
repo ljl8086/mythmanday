@@ -1,0 +1,22 @@
+[package]
+name = "paraday-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Native Slint desktop host for ParaDay."
+
+[dependencies]
+paraday-core = { path = "../paraday-core" }
+paraday-db = { path = "../paraday-db" }
+paraday-git = { path = "../paraday-git" }
+paraday-ai = { path = "../paraday-ai" }
+slint = "1.9"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[build-dependencies]
+slint-build = "1.9"
