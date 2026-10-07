@@ -50,4 +50,9 @@ CREATE TABLE IF NOT EXISTS quick_notes (
     logged_at TEXT NOT NULL,
     content TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;

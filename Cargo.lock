@@ -3431,6 +3431,7 @@ dependencies = [
  "paraday-core",
  "paraday-db",
  "paraday-git",
+ "reqwest",
  "slint",
  "slint-build",
  "tokio",

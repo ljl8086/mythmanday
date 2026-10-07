@@ -281,6 +281,62 @@ impl Database {
         }
         Ok(notes)
     }
+
+    pub fn list_all_quick_notes(&self) -> Result<Vec<QuickNote>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, logged_at, content FROM quick_notes ORDER BY logged_at DESC"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let id_str: String = row.get(0)?;
+            let proj_id_str: String = row.get(1)?;
+            let logged_at_str: String = row.get(2)?;
+
+            Ok(QuickNote {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&proj_id_str).unwrap_or_default(),
+                logged_at: DateTime::parse_from_rfc3339(&logged_at_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                content: row.get(3)?,
+            })
+        })?;
+
+        let mut notes = Vec::new();
+        for r in rows {
+            notes.push(r?);
+        }
+        Ok(notes)
+    }
+
+    pub fn delete_quick_note(&self, id: &Uuid) -> Result<()> {
+        self.conn.execute("DELETE FROM quick_notes WHERE id = ?1", params![id.to_string()])?;
+        Ok(())
+    }
+
+    pub fn delete_project(&self, id: &Uuid) -> Result<()> {
+        self.conn.execute("DELETE FROM projects WHERE id = ?1", params![id.to_string()])?;
+        Ok(())
+    }
+
+    // --- 系统设置 Key-Value ---
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

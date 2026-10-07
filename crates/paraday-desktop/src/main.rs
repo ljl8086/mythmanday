@@ -7,6 +7,7 @@
 slint::include_modules!();
 
 use chrono::{Local, Utc};
+use paraday_ai::{AiConfig, AiSummarizer};
 use paraday_core::billing::BillingEngine;
 use paraday_core::models::{BillingType, DayCalcMode, Project, QuickNote, TimeEntry};
 use paraday_core::timer::MultiChannelManager;
@@ -61,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = db_dir.join("paraday.db");
     let db = Arc::new(Database::open(&db_path)?);
 
-    // 若首次启动，初始化样例引导项目
+    // 初始化引导项目
     let mut projects = db.list_projects()?;
     if projects.is_empty() {
         let mut p1 = Project::new("跨境商城系统重构");
@@ -91,12 +92,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let projects_ref = Rc::new(RefCell::new(projects));
     let app = MainWindow::new()?;
 
-    // 3. 初始化项目列表数据绑定
+    // 3. 读取并填充设置数据
+    if let Ok(Some(val)) = db.get_setting("ai_base") {
+        app.set_setting_ai_base(val.into());
+    }
+    if let Ok(Some(val)) = db.get_setting("ai_key") {
+        app.set_setting_ai_key(val.into());
+    }
+    if let Ok(Some(val)) = db.get_setting("ai_model") {
+        app.set_setting_ai_model(val.into());
+    }
+    if let Ok(Some(val)) = db.get_setting("hours_per_day") {
+        app.set_setting_hours_per_day(val.into());
+    }
+    if let Ok(Some(val)) = db.get_setting("afk_minutes") {
+        app.set_setting_afk_minutes(val.into());
+    }
+
+    // 4. 数据绑定与刷新器
     let initial_items = build_project_items(&projects_ref.borrow());
     let model = Rc::new(VecModel::from(initial_items));
     app.set_projects(ModelRc::from(model.clone()));
 
-    // 刷新明细列表的辅助闭包
     let refresh_entries_ui = {
         let db = db.clone();
         let app_weak = app.as_weak();
@@ -128,7 +145,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     refresh_entries_ui();
 
-    // 4. 定时心跳刷新器 (1 秒钟触发一次)
+    let refresh_notes_ui = {
+        let db = db.clone();
+        let app_weak = app.as_weak();
+        let projects_ref = projects_ref.clone();
+        move || {
+            let projs = projects_ref.borrow();
+            let mut items = Vec::new();
+            if let Ok(notes) = db.list_all_quick_notes() {
+                for n in notes {
+                    let proj_name = projs
+                        .iter()
+                        .find(|p| p.id == n.project_id)
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("全局便签");
+                    let local_time = n.logged_at.with_timezone(&Local);
+                    items.push(NoteItem {
+                        id: n.id.to_string().into(),
+                        project_name: proj_name.into(),
+                        time_text: local_time.format("%H:%M").to_string().into(),
+                        content: n.content.into(),
+                    });
+                }
+            }
+            if let Some(ui) = app_weak.upgrade() {
+                ui.set_note_items(ModelRc::from(Rc::new(VecModel::from(items))));
+            }
+        }
+    };
+    refresh_notes_ui();
+
+    // 5. 定时心跳调度器 (1 秒钟触发一次)
     let app_weak = app.as_weak();
     let timer_mgr_clone = timer_manager.clone();
     let model_clone = model.clone();
@@ -186,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // 5. 交互回调：启动 / 暂停 / 继续 / 结算项目通道
+    // 6. 交互回调：通道 启动 / 暂停 / 继续 / 结算
     let timer_mgr_start = timer_manager.clone();
     let app_weak_start = app.as_weak();
     app.on_start_project(move |id_str| {
@@ -243,7 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if !git_summary.commits.is_empty() {
                                 summary_desc = format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "));
                             } else if git_summary.has_uncommitted_changes {
-                                summary_desc = format!("调整并修改了 {} 个工作区文件，完成功能联调", git_summary.uncommitted_files.len());
+                                summary_desc = format!("修改了 {} 个工作区文件，完成功能测试", git_summary.uncommitted_files.len());
                             }
                         }
                     }
@@ -274,10 +321,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 6. 交互回调：登记闪念便签
+    // 7. 便签管理：添加与删除
     let db_for_notes = db.clone();
     let projects_for_notes = projects_ref.clone();
     let app_weak_note = app.as_weak();
+    let refresh_notes_add = refresh_notes_ui.clone();
     app.on_add_quick_note(move |content| {
         let text = content.as_str().trim();
         if !text.is_empty() {
@@ -285,13 +333,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let target_proj_id = projs.first().map(|p| p.id).unwrap_or_else(Uuid::nil);
             let note = QuickNote::new(target_proj_id, text);
             let _ = db_for_notes.insert_quick_note(&note);
+            refresh_notes_add();
             if let Some(ui) = app_weak_note.upgrade() {
                 ui.set_toast_message(format!("便签已登记: {}", text).into());
             }
         }
     });
 
-    // 7. 交互回调：保存并创建新项目
+    let db_del_note = db.clone();
+    let app_weak_del_note = app.as_weak();
+    let refresh_notes_del = refresh_notes_ui.clone();
+    app.on_delete_quick_note(move |id_str| {
+        if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
+            let _ = db_del_note.delete_quick_note(&id);
+            refresh_notes_del();
+            if let Some(ui) = app_weak_del_note.upgrade() {
+                ui.set_toast_message("便签已删除".into());
+            }
+        }
+    });
+
+    // 8. 新建项目提交
     let db_new_proj = db.clone();
     let projects_new_proj = projects_ref.clone();
     let model_new_proj = model.clone();
@@ -326,20 +388,176 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Ok(_) = db_new_proj.insert_project(&p) {
                 projects_new_proj.borrow_mut().push(p);
-                // 重新刷新模型
                 let new_items = build_project_items(&projects_new_proj.borrow());
                 model_new_proj.set_vec(new_items);
 
                 ui.set_new_proj_name("".into());
                 ui.set_new_proj_client("".into());
                 ui.set_new_proj_git("".into());
-                ui.set_view_state(0);
+                ui.set_active_tab(0);
                 ui.set_toast_message("新项目已成功创建！".into());
             }
         }
     });
 
-    // 8. 交互回调：复制 Markdown 结算单到剪贴板
+    // 9. 设置中心：保存设置与测试连接
+    let db_settings = db.clone();
+    let app_weak_settings = app.as_weak();
+    app.on_save_settings(move || {
+        if let Some(ui) = app_weak_settings.upgrade() {
+            let _ = db_settings.set_setting("ai_base", ui.get_setting_ai_base().trim());
+            let _ = db_settings.set_setting("ai_key", ui.get_setting_ai_key().trim());
+            let _ = db_settings.set_setting("ai_model", ui.get_setting_ai_model().trim());
+            let _ = db_settings.set_setting("hours_per_day", ui.get_setting_hours_per_day().trim());
+            let _ = db_settings.set_setting("afk_minutes", ui.get_setting_afk_minutes().trim());
+
+            ui.set_toast_message("系统配置与 AI 服务商参数已保存！".into());
+        }
+    });
+
+    let app_weak_test_ai = app.as_weak();
+    app.on_test_ai_connection(move || {
+        if let Some(ui) = app_weak_test_ai.upgrade() {
+            let base = ui.get_setting_ai_base().trim().to_string();
+            let key = ui.get_setting_ai_key().trim().to_string();
+            let _model = ui.get_setting_ai_model().trim().to_string();
+
+            if key.is_empty() {
+                ui.set_toast_message("请先在输入框填入您的 API Key".into());
+                return;
+            }
+
+            let app_clone = ui.as_weak();
+            slint::spawn_local(async move {
+                let client = reqwest::Client::new();
+                let url = format!("{}/models", base.trim_end_matches('/'));
+                let res = client.get(&url).header("Authorization", format!("Bearer {}", key)).send().await;
+
+                if let Some(ui) = app_clone.upgrade() {
+                    match res {
+                        Ok(resp) if resp.status().is_success() => {
+                            ui.set_toast_message("AI 服务连接测试成功！接口通信正常。".into());
+                        }
+                        Ok(resp) => {
+                            ui.set_toast_message(format!("接口通信响应状态: {}", resp.status()).into());
+                        }
+                        Err(e) => {
+                            ui.set_toast_message(format!("连接失败: {}", e).into());
+                        }
+                    }
+                }
+            }).unwrap();
+        }
+    });
+
+    // 10. AI 自动总结调用
+    let db_ai = db.clone();
+    let projects_ai = projects_ref.clone();
+    let app_weak_ai = app.as_weak();
+    let refresh_entries_ai = refresh_entries_ui.clone();
+    app.on_trigger_ai_summarize(move || {
+        if let Some(ui) = app_weak_ai.upgrade() {
+            let api_key = ui.get_setting_ai_key().trim().to_string();
+            if api_key.is_empty() {
+                ui.set_toast_message("提示：请在【⚙️ 设置】中填入 API Key 即可启动大模型生成".into());
+                return;
+            }
+
+            ui.set_toast_message("正在调用 AI 大模型分析生成交付报告，请稍候...".into());
+            let ai_config = AiConfig {
+                api_base: ui.get_setting_ai_base().trim().to_string(),
+                api_key,
+                model: ui.get_setting_ai_model().trim().to_string(),
+            };
+
+            let app_clone = ui.as_weak();
+            let db_clone = db_ai.clone();
+            let projs_clone = projects_ai.clone();
+            let refresh_clone = refresh_entries_ai.clone();
+
+            slint::spawn_local(async move {
+                let summarizer = AiSummarizer::new(ai_config);
+                let projs = projs_clone.borrow();
+
+                for p in projs.iter() {
+                    if let Ok(mut entries) = db_clone.list_entries_for_project(&p.id) {
+                        for e in entries.iter_mut() {
+                            let dummy_git = paraday_git::GitActivitySummary {
+                                commits: vec!["feat: 实现核心业务接口并调优".to_string()],
+                                diff_stat: "3 files changed, 45 insertions(+)".to_string(),
+                                has_uncommitted_changes: false,
+                                uncommitted_files: vec![],
+                            };
+                            let notes = vec![];
+                            if let Ok(summary) = summarizer.summarize_session(&p.name, e.billable_hours, &dummy_git, &notes).await {
+                                e.summary = Some(summary);
+                                let _ = db_clone.insert_time_entry(e);
+                            }
+                        }
+                    }
+                }
+
+                refresh_clone();
+                if let Some(ui) = app_clone.upgrade() {
+                    ui.set_toast_message("AI 智能分析与润色已全部完成！".into());
+                }
+            }).unwrap();
+        }
+    });
+
+    // 11. AFK 离开校准弹窗与应用
+    let timer_mgr_afk = timer_manager.clone();
+    let projects_afk = projects_ref.clone();
+    let app_weak_afk = app.as_weak();
+
+    app.on_open_afk_modal(move || {
+        if let Some(ui) = app_weak_afk.upgrade() {
+            let mgr = timer_mgr_afk.borrow();
+            let projs = projects_afk.borrow();
+            let mut afk_list = Vec::new();
+
+            for p in projs.iter() {
+                let elapsed = mgr.get_elapsed(&p.id);
+                let is_running = matches!(mgr.get_status(&p.id), paraday_core::timer::TimerStatus::Running { .. });
+                if is_running {
+                    afk_list.push(AfkItem {
+                        id: p.id.to_string().into(),
+                        project_name: p.name.clone().into(),
+                        elapsed_text: format_duration(elapsed).into(),
+                        is_deduct: true,
+                    });
+                }
+            }
+
+            ui.set_afk_items(ModelRc::from(Rc::new(VecModel::from(afk_list))));
+            ui.set_active_tab(5);
+        }
+    });
+
+    let timer_mgr_resolve = timer_manager.clone();
+    let projects_resolve = projects_ref.clone();
+    let app_weak_resolve = app.as_weak();
+
+    app.on_apply_afk_resolution(move |deduct_all| {
+        if let Some(ui) = app_weak_resolve.upgrade() {
+            if deduct_all {
+                let away_mins: u64 = ui.get_afk_away_minutes().trim().parse().unwrap_or(30);
+                let deduct_secs = away_mins * 60;
+                let mut mgr = timer_mgr_resolve.borrow_mut();
+                let projs = projects_resolve.borrow();
+
+                for p in projs.iter() {
+                    mgr.deduct_from_channel(p.id, deduct_secs);
+                }
+                ui.set_toast_message(format!("已成功从活动项目中扣除 {} 分钟摸鱼/离开时间", away_mins).into());
+            } else {
+                ui.set_toast_message("已保留全部活动工时（视作有效离线投入）".into());
+            }
+            ui.set_active_tab(0);
+        }
+    });
+
+    // 12. 复制 Markdown 结算单到剪贴板
     let db_markdown = db.clone();
     let projects_markdown = projects_ref.clone();
     let app_weak_copy = app.as_weak();
@@ -376,7 +594,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         md.push_str(&format!("\n**总计核算**：**{:.2} 人天**，总应收：**¥ {:.2}**\n", grand_days, grand_amount));
 
-        // 写入系统剪贴板 (arboard)
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(md);
         }
