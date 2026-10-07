@@ -4,7 +4,7 @@
 // Version: V1.0
 // Description: Multi-channel concurrent time-tracking & man-day billing engine.
 
-import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct ProjectItem {
     id: string,
@@ -17,89 +17,95 @@ export struct ProjectItem {
     is-running: bool,
 }
 
+export struct EntryItem {
+    id: string,
+    project-name: string,
+    duration-text: string,
+    days-text: string,
+    amount-text: string,
+    summary-text: string,
+    time-range: string,
+}
+
 export component MainWindow inherits Window {
-    title: "ParaDay 平行人天 - 多项目并行工时结算";
-    min-width: 460px;
-    min-height: 580px;
-    preferred-width: 480px;
-    preferred-height: 620px;
+    // 解决 Linux Wayland 标题栏中文字符乱码问题
+    title: "ParaDay - Multi-Channel Time Tracker v1.0";
+    min-width: 480px;
+    min-height: 640px;
+    preferred-width: 500px;
+    preferred-height: 680px;
     background: #0f172a;
 
-    in property <string> total-days: "1.00";
-    in property <string> total-amount: "¥ 3,000.00";
-    in property <int> running-count: 2;
+    // 0: 主控制台, 1: 新建项目, 2: 今日对账与导出
+    in-out property <int> view-state: 0;
+
+    in property <string> total-days: "0.00";
+    in property <string> total-amount: "¥ 0.00";
+    in property <int> running-count: 0;
     in-out property <string> note-input: "";
-    in property <[ProjectItem]> projects: [
-        {
-            id: "1",
-            name: "跨境商城系统重构",
-            client: "客户 A",
-            rate-info: "¥ 3,000 / 天 (8h基准)",
-            timer-text: "02:35:12",
-            days-text: "0.50 人天",
-            amount-text: "¥ 1,500.00",
-            is-running: true,
-        },
-        {
-            id: "2",
-            name: "海外 SaaS 架构咨询",
-            client: "客户 B",
-            rate-info: "$ 500 / 天 (8h基准)",
-            timer-text: "01:10:45",
-            days-text: "0.50 人天",
-            amount-text: "$ 250.00",
-            is-running: true,
-        },
-        {
-            id: "3",
-            name: "开源自动化脚本",
-            client: "个人研发",
-            rate-info: "不计费",
-            timer-text: "00:00:00",
-            days-text: "0.00 人天",
-            amount-text: "¥ 0.00",
-            is-running: false,
-        }
-    ];
+    in-out property <string> toast-message: "";
+
+    // 新建项目表单字段
+    in-out property <string> new-proj-name: "";
+    in-out property <string> new-proj-client: "";
+    in-out property <string> new-proj-rate: "3000";
+    in-out property <string> new-proj-currency: "CNY";
+    in-out property <string> new-proj-git: "";
+
+    in property <[ProjectItem]> projects: [];
+    in property <[EntryItem]> recent-entries: [];
+    in property <string> markdown-preview: "";
 
     callback toggle-project(string /* project-id */);
     callback add-quick-note(string /* note-content */);
-    callback open-export();
-    callback open-add-project();
+    callback submit-new-project();
+    callback copy-markdown();
 
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 18px;
+        spacing: 14px;
 
-        // --- 头部标题栏 ---
+        // ================= 顶部全局导航栏 =================
         HorizontalLayout {
             alignment: space-between;
             VerticalLayout {
                 spacing: 2px;
                 Text {
                     text: "ParaDay 平行人天";
-                    font-size: 20px;
+                    font-size: 21px;
                     font-weight: 800;
                     color: #f8fafc;
                 }
                 Text {
-                    text: "多通道并行工时与智能人天结算 V1.0";
+                    text: root.view-state == 0 ? "多通道并行工时与智能人天结算 V1.0" :
+                          root.view-state == 1 ? "创建新商业/自研项目" : "今日结算与客户对账单";
                     font-size: 12px;
                     color: #94a3b8;
                 }
             }
 
+            // 状态徽标 (纯原生矩形绘制，替代易乱码的单色 Emoji)
             Rectangle {
                 background: root.running-count > 0 ? #064e3b : #1e293b;
                 border-radius: 12px;
                 border-width: 1px;
                 border-color: root.running-count > 0 ? #10b981 : #475569;
+
                 HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 10px;
+                    spacing: 6px;
                     alignment: center;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.running-count > 0 ? #10b981 : #64748b;
+                    }
+
                     Text {
-                        text: root.running-count > 0 ? ("🟢 " + root.running-count + " 个并行运行中") : "⚪ 无活动通道";
+                        text: root.running-count > 0 ? (root.running-count + " 个通道计时中") : "无活动通道";
                         font-size: 12px;
                         font-weight: 600;
                         color: root.running-count > 0 ? #34d399 : #94a3b8;
@@ -108,162 +114,316 @@ export component MainWindow inherits Window {
             }
         }
 
-        // --- 今日统计卡片 ---
-        Rectangle {
-            background: #1e293b;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: #334155;
+        // ================= 视图 0：主控制台 =================
+        if root.view-state == 0 : VerticalLayout {
+            spacing: 14px;
 
-            HorizontalLayout {
-                padding: 12px;
-                alignment: space-around;
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 4px;
-                    Text { text: "今日核算总人天"; font-size: 11px; color: #94a3b8; }
-                    Text { text: root.total-days + " 天"; font-size: 18px; font-weight: 800; color: #38bdf8; }
-                }
-                Rectangle { width: 1px; background: #334155; }
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 4px;
-                    Text { text: "今日累计预估收益"; font-size: 11px; color: #94a3b8; }
-                    Text { text: root.total-amount; font-size: 18px; font-weight: 800; color: #10b981; }
+            // 今日数据卡片
+            Rectangle {
+                background: #1e293b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #334155;
+
+                HorizontalLayout {
+                    padding: 14px;
+                    alignment: space-around;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Text { text: "今日核算总人天"; font-size: 12px; color: #94a3b8; }
+                        Text { text: root.total-days + " 天"; font-size: 20px; font-weight: 800; color: #38bdf8; }
+                    }
+                    Rectangle { width: 1px; background: #334155; }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        Text { text: "今日累计预估收益"; font-size: 12px; color: #94a3b8; }
+                        Text { text: root.total-amount; font-size: 20px; font-weight: 800; color: #10b981; }
+                    }
                 }
             }
-        }
 
-        // --- 项目多通道列表 ---
-        Text {
-            text: "正在进行的项目通道";
-            font-size: 13px;
-            font-weight: 700;
-            color: #cbd5e1;
-        }
+            // 正在进行的项目通道标题
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "正在进行的项目通道";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #cbd5e1;
+                }
+                Text {
+                    text: "点击按钮可多项目同时计时";
+                    font-size: 11px;
+                    color: #64748b;
+                }
+            }
 
-        ScrollView {
-            VerticalLayout {
-                spacing: 10px;
-                for item in root.projects: Rectangle {
-                    background: item.is-running ? #1e293b : #141e33;
-                    border-radius: 12px;
-                    border-width: 1px;
-                    border-color: item.is-running ? #0284c7 : #1e293b;
+            // 多项目卡片列表
+            ScrollView {
+                VerticalLayout {
+                    spacing: 10px;
+                    for item in root.projects: Rectangle {
+                        background: item.is-running ? #1e293b : #141e33;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: item.is-running ? #0284c7 : #1e293b;
 
-                    HorizontalLayout {
-                        padding: 14px;
-                        spacing: 12px;
-                        alignment: space-between;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 12px;
+                            alignment: space-between;
 
-                        // 左侧：信息与计时
-                        VerticalLayout {
-                            spacing: 4px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Text {
-                                    text: item.name;
-                                    font-size: 15px;
-                                    font-weight: 700;
-                                    color: #f1f5f9;
-                                }
-                                Rectangle {
-                                    background: #334155;
-                                    border-radius: 4px;
-                                    HorizontalLayout {
-                                        padding-left: 6px;
-                                        padding-right: 6px;
-                                        Text {
-                                            text: item.client;
-                                            font-size: 11px;
-                                            color: #94a3b8;
+                            // 左侧：信息与计时
+                            VerticalLayout {
+                                spacing: 5px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: item.name;
+                                        font-size: 15px;
+                                        font-weight: 700;
+                                        color: #f1f5f9;
+                                    }
+                                    Rectangle {
+                                        background: #334155;
+                                        border-radius: 4px;
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            Text {
+                                                text: item.client;
+                                                font-size: 11px;
+                                                color: #94a3b8;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            Text {
-                                text: item.rate-info;
-                                font-size: 11px;
-                                color: #64748b;
-                            }
-                            HorizontalLayout {
-                                spacing: 14px;
                                 Text {
-                                    text: "⏱️ " + item.timer-text;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: item.is-running ? #38bdf8 : #64748b;
+                                    text: item.rate-info;
+                                    font-size: 11px;
+                                    color: #64748b;
                                 }
-                                Text {
-                                    text: "📊 " + item.days-text;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: #f59e0b;
-                                }
-                                Text {
-                                    text: "💰 " + item.amount-text;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: #10b981;
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    Text {
+                                        text: "[时] " + item.timer-text;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                        color: item.is-running ? #38bdf8 : #64748b;
+                                    }
+                                    Text {
+                                        text: "[天] " + item.days-text;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                        color: #f59e0b;
+                                    }
+                                    Text {
+                                        text: "[额] " + item.amount-text;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                        color: #10b981;
+                                    }
                                 }
                             }
-                        }
 
-                        // 右侧：开关按钮
-                        VerticalLayout {
-                            alignment: center;
-                            Button {
-                                text: item.is-running ? "⏹️ 停止结算" : "▶️ 启动计时";
-                                clicked => {
-                                    root.toggle-project(item.id);
+                            // 右侧：开关按钮
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: item.is-running ? "停止并结算" : "启动计时";
+                                    clicked => {
+                                        root.toggle-project(item.id);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // --- 闪念便签快捷输入栏 ---
-        Rectangle {
-            background: #1e293b;
-            border-radius: 8px;
+            // 闪念便签快捷输入栏
+            Rectangle {
+                background: #1e293b;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #334155;
 
-            HorizontalLayout {
-                padding: 8px;
-                spacing: 8px;
-                LineEdit {
-                    placeholder-text: "闪念便签：记录电话/需求讨论（敲回车自动归档）...";
-                    text <=> root.note-input;
-                    accepted => {
-                        if (root.note-input != "") {
-                            root.add-quick-note(root.note-input);
-                            root.note-input = "";
+                HorizontalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+                    LineEdit {
+                        placeholder-text: "闪念便签：记录电话/需求讨论（敲回车自动保存）...";
+                        text <=> root.note-input;
+                        accepted => {
+                            if (root.note-input != "") {
+                                root.add-quick-note(root.note-input);
+                                root.note-input = "";
+                            }
                         }
                     }
+                    Button {
+                        text: "记便签";
+                        clicked => {
+                            if (root.note-input != "") {
+                                root.add-quick-note(root.note-input);
+                                root.note-input = "";
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 底部操作切换栏
+            HorizontalLayout {
+                spacing: 12px;
+                Button {
+                    text: "+ 新建项目";
+                    clicked => { root.view-state = 1; }
                 }
                 Button {
-                    text: "📝 记便签";
-                    clicked => {
-                        if (root.note-input != "") {
-                            root.add-quick-note(root.note-input);
-                            root.note-input = "";
+                    text: "汇总结算与对账单";
+                    clicked => { root.view-state = 2; }
+                }
+            }
+        }
+
+        // ================= 视图 1：新建项目表单 =================
+        if root.view-state == 1 : VerticalLayout {
+            spacing: 14px;
+
+            Rectangle {
+                background: #1e293b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #334155;
+
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+
+                    Text { text: "项目名称 (必填)"; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+                    LineEdit { placeholder-text: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
+
+                    Text { text: "客户/组织名称"; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+                    LineEdit { placeholder-text: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            spacing: 6px;
+                            Text { text: "人天单价 (元/天)"; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+                            LineEdit { placeholder-text: "3000"; text <=> root.new-proj-rate; }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            Text { text: "结算币种"; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+                            LineEdit { placeholder-text: "CNY"; text <=> root.new-proj-currency; }
+                        }
+                    }
+
+                    Text { text: "本地 Git 仓库路径 (用于自动抓取 Commit & Diff)"; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+                    LineEdit { placeholder-text: "/home/beatle/dev/my-project (可选)"; text <=> root.new-proj-git; }
+
+                    Rectangle { height: 10px; }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Button {
+                            text: "确认保存并添加";
+                            clicked => {
+                                root.submit-new-project();
+                            }
+                        }
+                        Button {
+                            text: "取消返回";
+                            clicked => { root.view-state = 0; }
                         }
                     }
                 }
             }
         }
 
-        // --- 底部操作栏 ---
-        HorizontalLayout {
-            spacing: 12px;
-            Button {
-                text: "➕ 新建项目";
-                clicked => { root.open-add-project(); }
+        // ================= 视图 2：今日结算与客户对账单 =================
+        if root.view-state == 2 : VerticalLayout {
+            spacing: 14px;
+
+            Rectangle {
+                background: #1e293b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #334155;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: "今日交付工时与流水明细";
+                            font-size: 14px;
+                            font-weight: 700;
+                            color: #f1f5f9;
+                        }
+                        Button {
+                            text: "复制 Markdown 对账单";
+                            clicked => { root.copy-markdown(); }
+                        }
+                    }
+
+                    ScrollView {
+                        height: 320px;
+                        VerticalLayout {
+                            spacing: 8px;
+                            if root.recent-entries.length == 0 : Text {
+                                text: "今日尚无已归档结算记录。在主面板停止计时后将在此生成明细。";
+                                font-size: 12px;
+                                color: #64748b;
+                            }
+                            for e in root.recent-entries : Rectangle {
+                                background: #0f172a;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: #334155;
+
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 4px;
+                                    HorizontalLayout {
+                                        alignment: space-between;
+                                        Text { text: e.project-name; font-size: 13px; font-weight: 700; color: #38bdf8; }
+                                        Text { text: e.time-range; font-size: 11px; color: #64748b; }
+                                    }
+                                    Text { text: e.summary-text; font-size: 12px; color: #e2e8f0; }
+                                    HorizontalLayout {
+                                        spacing: 16px;
+                                        Text { text: "工时: " + e.duration-text; font-size: 11px; color: #94a3b8; }
+                                        Text { text: "折合: " + e.days-text; font-size: 11px; font-weight: 700; color: #f59e0b; }
+                                        Text { text: "收益: " + e.amount-text; font-size: 11px; font-weight: 700; color: #10b981; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "返回主控制台";
+                        clicked => { root.view-state = 0; }
+                    }
+                }
             }
-            Button {
-                text: "✨ 汇总结算与导出对账单";
-                clicked => { root.open-export(); }
+        }
+
+        // 底部 Toast 提示信息（如有）
+        if root.toast-message != "" : Rectangle {
+            background: #064e3b;
+            border-radius: 6px;
+            HorizontalLayout {
+                padding: 6px;
+                alignment: center;
+                Text { text: root.toast-message; font-size: 12px; color: #34d399; }
             }
         }
     }

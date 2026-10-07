@@ -12,6 +12,7 @@ paraday-db = { path = "../paraday-db" }
 paraday-git = { path = "../paraday-git" }
 paraday-ai = { path = "../paraday-ai" }
 slint = "1.9"
+arboard = "3.4"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
