@@ -6,6 +6,8 @@
 
 slint::include_modules!();
 
+mod tray;
+
 use chrono::{Local, Utc};
 use paraday_ai::{AiConfig, AiSummarizer};
 use paraday_core::billing::BillingEngine;
@@ -17,6 +19,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use tray::{spawn_tray, TrayEvent};
 use uuid::Uuid;
 
 fn format_duration(secs: u64) -> String {
@@ -181,7 +184,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_clone = model.clone();
     let projects_cache = projects_ref.clone();
 
+    // 5. 初始化 Linux 顶栏原生托盘服务 (StatusNotifierItem)
+    let (tray_tx, tray_rx) = std::sync::mpsc::channel();
+    let tray_handle = spawn_tray(tray_tx);
+    let is_window_visible = Rc::new(RefCell::new(true));
+
     let timer = slint::Timer::default();
+    let is_window_vis_clone = is_window_visible.clone();
     timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs(1),
@@ -225,10 +234,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            if let Some(ref handle) = tray_handle {
+                handle.update(move |tray| {
+                    tray.running_count = running_count;
+                });
+            }
+
+            while let Ok(event) = tray_rx.try_recv() {
+                match event {
+                    TrayEvent::ToggleWindow => {
+                        if let Some(ui) = app_weak.upgrade() {
+                            let mut vis = is_window_vis_clone.borrow_mut();
+                            if *vis {
+                                let _ = ui.hide();
+                                *vis = false;
+                            } else {
+                                let _ = ui.show();
+                                *vis = true;
+                            }
+                        }
+                    }
+                    TrayEvent::PauseAll => {
+                        timer_mgr_clone.borrow_mut().pause_all();
+                        if let Some(ui) = app_weak.upgrade() {
+                            ui.set_toast_message("已从系统托盘暂停所有计时通道".into());
+                        }
+                    }
+                    TrayEvent::Quit => {
+                        std::process::exit(0);
+                    }
+                }
+            }
+
             if let Some(ui) = app_weak.upgrade() {
                 ui.set_total_days(format!("{:.2}", total_days).into());
                 ui.set_total_amount(format!("¥ {:.2}", total_cny_amount).into());
-                ui.set_running_count(running_count);
+                ui.set_running_count(running_count as i32);
             }
         },
     );

@@ -3427,6 +3427,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "chrono",
+ "ksni",
  "paraday-ai",
  "paraday-core",
  "paraday-db",
