@@ -15,6 +15,7 @@ export struct ProjectItem {
     days-text: string,
     amount-text: string,
     is-running: bool,
+    is-paused: bool,
 }
 
 export struct EntryItem {
@@ -56,7 +57,10 @@ export component MainWindow inherits Window {
     in property <[EntryItem]> recent-entries: [];
     in property <string> markdown-preview: "";
 
-    callback toggle-project(string /* project-id */);
+    callback start-project(string /* project-id */);
+    callback pause-project(string /* project-id */);
+    callback resume-project(string /* project-id */);
+    callback stop-project(string /* project-id */);
     callback add-quick-note(string /* note-content */);
     callback submit-new-project();
     callback copy-markdown();
@@ -165,10 +169,10 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     spacing: 10px;
                     for item in root.projects: Rectangle {
-                        background: item.is-running ? #1e293b : #141e33;
+                        background: item.is-running ? #1e293b : (item.is-paused ? #1a2333 : #141e33);
                         border-radius: 12px;
                         border-width: 1px;
-                        border-color: item.is-running ? #0284c7 : #1e293b;
+                        border-color: item.is-running ? #0284c7 : (item.is-paused ? #d97706 : #1e293b);
 
                         HorizontalLayout {
                             padding: 14px;
@@ -187,15 +191,15 @@ export component MainWindow inherits Window {
                                         color: #f1f5f9;
                                     }
                                     Rectangle {
-                                        background: #334155;
+                                        background: item.is-running ? #064e3b : (item.is-paused ? #78350f : #334155);
                                         border-radius: 4px;
                                         HorizontalLayout {
                                             padding-left: 6px;
                                             padding-right: 6px;
                                             Text {
-                                                text: item.client;
+                                                text: item.is-running ? "计时中" : (item.is-paused ? "已暂停" : item.client);
                                                 font-size: 11px;
-                                                color: #94a3b8;
+                                                color: item.is-running ? #34d399 : (item.is-paused ? #fbbf24 : #94a3b8);
                                             }
                                         }
                                     }
@@ -211,7 +215,7 @@ export component MainWindow inherits Window {
                                         text: "[时] " + item.timer-text;
                                         font-size: 13px;
                                         font-weight: 700;
-                                        color: item.is-running ? #38bdf8 : #64748b;
+                                        color: item.is-running ? #38bdf8 : (item.is-paused ? #fbbf24 : #64748b);
                                     }
                                     Text {
                                         text: "[天] " + item.days-text;
@@ -228,13 +232,44 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // 右侧：开关按钮
+                            // 右侧：开关按钮组（启动 / 暂停 / 继续 / 结算）
                             VerticalLayout {
                                 alignment: center;
-                                Button {
-                                    text: item.is-running ? "停止并结算" : "启动计时";
+                                spacing: 6px;
+                                if !item.is-running && !item.is-paused : Button {
+                                    text: "▶ 启动计时";
                                     clicked => {
-                                        root.toggle-project(item.id);
+                                        root.start-project(item.id);
+                                    }
+                                }
+                                if item.is-running : HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        text: "⏸ 暂停";
+                                        clicked => {
+                                            root.pause-project(item.id);
+                                        }
+                                    }
+                                    Button {
+                                        text: "⏹ 结算";
+                                        clicked => {
+                                            root.stop-project(item.id);
+                                        }
+                                    }
+                                }
+                                if item.is-paused : HorizontalLayout {
+                                    spacing: 6px;
+                                    Button {
+                                        text: "▶ 继续";
+                                        clicked => {
+                                            root.resume-project(item.id);
+                                        }
+                                    }
+                                    Button {
+                                        text: "⏹ 结算";
+                                        clicked => {
+                                            root.stop-project(item.id);
+                                        }
                                     }
                                 }
                             }

@@ -46,6 +46,7 @@ fn build_project_items(projects: &[Project]) -> Vec<ProjectItem> {
                 days_text: "0.00 人天".into(),
                 amount_text: format!("{} 0.00", p.currency).into(),
                 is_running: false,
+                is_paused: false,
             }
         })
         .collect()
@@ -147,13 +148,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (idx, p) in projs.iter().enumerate() {
                 if let Some(mut item) = model_clone.row_data(idx) {
                     let elapsed = mgr.get_elapsed(&p.id);
-                    let is_running = mgr.get_status(&p.id) != paraday_core::timer::TimerStatus::Stopped;
+                    let status = mgr.get_status(&p.id);
+                    let is_running = matches!(status, paraday_core::timer::TimerStatus::Running { .. });
+                    let is_paused = matches!(status, paraday_core::timer::TimerStatus::Paused { .. });
 
                     if is_running {
                         running_count += 1;
                     }
 
                     item.is_running = is_running;
+                    item.is_paused = is_paused;
                     item.timer_text = format_duration(elapsed).into();
 
                     let billable_hours = BillingEngine::calculate_billable_hours(elapsed, p.rounding_minutes);
@@ -163,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     item.days_text = format!("{:.2} 人天", billable_days).into();
                     item.amount_text = format!("{} {:.2}", p.currency, amount).into();
 
-                    if is_running {
+                    if is_running || is_paused {
                         total_days += billable_days;
                         if p.currency == "CNY" {
                             total_cny_amount += amount;
@@ -182,64 +186,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // 5. 交互回调：启停项目并持久化归档流水与 Git 分析
-    let timer_mgr_toggle = timer_manager.clone();
-    let db_toggle = db.clone();
-    let projects_toggle = projects_ref.clone();
-    let app_weak_toggle = app.as_weak();
-    let refresh_entries_toggle = refresh_entries_ui.clone();
-
-    app.on_toggle_project(move |id_str| {
+    // 5. 交互回调：启动 / 暂停 / 继续 / 结算项目通道
+    let timer_mgr_start = timer_manager.clone();
+    let app_weak_start = app.as_weak();
+    app.on_start_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
-            let mut mgr = timer_mgr_toggle.borrow_mut();
-            if mgr.get_status(&id) == paraday_core::timer::TimerStatus::Stopped {
-                // 启动通道
-                mgr.start_channel(id);
-                if let Some(ui) = app_weak_toggle.upgrade() {
-                    ui.set_toast_message("通道已启动计时".into());
-                }
-            } else {
-                // 停止通道，归档生成结算流水
-                if let Some((start_at, end_at, elapsed_secs)) = mgr.stop_channel(id) {
-                    let projs = projects_toggle.borrow();
-                    if let Some(p) = projs.iter().find(|proj| proj.id == id) {
-                        let billable_hours = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
-                        let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
-                        let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
+            timer_mgr_start.borrow_mut().start_channel(id);
+            if let Some(ui) = app_weak_start.upgrade() {
+                ui.set_toast_message("通道已启动计时".into());
+            }
+        }
+    });
 
-                        // 智能嗅探 Git 活动
-                        let mut summary_desc = "完成阶段性需求研发与联调".to_string();
-                        if let Some(ref git_path) = p.git_repo_path {
-                            if let Ok(git_summary) = GitScanner::extract_activity(git_path, start_at, end_at) {
-                                if !git_summary.commits.is_empty() {
-                                    summary_desc = format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "));
-                                } else if git_summary.has_uncommitted_changes {
-                                    summary_desc = format!("调整并修改了 {} 个工作区文件，完成功能联调", git_summary.uncommitted_files.len());
-                                }
+    let timer_mgr_pause = timer_manager.clone();
+    let app_weak_pause = app.as_weak();
+    app.on_pause_project(move |id_str| {
+        if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
+            timer_mgr_pause.borrow_mut().pause_channel(id);
+            if let Some(ui) = app_weak_pause.upgrade() {
+                ui.set_toast_message("通道已暂停 (工时已锁定，可随时继续)".into());
+            }
+        }
+    });
+
+    let timer_mgr_resume = timer_manager.clone();
+    let app_weak_resume = app.as_weak();
+    app.on_resume_project(move |id_str| {
+        if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
+            timer_mgr_resume.borrow_mut().start_channel(id);
+            if let Some(ui) = app_weak_resume.upgrade() {
+                ui.set_toast_message("通道已继续计时".into());
+            }
+        }
+    });
+
+    let timer_mgr_stop = timer_manager.clone();
+    let db_stop = db.clone();
+    let projects_stop = projects_ref.clone();
+    let app_weak_stop = app.as_weak();
+    let refresh_entries_stop = refresh_entries_ui.clone();
+
+    app.on_stop_project(move |id_str| {
+        if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
+            let mut mgr = timer_mgr_stop.borrow_mut();
+            if let Some((start_at, end_at, elapsed_secs)) = mgr.stop_channel(id) {
+                let projs = projects_stop.borrow();
+                if let Some(p) = projs.iter().find(|proj| proj.id == id) {
+                    let billable_hours = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
+                    let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
+                    let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
+
+                    // 智能嗅探 Git 活动
+                    let mut summary_desc = "完成阶段性需求研发与联调".to_string();
+                    if let Some(ref git_path) = p.git_repo_path {
+                        if let Ok(git_summary) = GitScanner::extract_activity(git_path, start_at, end_at) {
+                            if !git_summary.commits.is_empty() {
+                                summary_desc = format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "));
+                            } else if git_summary.has_uncommitted_changes {
+                                summary_desc = format!("调整并修改了 {} 个工作区文件，完成功能联调", git_summary.uncommitted_files.len());
                             }
                         }
+                    }
 
-                        let entry = TimeEntry {
-                            id: Uuid::new_v4(),
-                            project_id: id,
-                            start_time: start_at,
-                            end_time: end_at,
-                            raw_duration_secs: elapsed_secs,
-                            billable_hours,
-                            billable_days,
-                            rate_at_moment: rate,
-                            total_amount: amount,
-                            summary: Some(summary_desc),
-                            is_invoiced: false,
-                            created_at: Utc::now(),
-                        };
+                    let entry = TimeEntry {
+                        id: Uuid::new_v4(),
+                        project_id: id,
+                        start_time: start_at,
+                        end_time: end_at,
+                        raw_duration_secs: elapsed_secs,
+                        billable_hours,
+                        billable_days,
+                        rate_at_moment: rate,
+                        total_amount: amount,
+                        summary: Some(summary_desc),
+                        is_invoiced: false,
+                        created_at: Utc::now(),
+                    };
 
-                        let _ = db_toggle.insert_time_entry(&entry);
-                        refresh_entries_toggle();
+                    let _ = db_stop.insert_time_entry(&entry);
+                    refresh_entries_stop();
 
-                        if let Some(ui) = app_weak_toggle.upgrade() {
-                            ui.set_toast_message(format!("本次工时已结算入库：{:.2} 人天", billable_days).into());
-                        }
+                    if let Some(ui) = app_weak_stop.upgrade() {
+                        ui.set_toast_message(format!("本次工时已结算入库：{:.2} 人天", billable_days).into());
                     }
                 }
             }
