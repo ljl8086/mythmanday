@@ -184,6 +184,10 @@ export component MainWindow inherits Window {
     in-out property <string> new-proj-currency: "CNY";
     in-out property <string> new-proj-git: "";
 
+    // 快速会议与讨论字段
+    in-out property <string> meeting-topic-input: "";
+    in-out property <string> meeting-rate-input: "350";
+
     // 设置中心字段
     in-out property <string> setting-ai-base: "https://api.deepseek.com/v1";
     in-out property <string> setting-ai-key: "";
@@ -207,6 +211,7 @@ export component MainWindow inherits Window {
     callback add-quick-note(string /* note-content */);
     callback delete-quick-note(string /* note-id */);
     callback submit-new-project();
+    callback start-quick-meeting(string /* topic */, string /* rate */);
     callback save-settings();
     callback test-ai-connection();
     callback trigger-ai-summarize();
@@ -474,7 +479,7 @@ export component MainWindow inherits Window {
 
             // 底部操作栏
             HorizontalLayout {
-                spacing: 10px;
+                spacing: 8px;
                 PrimaryButton {
                     text: "+ 新建项目";
                     bg-color: #2563eb;
@@ -482,8 +487,15 @@ export component MainWindow inherits Window {
                     custom-height: 36px;
                     clicked => { root.active-tab = 4; }
                 }
+                PrimaryButton {
+                    text: "🎙️ 发起会议/讨论计时";
+                    bg-color: #7c3aed;
+                    hover-color: #6d28d9;
+                    custom-height: 36px;
+                    clicked => { root.active-tab = 6; }
+                }
                 OutlineButton {
-                    text: "⚡ 模拟离开电脑 (AFK校准)";
+                    text: "⚡ AFK校准";
                     custom-height: 36px;
                     clicked => { root.open-afk-modal(); }
                 }
@@ -809,6 +821,101 @@ export component MainWindow inherits Window {
                             text: "全部保留 (后台测试/开会中)";
                             custom-height: 36px;
                             clicked => { root.apply-afk-resolution(false); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ================= Tab 6: 发起会议与讨论计时弹窗 =================
+        if root.active-tab == 6 : VerticalLayout {
+            spacing: 12px;
+
+            Rectangle {
+                background: #1e293b;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #7c3aed;
+
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "🎙️ 发起会议 / 技术对齐 / 电话沟通计时"; font-size: 15px; font-weight: 800; color: #a78bfa; }
+                    }
+
+                    Text {
+                        text: "现实中需求沟通、架构评审与客户电话同样属于高价值工时。系统将独立通道精准记录，并在结束时自动由 AI 提炼会议纪要。";
+                        font-size: 12px;
+                        color: #94a3b8;
+                    }
+
+                    Text { text: "会议/讨论议题"; font-size: 12px; color: #cbd5e1; }
+                    LineEdit {
+                        placeholder-text: "例如：客户需求对接与技术排期沟通会";
+                        text <=> root.meeting-topic-input;
+                    }
+
+                    // 常用会议快捷芯片
+                    HorizontalLayout {
+                        spacing: 6px;
+                        MiniButton {
+                            text: "架构评审会";
+                            bg-color: #334155;
+                            hover-color: #475569;
+                            clicked => { root.meeting-topic-input = "技术架构方案与接口评审会"; }
+                        }
+                        MiniButton {
+                            text: "客户需求对接";
+                            bg-color: #334155;
+                            hover-color: #475569;
+                            clicked => { root.meeting-topic-input = "商业客户需求与排期沟通会"; }
+                        }
+                        MiniButton {
+                            text: "敏捷迭代站会";
+                            bg-color: #334155;
+                            hover-color: #475569;
+                            clicked => { root.meeting-topic-input = "项目日常敏捷对齐与进度同步"; }
+                        }
+                        MiniButton {
+                            text: "紧急排障讨论";
+                            bg-color: #334155;
+                            hover-color: #475569;
+                            clicked => { root.meeting-topic-input = "线上紧急故障排查与复盘分析"; }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "会议计费单价 (元/小时)"; font-size: 12px; color: #cbd5e1; }
+                            LineEdit {
+                                placeholder-text: "350";
+                                text <=> root.meeting-rate-input;
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 6px; }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        PrimaryButton {
+                            text: "▶ 立即启动会议计时";
+                            bg-color: #7c3aed;
+                            hover-color: #6d28d9;
+                            custom-height: 36px;
+                            clicked => {
+                                root.start-quick-meeting(root.meeting-topic-input, root.meeting-rate-input);
+                            }
+                        }
+                        OutlineButton {
+                            text: "取消返回";
+                            custom-height: 36px;
+                            clicked => { root.active-tab = 0; }
                         }
                     }
                 }

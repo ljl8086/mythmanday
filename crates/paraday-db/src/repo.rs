@@ -172,7 +172,7 @@ impl Database {
     // --- 工时流水 CRUD ---
     pub fn insert_time_entry(&self, entry: &TimeEntry) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO time_entries (
+            r#"INSERT OR REPLACE INTO time_entries (
                 id, project_id, start_time, end_time, raw_duration_secs,
                 billable_hours, billable_days, rate_at_moment, total_amount,
                 summary, is_invoiced, created_at
@@ -193,6 +193,49 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn get_time_entry(&self, id: &Uuid) -> Result<Option<TimeEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, project_id, start_time, end_time, raw_duration_secs,
+                      billable_hours, billable_days, rate_at_moment, total_amount,
+                      summary, is_invoiced, created_at
+               FROM time_entries WHERE id = ?1"#,
+        )?;
+
+        let mut rows = stmt.query(params![id.to_string()])?;
+        if let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let proj_id_str: String = row.get(1)?;
+            let start_str: String = row.get(2)?;
+            let end_str: String = row.get(3)?;
+            let raw_secs: i64 = row.get(4)?;
+            let is_invoiced_int: i32 = row.get(10)?;
+            let created_at_str: String = row.get(11)?;
+
+            Ok(Some(TimeEntry {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&proj_id_str).unwrap_or_default(),
+                start_time: DateTime::parse_from_rfc3339(&start_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_time: DateTime::parse_from_rfc3339(&end_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                raw_duration_secs: raw_secs.max(0) as u64,
+                billable_hours: row.get(5)?,
+                billable_days: row.get(6)?,
+                rate_at_moment: row.get(7)?,
+                total_amount: row.get(8)?,
+                summary: row.get(9)?,
+                is_invoiced: is_invoiced_int == 1,
+                created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn list_entries_for_project(&self, project_id: &Uuid) -> Result<Vec<TimeEntry>> {
@@ -337,6 +380,87 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // --- 活动通道持久化 (崩溃/断电恢复) ---
+    pub fn upsert_active_timer(&self, record: &ActiveTimerRecord) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT OR REPLACE INTO active_timers (
+                project_id, session_start_at, current_started_at,
+                accumulated_secs, is_paused, last_heartbeat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
+            params![
+                record.project_id.to_string(),
+                record.session_start_at.to_rfc3339(),
+                record.current_started_at.map(|dt| dt.to_rfc3339()),
+                record.accumulated_secs as i64,
+                if record.is_paused { 1 } else { 0 },
+                record.last_heartbeat.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_active_timer(&self, project_id: &Uuid) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM active_timers WHERE project_id = ?1",
+            params![project_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_active_timers(&self) -> Result<Vec<ActiveTimerRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT project_id, session_start_at, current_started_at, accumulated_secs, is_paused, last_heartbeat FROM active_timers"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let pid_str: String = row.get(0)?;
+            let s_start_str: String = row.get(1)?;
+            let c_start_str: Option<String> = row.get(2)?;
+            let acc_secs: i64 = row.get(3)?;
+            let is_paused_int: i32 = row.get(4)?;
+            let hb_str: String = row.get(5)?;
+
+            let session_start_at = DateTime::parse_from_rfc3339(&s_start_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            let current_started_at = c_start_str.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .ok()
+            });
+
+            let last_heartbeat = DateTime::parse_from_rfc3339(&hb_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            Ok(ActiveTimerRecord {
+                project_id: Uuid::parse_str(&pid_str).unwrap_or_default(),
+                session_start_at,
+                current_started_at,
+                accumulated_secs: acc_secs.max(0) as u64,
+                is_paused: is_paused_int != 0,
+                last_heartbeat,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveTimerRecord {
+    pub project_id: Uuid,
+    pub session_start_at: DateTime<Utc>,
+    pub current_started_at: Option<DateTime<Utc>>,
+    pub accumulated_secs: u64,
+    pub is_paused: bool,
+    pub last_heartbeat: DateTime<Utc>,
 }
 
 #[cfg(test)]

@@ -216,6 +216,36 @@ impl MultiChannelManager {
             .map(|t| t.status.clone())
             .unwrap_or(TimerStatus::Stopped)
     }
+
+    /// 获取通道详情
+    pub fn get_timer(&self, project_id: &Uuid) -> Option<&ChannelTimer> {
+        self.channels.get(project_id)
+    }
+
+    /// 从持久化存储恢复通道（崩溃与断电容灾）
+    pub fn restore_channel(
+        &mut self,
+        project_id: Uuid,
+        session_start: DateTime<Utc>,
+        current_started: Option<DateTime<Utc>>,
+        accumulated_secs: u64,
+        is_paused: bool,
+    ) {
+        let status = if is_paused {
+            TimerStatus::Paused { accumulated_secs }
+        } else {
+            TimerStatus::Running {
+                current_started_at: current_started.unwrap_or(session_start),
+                accumulated_secs,
+            }
+        };
+        let timer = ChannelTimer {
+            project_id,
+            session_start_at: Some(session_start),
+            status,
+        };
+        self.channels.insert(project_id, timer);
+    }
 }
 
 #[cfg(test)]

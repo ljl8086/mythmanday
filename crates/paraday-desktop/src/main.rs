@@ -13,7 +13,7 @@ use paraday_ai::{AiConfig, AiSummarizer};
 use paraday_core::billing::BillingEngine;
 use paraday_core::models::{BillingType, DayCalcMode, Project, QuickNote, TimeEntry};
 use paraday_core::timer::MultiChannelManager;
-use paraday_db::Database;
+use paraday_db::{ActiveTimerRecord, Database};
 use paraday_git::GitScanner;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = db_dir.join("paraday.db");
     let db = Arc::new(Database::open(&db_path)?);
 
-    // 初始化引导项目
+    // 初始化引导项目（包含代码开发与会议/沟通）
     let mut projects = db.list_projects()?;
     if projects.is_empty() {
         let mut p1 = Project::new("跨境商城系统重构");
@@ -87,13 +87,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         p3.billing_type = BillingType::NonBillable;
         db.insert_project(&p3)?;
 
+        let mut p4 = Project::new("🎙️ 需求评审与线上会议");
+        p4.billing_type = BillingType::Hourly;
+        p4.hourly_rate = 350.0;
+        p4.hours_per_day = 8.0;
+        p4.day_calc_mode = DayCalcMode::Exact;
+        db.insert_project(&p4)?;
+
         projects = db.list_projects()?;
     }
 
-    // 2. 初始化核心多通道状态机与界面
+    // 2. 初始化核心多通道状态机与崩溃容灾恢复
     let timer_manager = Rc::new(RefCell::new(MultiChannelManager::new()));
-    let projects_ref = Rc::new(RefCell::new(projects));
     let app = MainWindow::new()?;
+
+    // 自动恢复崩溃/重启前运行中的通道 (Wall-Clock 绝对时间持久化)
+    let mut restored_count = 0;
+    if let Ok(active_list) = db.list_active_timers() {
+        let mut mgr = timer_manager.borrow_mut();
+        for rec in active_list {
+            mgr.restore_channel(
+                rec.project_id,
+                rec.session_start_at,
+                rec.current_started_at,
+                rec.accumulated_secs,
+                rec.is_paused,
+            );
+            restored_count += 1;
+        }
+    }
+    if restored_count > 0 {
+        app.set_toast_message(format!("已自动恢复崩溃/重启前运行中的 {} 个通道，工时精准延续！", restored_count).into());
+    }
+
+    let projects_ref = Rc::new(RefCell::new(projects));
 
     // 3. 读取并填充设置数据
     if let Ok(Some(val)) = db.get_setting("ai_base") {
@@ -191,6 +218,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let timer = slint::Timer::default();
     let is_window_vis_clone = is_window_visible.clone();
+    let db_timer = db.clone();
+    let heartbeat_tick = Rc::new(RefCell::new(0u32));
+
     timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs(1),
@@ -234,6 +264,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // 定期更新活动通道心跳与容灾存档 (每15秒更新一次)
+            let mut tick = heartbeat_tick.borrow_mut();
+            *tick = tick.wrapping_add(1);
+            if *tick % 15 == 0 {
+                let now = Utc::now();
+                for p in projs.iter() {
+                    let status = mgr.get_status(&p.id);
+                    if matches!(status, paraday_core::timer::TimerStatus::Running { .. }) {
+                        let session_start = mgr.get_timer(&p.id).and_then(|t| t.session_start_at).unwrap_or(now);
+                        let elapsed = mgr.get_elapsed(&p.id);
+                        let _ = db_timer.upsert_active_timer(&ActiveTimerRecord {
+                            project_id: p.id,
+                            session_start_at: session_start,
+                            current_started_at: Some(now),
+                            accumulated_secs: elapsed,
+                            is_paused: false,
+                            last_heartbeat: now,
+                        });
+                    }
+                }
+            }
+
             if let Some(ref handle) = tray_handle {
                 handle.update(move |tray| {
                     tray.running_count = running_count;
@@ -274,23 +326,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // 6. 交互回调：通道 启动 / 暂停 / 继续 / 结算
+    // 6. 交互回调：通道 启动 / 暂停 / 继续 / 结算 (具备崩溃容灾持久化)
     let timer_mgr_start = timer_manager.clone();
+    let db_start = db.clone();
     let app_weak_start = app.as_weak();
     app.on_start_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_start.borrow_mut().start_channel(id);
+            let now = Utc::now();
+            let session_start = timer_mgr_start.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or(now);
+            let _ = db_start.upsert_active_timer(&ActiveTimerRecord {
+                project_id: id,
+                session_start_at: session_start,
+                current_started_at: Some(now),
+                accumulated_secs: timer_mgr_start.borrow().get_elapsed(&id),
+                is_paused: false,
+                last_heartbeat: now,
+            });
             if let Some(ui) = app_weak_start.upgrade() {
-                ui.set_toast_message("通道已启动计时".into());
+                ui.set_toast_message("通道已启动计时 (已写入容灾持久化)".into());
             }
         }
     });
 
     let timer_mgr_pause = timer_manager.clone();
+    let db_pause = db.clone();
     let app_weak_pause = app.as_weak();
     app.on_pause_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_pause.borrow_mut().pause_channel(id);
+            let elapsed = timer_mgr_pause.borrow().get_elapsed(&id);
+            let session_start = timer_mgr_pause.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or_else(Utc::now);
+            let _ = db_pause.upsert_active_timer(&ActiveTimerRecord {
+                project_id: id,
+                session_start_at: session_start,
+                current_started_at: None,
+                accumulated_secs: elapsed,
+                is_paused: true,
+                last_heartbeat: Utc::now(),
+            });
             if let Some(ui) = app_weak_pause.upgrade() {
                 ui.set_toast_message("通道已暂停 (工时已锁定，可随时继续)".into());
             }
@@ -298,10 +372,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let timer_mgr_resume = timer_manager.clone();
+    let db_resume = db.clone();
     let app_weak_resume = app.as_weak();
     app.on_resume_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_resume.borrow_mut().start_channel(id);
+            let now = Utc::now();
+            let elapsed = timer_mgr_resume.borrow().get_elapsed(&id);
+            let session_start = timer_mgr_resume.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or(now);
+            let _ = db_resume.upsert_active_timer(&ActiveTimerRecord {
+                project_id: id,
+                session_start_at: session_start,
+                current_started_at: Some(now),
+                accumulated_secs: elapsed,
+                is_paused: false,
+                last_heartbeat: now,
+            });
             if let Some(ui) = app_weak_resume.upgrade() {
                 ui.set_toast_message("通道已继续计时".into());
             }
@@ -318,26 +404,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             let mut mgr = timer_mgr_stop.borrow_mut();
             if let Some((start_at, end_at, elapsed_secs)) = mgr.stop_channel(id) {
+                // 1. 结算完成，从 active_timers 移除持久化记录
+                let _ = db_stop.delete_active_timer(&id);
+
                 let projs = projects_stop.borrow();
                 if let Some(p) = projs.iter().find(|proj| proj.id == id) {
                     let billable_hours = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
                     let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
                     let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
-                    // 智能嗅探 Git 活动
-                    let mut summary_desc = "完成阶段性需求研发与联调".to_string();
+                    // 2. 智能嗅探 Git 活动与便签记录
+                    let mut git_summary = paraday_git::GitActivitySummary {
+                        commits: vec![],
+                        diff_stat: "".to_string(),
+                        has_uncommitted_changes: false,
+                        uncommitted_files: vec![],
+                    };
                     if let Some(ref git_path) = p.git_repo_path {
-                        if let Ok(git_summary) = GitScanner::extract_activity(git_path, start_at, end_at) {
-                            if !git_summary.commits.is_empty() {
-                                summary_desc = format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "));
-                            } else if git_summary.has_uncommitted_changes {
-                                summary_desc = format!("修改了 {} 个工作区文件，完成功能测试", git_summary.uncommitted_files.len());
-                            }
+                        if let Ok(scanned) = GitScanner::extract_activity(git_path, start_at, end_at) {
+                            git_summary = scanned;
                         }
                     }
 
+                    let notes = db_stop.list_quick_notes(&id).unwrap_or_default();
+
+                    // 3. 构建智能兜底摘要（无需人工编写）
+                    let summary_desc = if p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") {
+                        if !notes.is_empty() {
+                            format!("会议沟通与决议：{}", notes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join("; "))
+                        } else {
+                            "完成商业客户需求与技术方案对齐沟通".to_string()
+                        }
+                    } else if !git_summary.commits.is_empty() {
+                        format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "))
+                    } else if git_summary.has_uncommitted_changes {
+                        format!("修改了 {} 个工作区文件，完成功能联调测试", git_summary.uncommitted_files.len())
+                    } else if !notes.is_empty() {
+                        format!("阶段性研发与联调：{}", notes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join("; "))
+                    } else {
+                        "完成阶段性功能需求研发与验证".to_string()
+                    };
+
+                    let entry_id = Uuid::new_v4();
                     let entry = TimeEntry {
-                        id: Uuid::new_v4(),
+                        id: entry_id,
                         project_id: id,
                         start_time: start_at,
                         end_time: end_at,
@@ -355,7 +465,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     refresh_entries_stop();
 
                     if let Some(ui) = app_weak_stop.upgrade() {
-                        ui.set_toast_message(format!("本次工时已结算入库：{:.2} 人天", billable_days).into());
+                        ui.set_toast_message(format!("工时已自动结算入库：{:.2} 人天", billable_days).into());
+                    }
+
+                    // 4. 后台全自动静默调用 AI 润色提炼交付总结（完全无需用户每日手动点击！）
+                    let db_async = db_stop.clone();
+                    let refresh_async = refresh_entries_stop.clone();
+                    let app_async = app_weak_stop.clone();
+                    let proj_name = p.name.clone();
+
+                    let ai_base = db_stop.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.deepseek.com/v1".into());
+                    let ai_key = db_stop.get_setting("ai_key").ok().flatten().unwrap_or_default();
+                    let ai_model = db_stop.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "deepseek-chat".into());
+
+                    if !ai_key.is_empty() || ai_base.contains("localhost") || ai_base.contains("127.0.0.1") {
+                        slint::spawn_local(async move {
+                            let summarizer = AiSummarizer::new(AiConfig {
+                                api_base: ai_base,
+                                api_key: ai_key,
+                                model: ai_model,
+                            });
+                            if let Ok(ai_summary) = summarizer.summarize_session(&proj_name, billable_hours, &git_summary, &notes).await {
+                                if let Ok(Some(mut e)) = db_async.get_time_entry(&entry_id) {
+                                    e.summary = Some(ai_summary);
+                                    let _ = db_async.insert_time_entry(&e);
+                                    refresh_async();
+                                    if let Some(ui) = app_async.upgrade() {
+                                        ui.set_toast_message(format!("🤖 AI 已自动提炼完成交付总结：{}", proj_name).into());
+                                    }
+                                }
+                            }
+                        }).unwrap();
                     }
                 }
             }
@@ -437,6 +577,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_new_proj_git("".into());
                 ui.set_active_tab(0);
                 ui.set_toast_message("新项目已成功创建！".into());
+            }
+        }
+    });
+
+    // 8.1 快速发起会议与技术讨论计时
+    let db_quick_meeting = db.clone();
+    let projects_quick_meeting = projects_ref.clone();
+    let model_quick_meeting = model.clone();
+    let timer_mgr_quick_meeting = timer_manager.clone();
+    let app_weak_meeting = app.as_weak();
+
+    app.on_start_quick_meeting(move |topic_str, rate_str| {
+        if let Some(ui) = app_weak_meeting.upgrade() {
+            let topic = if topic_str.trim().is_empty() {
+                "客户需求与方案沟通会".to_string()
+            } else {
+                topic_str.trim().to_string()
+            };
+            let hourly_rate = rate_str.trim().parse::<f64>().unwrap_or(350.0);
+
+            let mut p = Project::new(&format!("🎙️ {}", topic));
+            p.billing_type = BillingType::Hourly;
+            p.hourly_rate = hourly_rate;
+            p.hours_per_day = 8.0;
+            p.day_calc_mode = DayCalcMode::Exact;
+
+            if let Ok(_) = db_quick_meeting.insert_project(&p) {
+                let pid = p.id;
+                projects_quick_meeting.borrow_mut().push(p);
+                let new_items = build_project_items(&projects_quick_meeting.borrow());
+                model_quick_meeting.set_vec(new_items);
+
+                // 立即启动计时通道并写入容灾持久化
+                timer_mgr_quick_meeting.borrow_mut().start_channel(pid);
+                let now = Utc::now();
+                let _ = db_quick_meeting.upsert_active_timer(&ActiveTimerRecord {
+                    project_id: pid,
+                    session_start_at: now,
+                    current_started_at: Some(now),
+                    accumulated_secs: 0,
+                    is_paused: false,
+                    last_heartbeat: now,
+                });
+
+                // 自动插入一条会议开始便签
+                let note = QuickNote::new(pid, &format!("[会议开启] 议题: {}", topic));
+                let _ = db_quick_meeting.insert_quick_note(&note);
+
+                ui.set_meeting_topic_input("".into());
+                ui.set_active_tab(0);
+                ui.set_toast_message(format!("会议通道已启动计时：{}", topic).into());
             }
         }
     });

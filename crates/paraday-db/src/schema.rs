@@ -55,4 +55,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS active_timers (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    session_start_at TEXT NOT NULL,
+    current_started_at TEXT,
+    accumulated_secs INTEGER NOT NULL DEFAULT 0,
+    is_paused INTEGER NOT NULL DEFAULT 0,
+    last_heartbeat TEXT NOT NULL
+);
 "#;
