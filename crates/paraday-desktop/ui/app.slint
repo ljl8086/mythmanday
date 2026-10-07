@@ -4,7 +4,7 @@
 // Version: V1.0
 // Description: Multi-channel concurrent time-tracking & man-day billing engine.
 
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct ProjectItem {
     id: string,
@@ -40,6 +40,123 @@ export struct AfkItem {
     project-name: string,
     elapsed-text: string,
     is-deduct: bool,
+}
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active: false;
+    callback clicked <=> touch.clicked;
+
+    height: 32px;
+    border-radius: 6px;
+    background: active ? #2563eb : (touch.has-hover ? #334155 : transparent);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: root.active ? 700 : 500;
+            color: root.active ? #ffffff : (touch.has-hover ? #f8fafc : #94a3b8);
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <color> bg-color: #2563eb;
+    in property <color> hover-color: #1d4ed8;
+    in property <color> text-color: #ffffff;
+    in property <length> custom-height: 32px;
+    callback clicked <=> touch.clicked;
+
+    height: custom-height;
+    border-radius: 6px;
+    background: touch.pressed ? hover-color : (touch.has-hover ? hover-color : bg-color);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            color: root.text-color;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component OutlineButton inherits Rectangle {
+    in property <string> text;
+    in property <color> border-col: #475569;
+    in property <color> text-color: #cbd5e1;
+    in property <length> custom-height: 32px;
+    callback clicked <=> touch.clicked;
+
+    height: custom-height;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: touch.has-hover ? #94a3b8 : border-col;
+    background: touch.pressed ? #334155 : (touch.has-hover ? #334155 : transparent);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            color: touch.has-hover ? #ffffff : root.text-color;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component MiniButton inherits Rectangle {
+    in property <string> text;
+    in property <color> bg-color: #0284c7;
+    in property <color> hover-color: #0369a1;
+    in property <color> text-color: #ffffff;
+    callback clicked <=> touch.clicked;
+
+    height: 28px;
+    border-radius: 5px;
+    background: touch.pressed ? hover-color : (touch.has-hover ? hover-color : bg-color);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            font-size: 11px;
+            font-weight: 600;
+            color: root.text-color;
+            vertical-alignment: center;
+        }
+    }
 }
 
 export component MainWindow inherits Window {
@@ -151,27 +268,34 @@ export component MainWindow inherits Window {
 
         // ================= 导航选项卡栏 (Tab Bar) =================
         Rectangle {
+            height: 42px;
             background: #1e293b;
             border-radius: 8px;
+            border-width: 1px;
+            border-color: #334155;
 
             HorizontalLayout {
                 padding: 4px;
-                spacing: 4px;
+                spacing: 6px;
 
-                Button {
-                    text: "⏱️ 控制台";
+                TabButton {
+                    text: "⏱ 控制台";
+                    active: root.active-tab == 0;
                     clicked => { root.active-tab = 0; }
                 }
-                Button {
+                TabButton {
                     text: "📊 交付对账";
+                    active: root.active-tab == 1;
                     clicked => { root.active-tab = 1; }
                 }
-                Button {
+                TabButton {
                     text: "📝 便签历史";
+                    active: root.active-tab == 2;
                     clicked => { root.active-tab = 2; }
                 }
-                Button {
-                    text: "⚙️ 系统与AI设置";
+                TabButton {
+                    text: "⚙ 系统与AI设置";
+                    active: root.active-tab == 3;
                     clicked => { root.active-tab = 3; }
                 }
             }
@@ -271,29 +395,39 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 spacing: 4px;
-                                if !item.is-running && !item.is-paused : Button {
+                                if !item.is-running && !item.is-paused : MiniButton {
                                     text: "▶ 启动计时";
+                                    bg-color: #059669;
+                                    hover-color: #047857;
                                     clicked => { root.start-project(item.id); }
                                 }
                                 if item.is-running : HorizontalLayout {
                                     spacing: 4px;
-                                    Button {
+                                    MiniButton {
                                         text: "⏸ 暂停";
+                                        bg-color: #d97706;
+                                        hover-color: #b45309;
                                         clicked => { root.pause-project(item.id); }
                                     }
-                                    Button {
+                                    MiniButton {
                                         text: "⏹ 结算";
+                                        bg-color: #dc2626;
+                                        hover-color: #b91c1c;
                                         clicked => { root.stop-project(item.id); }
                                     }
                                 }
                                 if item.is-paused : HorizontalLayout {
                                     spacing: 4px;
-                                    Button {
+                                    MiniButton {
                                         text: "▶ 继续";
+                                        bg-color: #2563eb;
+                                        hover-color: #1d4ed8;
                                         clicked => { root.resume-project(item.id); }
                                     }
-                                    Button {
+                                    MiniButton {
                                         text: "⏹ 结算";
+                                        bg-color: #dc2626;
+                                        hover-color: #b91c1c;
                                         clicked => { root.stop-project(item.id); }
                                     }
                                 }
@@ -313,6 +447,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     padding: 8px;
                     spacing: 8px;
+                    alignment: center;
                     LineEdit {
                         placeholder-text: "闪念便签：记录电话/讨论（敲回车自动存入便签库）...";
                         text <=> root.note-input;
@@ -323,8 +458,10 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    Button {
+                    PrimaryButton {
                         text: "记便签";
+                        bg-color: #0284c7;
+                        hover-color: #0369a1;
                         clicked => {
                             if (root.note-input != "") {
                                 root.add-quick-note(root.note-input);
@@ -338,12 +475,16 @@ export component MainWindow inherits Window {
             // 底部操作栏
             HorizontalLayout {
                 spacing: 10px;
-                Button {
+                PrimaryButton {
                     text: "+ 新建项目";
+                    bg-color: #2563eb;
+                    hover-color: #1d4ed8;
+                    custom-height: 36px;
                     clicked => { root.active-tab = 4; }
                 }
-                Button {
+                OutlineButton {
                     text: "⚡ 模拟离开电脑 (AFK校准)";
+                    custom-height: 36px;
                     clicked => { root.open-afk-modal(); }
                 }
             }
@@ -365,15 +506,23 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         alignment: space-between;
-                        Text { text: "今日交付工时与流水明细"; font-size: 14px; font-weight: 700; color: #f1f5f9; }
+                        VerticalLayout {
+                            alignment: center;
+                            Text { text: "今日交付工时与流水明细"; font-size: 14px; font-weight: 700; color: #f1f5f9; }
+                        }
                         HorizontalLayout {
                             spacing: 8px;
-                            Button {
+                            alignment: center;
+                            PrimaryButton {
                                 text: "✨ AI提炼总结";
+                                bg-color: #7c3aed;
+                                hover-color: #6d28d9;
+                                custom-height: 32px;
                                 clicked => { root.trigger-ai-summarize(); }
                             }
-                            Button {
+                            OutlineButton {
                                 text: "📋 复制Markdown对账单";
+                                custom-height: 32px;
                                 clicked => { root.copy-markdown(); }
                             }
                         }
@@ -460,8 +609,10 @@ export component MainWindow inherits Window {
                                         }
                                         Text { text: n.content; font-size: 13px; color: #f8fafc; }
                                     }
-                                    Button {
+                                    MiniButton {
                                         text: "删除";
+                                        bg-color: #334155;
+                                        hover-color: #dc2626;
                                         clicked => { root.delete-quick-note(n.id); }
                                     }
                                 }
@@ -501,8 +652,11 @@ export component MainWindow inherits Window {
 
                         HorizontalLayout {
                             spacing: 10px;
-                            Button {
+                            OutlineButton {
                                 text: "🧪 测试 AI 连接";
+                                border-col: #38bdf8;
+                                text-color: #38bdf8;
+                                custom-height: 34px;
                                 clicked => { root.test-ai-connection(); }
                             }
                         }
@@ -525,8 +679,11 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        Button {
+                        PrimaryButton {
                             text: "💾 保存全部系统设置";
+                            bg-color: #059669;
+                            hover-color: #047857;
+                            custom-height: 38px;
                             clicked => { root.save-settings(); }
                         }
                     }
@@ -577,12 +734,16 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         spacing: 10px;
-                        Button {
+                        PrimaryButton {
                             text: "确认保存并添加";
+                            bg-color: #2563eb;
+                            hover-color: #1d4ed8;
+                            custom-height: 36px;
                             clicked => { root.submit-new-project(); }
                         }
-                        Button {
+                        OutlineButton {
                             text: "取消返回";
+                            custom-height: 36px;
                             clicked => { root.active-tab = 0; }
                         }
                     }
@@ -637,12 +798,16 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         spacing: 12px;
-                        Button {
+                        PrimaryButton {
                             text: "全部扣除空闲时间 (纯离开)";
+                            bg-color: #d97706;
+                            hover-color: #b45309;
+                            custom-height: 36px;
                             clicked => { root.apply-afk-resolution(true); }
                         }
-                        Button {
+                        OutlineButton {
                             text: "全部保留 (后台测试/开会中)";
+                            custom-height: 36px;
                             clicked => { root.apply-afk-resolution(false); }
                         }
                     }
