@@ -644,7 +644,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    app.run()?;
+    let app_weak_close = app.as_weak();
+    let is_window_vis_close = is_window_visible.clone();
+    app.window().on_close_requested(move || {
+        if let Some(ui) = app_weak_close.upgrade() {
+            let _ = ui.hide();
+            *is_window_vis_close.borrow_mut() = false;
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    app.show()?;
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
 
