@@ -161,13 +161,84 @@ component MiniButton inherits Rectangle {
     }
 }
 
+component DarkInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "";
+    in property <length> custom-height: 38px;
+    in property <color> input-bg: #0c1322;
+    in property <color> border-col: #25334e;
+    in property <color> focus-border-col: #818cf8;
+    callback accepted();
+    callback edited(string);
+
+    height: custom-height;
+    background: input-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: input.has-focus ? focus-border-col : border-col;
+
+    input := TextInput {
+        x: 12px;
+        y: 0px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text <=> root.text;
+        color: #f8fafc;
+        font-size: 13px;
+        vertical-alignment: center;
+        single-line: true;
+        accepted => { root.accepted(); }
+        edited => { root.edited(self.text); }
+    }
+
+    if root.text == "" && !input.has-focus : Text {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.placeholder;
+        color: #64748b;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+}
+
+
+
+component ChipButton inherits Rectangle {
+    in property <string> text;
+    callback clicked <=> touch.clicked;
+
+    height: 28px;
+    border-radius: 14px;
+    background: touch.pressed ? #334155 : (touch.has-hover ? #2e3e5b : #182235);
+    border-width: 1px;
+    border-color: touch.has-hover ? #818cf8 : #2a3b55;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            font-size: 11px;
+            font-weight: 500;
+            color: touch.has-hover ? #ffffff : #cbd5e1;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "ParaDay - Multi-Channel Time Tracker v1.0";
     icon: @image-url("icon.png");
-    min-width: 500px;
-    min-height: 680px;
-    preferred-width: 530px;
-    preferred-height: 740px;
+    min-width: 520px;
+    min-height: 700px;
+    preferred-width: 560px;
+    preferred-height: 760px;
     background: #090d16;
 
     // 0: 控制台, 1: 交付对账, 2: 闪念便签, 3: 设置中心, 4: 新建项目弹窗, 5: AFK离开校准弹窗
@@ -188,6 +259,9 @@ export component MainWindow inherits Window {
 
     // 快速会议与讨论字段
     in-out property <int> meeting-selected-proj-idx: -1;
+    in-out property <string> meeting-selected-proj-name: "独立临时会议";
+    in-out property <string> meeting-selected-proj-client: "临时立项";
+    in-out property <string> meeting-selected-proj-rate: "350 CNY / 小时";
     in-out property <string> meeting-topic-input: "";
     in-out property <string> meeting-rate-input: "350";
     in-out property <bool> meeting-record-audio: true;
@@ -224,6 +298,8 @@ export component MainWindow inherits Window {
     callback delete-quick-note(string /* note-id */);
     callback submit-new-project();
     callback start-quick-meeting(int /* proj-idx */, string /* topic */, string /* rate */, bool /* record-audio */);
+    callback select-meeting-project(int /* proj-idx */);
+    callback open-meeting-modal();
     callback toggle-audio-pause();
     callback stop-audio-recording();
     callback play-entry-audio(string /* audio-path */);
@@ -236,6 +312,7 @@ export component MainWindow inherits Window {
     callback copy-markdown();
     callback open-afk-modal();
     callback apply-afk-resolution(bool /* deduct-all */);
+
 
     VerticalLayout {
         padding: 16px;
@@ -560,17 +637,17 @@ export component MainWindow inherits Window {
 
             // 闪念便签输入栏
             Rectangle {
-                background: #1e293b;
+                background: #141c2e;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #334155;
+                border-color: #25334e;
 
                 HorizontalLayout {
                     padding: 8px;
                     spacing: 8px;
                     alignment: center;
-                    LineEdit {
-                        placeholder-text: "闪念便签：记录电话/讨论（敲回车自动存入便签库）...";
+                    DarkInput {
+                        placeholder: "闪念便签：记录电话/讨论（敲回车自动存入便签库）...";
                         text <=> root.note-input;
                         accepted => {
                             if (root.note-input != "") {
@@ -608,7 +685,7 @@ export component MainWindow inherits Window {
                     bg-color: #7c3aed;
                     hover-color: #6d28d9;
                     custom-height: 36px;
-                    clicked => { root.active-tab = 6; }
+                    clicked => { root.open-meeting-modal(); }
                 }
                 OutlineButton {
                     text: "⚡ AFK校准";
@@ -616,6 +693,7 @@ export component MainWindow inherits Window {
                     clicked => { root.open-afk-modal(); }
                 }
             }
+
         }
 
         // ================= Tab 1: 交付对账单 =================
@@ -818,13 +896,13 @@ export component MainWindow inherits Window {
                         Text { text: "AI 大模型服务商设置 (用于工作总结生成)"; font-size: 14px; font-weight: 700; color: #38bdf8; }
 
                         Text { text: "API Base URL (兼容 OpenAI / DeepSeek / Ollama)"; font-size: 12px; color: #cbd5e1; }
-                        LineEdit { text <=> root.setting-ai-base; }
+                        DarkInput { text <=> root.setting-ai-base; }
 
                         Text { text: "API Key (密钥)"; font-size: 12px; color: #cbd5e1; }
-                        LineEdit { text <=> root.setting-ai-key; placeholder-text: "sk-xxxxxxxxxxxx (可留空或填入本地 Ollama)"; }
+                        DarkInput { text <=> root.setting-ai-key; placeholder: "sk-xxxxxxxxxxxx (可留空或填入本地 Ollama)"; }
 
                         Text { text: "模型名称 (Model)"; font-size: 12px; color: #cbd5e1; }
-                        LineEdit { text <=> root.setting-ai-model; placeholder-text: "deepseek-chat"; }
+                        DarkInput { text <=> root.setting-ai-model; placeholder: "deepseek-chat"; }
 
                         HorizontalLayout {
                             spacing: 10px;
@@ -846,12 +924,12 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 spacing: 4px;
                                 Text { text: "每日基准工时 (小时/人天)"; font-size: 12px; color: #cbd5e1; }
-                                LineEdit { text <=> root.setting-hours-per-day; }
+                                DarkInput { text <=> root.setting-hours-per-day; }
                             }
                             VerticalLayout {
                                 spacing: 4px;
                                 Text { text: "AFK 空闲离开阈值 (分钟)"; font-size: 12px; color: #cbd5e1; }
-                                LineEdit { text <=> root.setting-afk-minutes; }
+                                DarkInput { text <=> root.setting-afk-minutes; }
                             }
                         }
 
@@ -884,27 +962,28 @@ export component MainWindow inherits Window {
                     Text { text: "创建新的商业/个人项目"; font-size: 15px; font-weight: 800; color: #f8fafc; }
 
                     Text { text: "项目名称 (必填)"; font-size: 12px; color: #cbd5e1; }
-                    LineEdit { placeholder-text: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
+                    DarkInput { placeholder: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
 
                     Text { text: "客户/组织名称"; font-size: 12px; color: #cbd5e1; }
-                    LineEdit { placeholder-text: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
+                    DarkInput { placeholder: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
 
                     HorizontalLayout {
                         spacing: 12px;
                         VerticalLayout {
                             spacing: 4px;
                             Text { text: "人天单价 (元/天)"; font-size: 12px; color: #cbd5e1; }
-                            LineEdit { placeholder-text: "3000"; text <=> root.new-proj-rate; }
+                            DarkInput { placeholder: "3000"; text <=> root.new-proj-rate; }
                         }
                         VerticalLayout {
                             spacing: 4px;
                             Text { text: "结算币种"; font-size: 12px; color: #cbd5e1; }
-                            LineEdit { placeholder-text: "CNY"; text <=> root.new-proj-currency; }
+                            DarkInput { placeholder: "CNY"; text <=> root.new-proj-currency; }
                         }
                     }
 
                     Text { text: "本地 Git 仓库路径 (用于自动抓取 Commit & Diff)"; font-size: 12px; color: #cbd5e1; }
-                    LineEdit { placeholder-text: "/home/beatle/dev/my-project (可选)"; text <=> root.new-proj-git; }
+                    DarkInput { placeholder: "/home/beatle/dev/my-project (可选)"; text <=> root.new-proj-git; }
+
 
                     Rectangle { height: 6px; }
 
@@ -996,8 +1075,8 @@ export component MainWindow inherits Window {
             spacing: 12px;
 
             Rectangle {
-                background: #1e293b;
-                border-radius: 10px;
+                background: #111827;
+                border-radius: 12px;
                 border-width: 1px;
                 border-color: #7c3aed;
 
@@ -1005,71 +1084,174 @@ export component MainWindow inherits Window {
                     padding: 18px;
                     spacing: 12px;
 
+                    // 弹窗头部
                     HorizontalLayout {
                         spacing: 8px;
-                        Text { text: "🎙️ 发起会议 / 技术对齐 / 电话沟通计时"; font-size: 15px; font-weight: 800; color: #a78bfa; }
-                    }
-
-                    Text {
-                        text: "现实中需求沟通、架构评审与客户电话同样属于高价值工时。系统将独立通道精准记录，并在结束时自动由 AI 提炼会议纪要。";
-                        font-size: 12px;
-                        color: #94a3b8;
-                    }
-
-                    Text { text: "选择归属项目 (工时、录音与对账结算自动归入该客户)"; font-size: 12px; font-weight: 700; color: #cbd5e1; }
-                    ScrollView {
-                        height: 95px;
+                        alignment: space-between;
                         VerticalLayout {
-                            spacing: 6px;
-                            Rectangle {
-                                height: 34px;
-                                background: root.meeting-selected-proj-idx == -1 ? #312e81 : #1e293b;
-                                border-radius: 6px;
-                                border-width: 1px;
-                                border-color: root.meeting-selected-proj-idx == -1 ? #818cf8 : #334155;
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.meeting-selected-proj-idx = -1;
+                            spacing: 3px;
+                            Text { text: "🎙️ 发起会议 / 需求沟通 / 架构评审计时"; font-size: 15px; font-weight: 800; color: #c4b5fd; }
+                            Text {
+                                text: "客户需求与架构研讨均属高价值工时 · 录音直写本地 · 结束后自动生成 AI 纪要与待办";
+                                font-size: 11px;
+                                color: #94a3b8;
+                            }
+                        }
+                    }
+
+                    // 1. 当前已选项目的高亮总览卡片 (Hero Card)
+                    Rectangle {
+                        height: 52px;
+                        background: root.meeting-selected-proj-idx >= 0 ? #0d1e38 : #1c1435;
+                        border-radius: 8px;
+                        border-width: 1.5px;
+                        border-color: root.meeting-selected-proj-idx >= 0 ? #38bdf8 : #a855f7;
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            alignment: space-between;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Text {
+                                        text: "🏷️ " + root.meeting-selected-proj-name;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                    }
+                                    Rectangle {
+                                        height: 18px;
+                                        background: root.meeting-selected-proj-idx >= 0 ? #0369a1 : #6b21a8;
+                                        border-radius: 4px;
+                                        HorizontalLayout {
+                                            padding-left: 6px; padding-right: 6px;
+                                            Text {
+                                                text: root.meeting-selected-proj-client;
+                                                font-size: 10px;
+                                                font-weight: 700;
+                                                color: #ffffff;
+                                                vertical-alignment: center;
+                                            }
+                                        }
                                     }
                                 }
+                                Text {
+                                    text: root.meeting-selected-proj-idx >= 0 ? "工时与录音凭证将自动汇总并计入该客户对账单" : "不挂靠现有项目，单独生成独立计费凭证与纪要";
+                                    font-size: 11px;
+                                    color: root.meeting-selected-proj-idx >= 0 ? #93c5fd : #d8b4fe;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: root.meeting-selected-proj-rate;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: root.meeting-selected-proj-idx >= 0 ? #38bdf8 : #c084fc;
+                                    horizontal-alignment: right;
+                                }
+                                Text {
+                                    text: "计费结算标准";
+                                    font-size: 10px;
+                                    color: #94a3b8;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 选择归属项目列表 (Project Selector Cards)
+                    Text { text: "点击切换归属项目："; font-size: 12px; font-weight: 700; color: #cbd5e1; }
+
+                    ScrollView {
+                        height: 125px;
+                        VerticalLayout {
+                            padding: 2px;
+                            spacing: 6px;
+
+                            // 独立临时会议选项卡
+                            Rectangle {
+                                height: 36px;
+                                background: root.meeting-selected-proj-idx == -1 ? #2e1065 : (temp-touch.has-hover ? #1e293b : #0c1222);
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: root.meeting-selected-proj-idx == -1 ? #a855f7 : #1e293b;
+
+                                temp-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.select-meeting-project(-1); }
+                                }
+
                                 HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 10px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
                                     spacing: 8px;
                                     alignment: space-between;
-                                    Text {
-                                        text: "➕ 独立临时立项 (新建单次独立会议项目)";
-                                        font-size: 12px;
-                                        font-weight: root.meeting-selected-proj-idx == -1 ? 700 : 500;
-                                        color: root.meeting-selected-proj-idx == -1 ? #ffffff : #94a3b8;
-                                        vertical-alignment: center;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: center;
+                                        Text {
+                                            text: "⚡ 独立临时会议";
+                                            font-size: 12px;
+                                            font-weight: root.meeting-selected-proj-idx == -1 ? 700 : 500;
+                                            color: root.meeting-selected-proj-idx == -1 ? #f3e8ff : #cbd5e1;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: "(单独立项，不挂靠已有客户)";
+                                            font-size: 11px;
+                                            color: #94a3b8;
+                                            vertical-alignment: center;
+                                        }
                                     }
-                                    Text {
-                                        text: root.meeting-selected-proj-idx == -1 ? "● 已选中" : "○ 选择";
-                                        font-size: 11px;
-                                        color: root.meeting-selected-proj-idx == -1 ? #a5b4fc : #64748b;
-                                        vertical-alignment: center;
+
+                                    Rectangle {
+                                        height: 22px;
+                                        background: root.meeting-selected-proj-idx == -1 ? #7e22ce : transparent;
+                                        border-radius: 11px;
+                                        border-width: 1px;
+                                        border-color: root.meeting-selected-proj-idx == -1 ? #a855f7 : #334155;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            Text {
+                                                text: root.meeting-selected-proj-idx == -1 ? "✓ 当前选中" : "选择";
+                                                font-size: 11px;
+                                                font-weight: 600;
+                                                color: root.meeting-selected-proj-idx == -1 ? #ffffff : #94a3b8;
+                                                vertical-alignment: center;
+                                            }
+                                        }
                                     }
                                 }
                             }
+
+                            // 已有项目列表
                             for p[idx] in root.projects : Rectangle {
-                                height: 34px;
-                                background: root.meeting-selected-proj-idx == idx ? #312e81 : #1e293b;
+                                height: 36px;
+                                background: root.meeting-selected-proj-idx == idx ? #162a45 : (proj-touch.has-hover ? #172033 : #0c1222);
                                 border-radius: 6px;
                                 border-width: 1px;
-                                border-color: root.meeting-selected-proj-idx == idx ? #818cf8 : #334155;
-                                TouchArea {
+                                border-color: root.meeting-selected-proj-idx == idx ? #38bdf8 : #1e293b;
+
+                                proj-touch := TouchArea {
                                     mouse-cursor: pointer;
-                                    clicked => {
-                                        root.meeting-selected-proj-idx = idx;
-                                    }
+                                    clicked => { root.select-meeting-project(idx); }
                                 }
+
                                 HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 10px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
                                     spacing: 8px;
                                     alignment: space-between;
+
                                     HorizontalLayout {
                                         spacing: 8px;
                                         alignment: center;
@@ -1077,81 +1259,111 @@ export component MainWindow inherits Window {
                                             text: "📁 " + p.name;
                                             font-size: 12px;
                                             font-weight: root.meeting-selected-proj-idx == idx ? 700 : 500;
-                                            color: root.meeting-selected-proj-idx == idx ? #ffffff : #e2e8f0;
+                                            color: root.meeting-selected-proj-idx == idx ? #ffffff : #cbd5e1;
                                             vertical-alignment: center;
                                         }
                                         Text {
-                                            text: "(" + p.rate-info + ")";
+                                            text: "[" + p.client + "]";
+                                            font-size: 11px;
+                                            color: #64748b;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: center;
+                                        Text {
+                                            text: p.rate-info;
                                             font-size: 10px;
                                             color: #94a3b8;
                                             vertical-alignment: center;
                                         }
-                                    }
-                                    Text {
-                                        text: root.meeting-selected-proj-idx == idx ? "● 已选中" : "○ 选择";
-                                        font-size: 11px;
-                                        color: root.meeting-selected-proj-idx == idx ? #a5b4fc : #64748b;
-                                        vertical-alignment: center;
+                                        Rectangle {
+                                            height: 22px;
+                                            background: root.meeting-selected-proj-idx == idx ? #0284c7 : transparent;
+                                            border-radius: 11px;
+                                            border-width: 1px;
+                                            border-color: root.meeting-selected-proj-idx == idx ? #38bdf8 : #334155;
+                                            HorizontalLayout {
+                                                padding-left: 8px; padding-right: 8px;
+                                                Text {
+                                                    text: root.meeting-selected-proj-idx == idx ? "✓ 已关联" : "关联";
+                                                    font-size: 11px;
+                                                    font-weight: 600;
+                                                    color: root.meeting-selected-proj-idx == idx ? #ffffff : #94a3b8;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
 
-                    Text { text: "会议/讨论议题"; font-size: 12px; color: #cbd5e1; }
-                    LineEdit {
-                        placeholder-text: "例如：客户需求对接与技术排期沟通会";
+                    // 3. 会议议题与快速芯片
+                    Text { text: "会议/讨论议题："; font-size: 12px; font-weight: 700; color: #cbd5e1; }
+                    DarkInput {
+                        placeholder: "例如：商业客户需求沟通与技术方案评审";
                         text <=> root.meeting-topic-input;
                     }
 
                     // 常用会议快捷芯片
                     HorizontalLayout {
                         spacing: 6px;
-                        MiniButton {
-                            text: "架构评审会";
-                            bg-color: #334155;
-                            hover-color: #475569;
+                        ChipButton {
+                            text: "📐 架构方案评审";
                             clicked => { root.meeting-topic-input = "技术架构方案与接口评审会"; }
                         }
-                        MiniButton {
-                            text: "客户需求对接";
-                            bg-color: #334155;
-                            hover-color: #475569;
+                        ChipButton {
+                            text: "🤝 客户需求对接";
                             clicked => { root.meeting-topic-input = "商业客户需求与排期沟通会"; }
                         }
-                        MiniButton {
-                            text: "敏捷迭代站会";
-                            bg-color: #334155;
-                            hover-color: #475569;
+                        ChipButton {
+                            text: "⏱️ 敏捷迭代站会";
                             clicked => { root.meeting-topic-input = "项目日常敏捷对齐与进度同步"; }
                         }
-                        MiniButton {
-                            text: "紧急排障讨论";
-                            bg-color: #334155;
-                            hover-color: #475569;
+                        ChipButton {
+                            text: "🚨 线上紧急排障";
                             clicked => { root.meeting-topic-input = "线上紧急故障排查与复盘分析"; }
                         }
                     }
 
+                    // 4. 计费单价
                     HorizontalLayout {
                         spacing: 12px;
+                        alignment: start;
                         VerticalLayout {
                             spacing: 4px;
                             Text { text: "会议计费单价 (元/小时)"; font-size: 12px; color: #cbd5e1; }
-                            LineEdit {
-                                placeholder-text: "350";
-                                text <=> root.meeting-rate-input;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                DarkInput {
+                                    width: 130px;
+                                    placeholder: "350";
+                                    text <=> root.meeting-rate-input;
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: root.meeting-selected-proj-idx >= 0 ? "💡 已根据归属项目单价自动换算" : "💡 独立临时立项默认费率";
+                                        font-size: 11px;
+                                        color: #94a3b8;
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // 麦克风录音控制选项
+                    // 5. 麦克风录音控制卡片
                     Rectangle {
-                        height: 52px;
-                        background: root.meeting-record-audio ? #2e1065 : #1e293b;
+                        height: 54px;
+                        background: root.meeting-record-audio ? #22123f : #0f172a;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: root.meeting-record-audio ? #8b5cf6 : #334155;
+                        border-color: root.meeting-record-audio ? #a855f7 : #25334e;
 
                         rec-touch := TouchArea {
                             mouse-cursor: pointer;
@@ -1171,18 +1383,14 @@ export component MainWindow inherits Window {
                                 alignment: center;
 
                                 Rectangle {
-                                    width: 22px;
-                                    height: 22px;
-                                    border-radius: 4px;
+                                    width: 24px;
+                                    height: 24px;
+                                    border-radius: 12px;
                                     background: root.meeting-record-audio ? #7c3aed : #334155;
-                                    border-width: 1px;
-                                    border-color: root.meeting-record-audio ? #a78bfa : #475569;
 
                                     Text {
-                                        text: root.meeting-record-audio ? "✓" : "";
-                                        font-size: 13px;
-                                        font-weight: 800;
-                                        color: #ffffff;
+                                        text: root.meeting-record-audio ? "🎙️" : "🔇";
+                                        font-size: 12px;
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
                                     }
@@ -1192,30 +1400,40 @@ export component MainWindow inherits Window {
                                     alignment: center;
                                     spacing: 2px;
                                     Text {
-                                        text: "同步开启麦克风录音 (留存音频凭证 & AI纪要提炼)";
+                                        text: "全流程麦克风录音 (留存音频凭证 & 驱动 AI 纪要提炼)";
                                         font-size: 12px;
                                         font-weight: 700;
-                                        color: root.meeting-record-audio ? #ede9fe : #cbd5e1;
+                                        color: root.meeting-record-audio ? #f3e8ff : #cbd5e1;
                                     }
                                     Text {
-                                        text: "流式直写本地无损 WAV，结算时 AI 自动归纳议题决议与待办";
+                                        text: "流式本地直写无损 WAV · 零网络延迟 · 结算时一键生成决议与待办";
                                         font-size: 10px;
                                         color: #94a3b8;
                                     }
                                 }
                             }
 
-                            Text {
-                                text: root.meeting-record-audio ? "已开启" : "已关闭";
-                                font-size: 11px;
-                                font-weight: 700;
-                                color: root.meeting-record-audio ? #a78bfa : #64748b;
-                                vertical-alignment: center;
+                            Rectangle {
+                                height: 26px;
+                                background: root.meeting-record-audio ? #7c3aed : #1e293b;
+                                border-radius: 13px;
+                                border-width: 1px;
+                                border-color: root.meeting-record-audio ? #c084fc : #334155;
+                                HorizontalLayout {
+                                    padding-left: 10px; padding-right: 10px;
+                                    Text {
+                                        text: root.meeting-record-audio ? "● 录音开启中" : "○ 已关闭录音";
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: root.meeting-record-audio ? #ffffff : #94a3b8;
+                                        vertical-alignment: center;
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Rectangle { height: 6px; }
+                    Rectangle { height: 4px; }
 
                     HorizontalLayout {
                         spacing: 10px;
@@ -1223,14 +1441,14 @@ export component MainWindow inherits Window {
                             text: root.meeting-record-audio ? "▶ 启动会议计时并开始录音" : "▶ 启动会议计时";
                             bg-color: #7c3aed;
                             hover-color: #6d28d9;
-                            custom-height: 36px;
+                            custom-height: 40px;
                             clicked => {
                                 root.start-quick-meeting(root.meeting-selected-proj-idx, root.meeting-topic-input, root.meeting-rate-input, root.meeting-record-audio);
                             }
                         }
                         OutlineButton {
                             text: "取消返回";
-                            custom-height: 36px;
+                            custom-height: 40px;
                             clicked => { root.active-tab = 0; }
                         }
                     }
@@ -1242,11 +1460,25 @@ export component MainWindow inherits Window {
         if root.toast-message != "" : Rectangle {
             background: #064e3b;
             border-radius: 6px;
+            border-width: 1px;
+            border-color: #059669;
             HorizontalLayout {
-                padding: 6px;
-                alignment: center;
-                Text { text: root.toast-message; font-size: 12px; color: #34d399; }
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                alignment: space-between;
+                Text { text: root.toast-message; font-size: 12px; color: #34d399; vertical-alignment: center; }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.toast-message = ""; }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        Text { text: "✕ 关闭"; font-size: 11px; color: #a7f3d0; vertical-alignment: center; }
+                    }
+                }
             }
         }
     }
 }
+

@@ -48,7 +48,18 @@ fn format_duration(secs: u64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }
 
-fn build_project_items(projects: &[Project]) -> Vec<ProjectItem> {
+fn get_client_name(db: &Database, client_id: Option<Uuid>) -> String {
+    if let Some(cid) = client_id {
+        if let Ok(clients) = db.list_clients() {
+            if let Some(c) = clients.iter().find(|c| c.id == cid) {
+                return c.name.clone();
+            }
+        }
+    }
+    "商业客户".to_string()
+}
+
+fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> {
     projects
         .iter()
         .map(|p| {
@@ -60,10 +71,11 @@ fn build_project_items(projects: &[Project]) -> Vec<ProjectItem> {
                 BillingType::FixedCap => format!("固定总包 {:.0} {}", p.daily_rate, p.currency),
                 BillingType::NonBillable => "自用/不计费".to_string(),
             };
+            let client_name = get_client_name(db, p.client_id);
             ProjectItem {
                 id: p.id.to_string().into(),
                 name: p.name.clone().into(),
-                client: "商业客户".into(),
+                client: client_name.into(),
                 rate_info: rate_info.into(),
                 timer_text: "00:00:00".into(),
                 days_text: "0.00 人天".into(),
@@ -74,6 +86,7 @@ fn build_project_items(projects: &[Project]) -> Vec<ProjectItem> {
         })
         .collect()
 }
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -162,9 +175,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 4. 数据绑定与刷新器
-    let initial_items = build_project_items(&projects_ref.borrow());
+    let initial_items = build_project_items(&projects_ref.borrow(), &db);
     let model = Rc::new(VecModel::from(initial_items));
     app.set_projects(ModelRc::from(model.clone()));
+
+    if let Some(first_p) = projects_ref.borrow().first() {
+        app.set_meeting_selected_proj_idx(0);
+        app.set_meeting_selected_proj_name(first_p.name.clone().into());
+        let cname = get_client_name(&db, first_p.client_id);
+        app.set_meeting_selected_proj_client(cname.into());
+        let (rate, rate_str) = match first_p.billing_type {
+            BillingType::Daily => {
+                let r = (first_p.daily_rate / first_p.hours_per_day.max(1.0)).round();
+                (r, format!("{:.0} {} / 天 (约 {:.0}/h)", first_p.daily_rate, first_p.currency, r))
+            }
+            BillingType::Hourly => (first_p.hourly_rate.round(), format!("{:.0} {} / 小时", first_p.hourly_rate, first_p.currency)),
+            BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", first_p.daily_rate, first_p.currency)),
+            BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
+        };
+        app.set_meeting_rate_input(format!("{:.0}", rate).into());
+        app.set_meeting_selected_proj_rate(rate_str.into());
+    }
+
 
     let refresh_entries_ui = {
         let db = db.clone();
@@ -685,7 +717,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Ok(_) = db_new_proj.insert_project(&p) {
                 projects_new_proj.borrow_mut().push(p);
-                let new_items = build_project_items(&projects_new_proj.borrow());
+                let new_items = build_project_items(&projects_new_proj.borrow(), &db_new_proj);
                 model_new_proj.set_vec(new_items);
 
                 ui.set_new_proj_name("".into());
@@ -738,7 +770,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let pid = p.id;
                 let name = p.name.clone();
                 projects_quick_meeting.borrow_mut().push(p);
-                let new_items = build_project_items(&projects_quick_meeting.borrow());
+                let new_items = build_project_items(&projects_quick_meeting.borrow(), &db_quick_meeting);
                 model_quick_meeting.set_vec(new_items);
                 (pid, name)
             };
@@ -792,6 +824,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    // 8.1.1 选择会议归属项目联动 (自动更新项目名称、客户与折算单价)
+    let projects_select = projects_ref.clone();
+    let db_select = db.clone();
+    let app_weak_select = app.as_weak();
+    app.on_select_meeting_project(move |idx| {
+        if let Some(ui) = app_weak_select.upgrade() {
+            ui.set_meeting_selected_proj_idx(idx);
+            let projs = projects_select.borrow();
+            if idx >= 0 && (idx as usize) < projs.len() {
+                let p = &projs[idx as usize];
+                ui.set_meeting_selected_proj_name(p.name.clone().into());
+                let cname = get_client_name(&db_select, p.client_id);
+                ui.set_meeting_selected_proj_client(cname.into());
+                let (rate, rate_str) = match p.billing_type {
+                    BillingType::Daily => {
+                        let r = (p.daily_rate / p.hours_per_day.max(1.0)).round();
+                        (r, format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r))
+                    }
+                    BillingType::Hourly => (p.hourly_rate.round(), format!("{:.0} {} / 小时", p.hourly_rate, p.currency)),
+                    BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", p.daily_rate, p.currency)),
+                    BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
+                };
+                ui.set_meeting_rate_input(format!("{:.0}", rate).into());
+                ui.set_meeting_selected_proj_rate(rate_str.into());
+            } else {
+                ui.set_meeting_selected_proj_name("独立临时会议".into());
+                ui.set_meeting_selected_proj_client("临时立项".into());
+                ui.set_meeting_rate_input("350".into());
+                ui.set_meeting_selected_proj_rate("350 CNY / 小时".into());
+            }
+        }
+    });
+
+    // 8.1.2 打开会议发起弹窗 (自动初始化默认归属与费率)
+    let projects_open = projects_ref.clone();
+    let db_open = db.clone();
+    let app_weak_open = app.as_weak();
+    app.on_open_meeting_modal(move || {
+        if let Some(ui) = app_weak_open.upgrade() {
+            let projs = projects_open.borrow();
+            if !projs.is_empty() {
+                let curr_idx = ui.get_meeting_selected_proj_idx();
+                let idx = if curr_idx >= 0 && (curr_idx as usize) < projs.len() {
+                    curr_idx
+                } else {
+                    0
+                };
+                ui.set_meeting_selected_proj_idx(idx);
+                let p = &projs[idx as usize];
+                ui.set_meeting_selected_proj_name(p.name.clone().into());
+                let cname = get_client_name(&db_open, p.client_id);
+                ui.set_meeting_selected_proj_client(cname.into());
+                let (rate, rate_str) = match p.billing_type {
+                    BillingType::Daily => {
+                        let r = (p.daily_rate / p.hours_per_day.max(1.0)).round();
+                        (r, format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r))
+                    }
+                    BillingType::Hourly => (p.hourly_rate.round(), format!("{:.0} {} / 小时", p.hourly_rate, p.currency)),
+                    BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", p.daily_rate, p.currency)),
+                    BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
+                };
+                ui.set_meeting_rate_input(format!("{:.0}", rate).into());
+                ui.set_meeting_selected_proj_rate(rate_str.into());
+            } else {
+                ui.set_meeting_selected_proj_idx(-1);
+                ui.set_meeting_selected_proj_name("独立临时会议".into());
+                ui.set_meeting_selected_proj_client("临时立项".into());
+                ui.set_meeting_rate_input("350".into());
+                ui.set_meeting_selected_proj_rate("350 CNY / 小时".into());
+            }
+            ui.set_active_tab(6);
+        }
+    });
+
+
 
     // 8.2 录音控制交互回调 (暂停/继续、结束录音)
     let audio_rec_toggle = audio_recorder.clone();
