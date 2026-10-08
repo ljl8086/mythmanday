@@ -284,9 +284,6 @@ export component MainWindow inherits Window {
     // 项目筛选过滤: "all" 显示全部项目，或者单个项目ID
     in-out property <string> active-project-filter: "all";
 
-    // 专属项目备忘输入
-    in-out property <string> project-note-input: "";
-
     // 独立模态浮层控制
     in-out property <bool> show-meeting-modal: false;
     in-out property <bool> show-new-project-modal: false;
@@ -992,14 +989,13 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 8px;
                                             alignment: center;
-                                            DarkInput {
+                                            proj_note_input := DarkInput {
                                                 custom-height: 32px;
                                                 placeholder: "为【" + item.name + "】添加工作备忘、需求变更或沟通速记...";
-                                                text <=> root.project-note-input;
                                                 accepted => {
-                                                    if (root.project-note-input != "") {
-                                                        root.add-project-note(item.id, root.project-note-input);
-                                                        root.project-note-input = "";
+                                                    if (self.text != "") {
+                                                        root.add-project-note(item.id, self.text);
+                                                        self.text = "";
                                                     }
                                                 }
                                             }
@@ -1010,9 +1006,9 @@ export component MainWindow inherits Window {
                                                 text-color: #c9d1d9;
                                                 custom-height: 32px;
                                                 clicked => {
-                                                    if (root.project-note-input != "") {
-                                                        root.add-project-note(item.id, root.project-note-input);
-                                                        root.project-note-input = "";
+                                                    if (proj_note_input.text != "") {
+                                                        root.add-project-note(item.id, proj_note_input.text);
+                                                        proj_note_input.text = "";
                                                     }
                                                 }
                                             }

@@ -264,6 +264,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut items = Vec::new();
             if let Ok(notes) = db.list_all_quick_notes() {
                 for n in notes {
+                    if n.content.starts_with('[') {
+                        continue;
+                    }
                     let proj_name = projs
                         .iter()
                         .find(|p| p.id == n.project_id)
@@ -351,6 +354,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut total_days = 0.0;
             let mut total_cny_amount = 0.0;
             let mut running_count = 0;
+
+            // 累计今日已归档的工时人天与金额
+            let today_local_date = Local::now().date_naive();
+            for p in projs.iter() {
+                if let Ok(entries) = db_timer.list_entries_for_project(&p.id) {
+                    for e in entries {
+                        if e.start_time.with_timezone(&Local).date_naive() == today_local_date {
+                            total_days += e.billable_days;
+                            if p.currency == "CNY" {
+                                total_cny_amount += e.total_amount;
+                            }
+                        }
+                    }
+                }
+            }
 
             for (idx, p) in projs.iter().enumerate() {
                 if let Some(mut item) = model_clone.row_data(idx) {
@@ -1073,16 +1091,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .summarize_meeting("会议交流与技术决议", e.billable_hours, &notes, Some(&audio_path.display().to_string()), Some(&transcript))
                                 .await;
                             let minutes = summary_res.unwrap_or_else(|_| "完成会议沟通对接，各方已达成一致决策。".to_string());
-                            let note = QuickNote::new(e.project_id, &format!("[录音全文转写] {}", transcript));
-                            let _ = db_clone.insert_quick_note(&note);
-
-                            let combined_summary = format!("{}\n[录音转写文稿摘要]: {}", minutes, transcript.chars().take(80).collect::<String>());
-                            e.summary = Some(combined_summary.clone());
+                            e.summary = Some(minutes.clone());
                             let _ = db_clone.insert_time_entry(&e);
                             refresh_clone();
                             if let Some(ui) = app_clone.upgrade() {
                                 if ui.get_show_detail_modal() && ui.get_detail_entry_id().as_str() == target_entry_id_str.as_str() {
-                                    ui.set_detail_summary(combined_summary.into());
+                                    ui.set_detail_summary(minutes.into());
                                     ui.set_detail_transcript(transcript.into());
                                 }
                                 ui.set_toast_message(format!("🎉 [{}] 录音语音转写与纪要提炼完成！", provider).into());

@@ -492,5 +492,53 @@ mod tests {
         let notes = db.list_quick_notes(&project.id).unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].content, "电话讨论支付回调逻辑");
+
+        // 插入带录音的工时条目
+        let entry1 = TimeEntry {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            start_time: Utc::now(),
+            end_time: Utc::now(),
+            raw_duration_secs: 3600,
+            billable_hours: 1.0,
+            billable_days: 0.125,
+            rate_at_moment: 312.5,
+            total_amount: 312.5,
+            summary: Some("技术方案对齐与决议研讨".to_string()),
+            audio_path: Some("/tmp/meeting_rec.wav".to_string()),
+            is_invoiced: false,
+            created_at: Utc::now(),
+        };
+        db.insert_time_entry(&entry1).unwrap();
+
+        // 插入不带录音的常规工时条目
+        let entry2 = TimeEntry {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            start_time: Utc::now(),
+            end_time: Utc::now(),
+            raw_duration_secs: 1800,
+            billable_hours: 0.5,
+            billable_days: 0.0625,
+            rate_at_moment: 312.5,
+            total_amount: 156.25,
+            summary: Some("功能模块代码编写".to_string()),
+            audio_path: None,
+            is_invoiced: false,
+            created_at: Utc::now(),
+        };
+        db.insert_time_entry(&entry2).unwrap();
+
+        // 验证读取
+        let fetched1 = db.get_time_entry(&entry1.id).unwrap().unwrap();
+        assert_eq!(fetched1.audio_path, Some("/tmp/meeting_rec.wav".to_string()));
+        assert_eq!(fetched1.summary.as_deref(), Some("技术方案对齐与决议研讨"));
+
+        let fetched2 = db.get_time_entry(&entry2.id).unwrap().unwrap();
+        assert_eq!(fetched2.audio_path, None);
+        assert_eq!(fetched2.summary.as_deref(), Some("功能模块代码编写"));
+
+        let entries = db.list_entries_for_project(&project.id).unwrap();
+        assert_eq!(entries.len(), 2);
     }
 }
