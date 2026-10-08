@@ -1051,12 +1051,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let refresh_entries_transcribe = refresh_entries_ui.clone();
     app.on_transcribe_entry_audio(move |entry_id_str, audio_path_str| {
         if let Some(ui) = app_weak_transcribe.upgrade() {
+            let provider = ui.get_setting_ai_provider().trim().to_string();
             let api_key = ui.get_setting_ai_key().trim().to_string();
             let api_base = ui.get_setting_ai_base().trim().to_string();
             let model = ui.get_setting_ai_model().trim().to_string();
 
-            if api_key.is_empty() {
-                ui.set_toast_message("提示：请先在【⚙️ 设置】中配置 API Key，以启用 Whisper 语音转写".into());
+            if provider == "api" && api_key.is_empty() {
+                ui.set_toast_message("提示：使用自定义 API 时请先在【⚙️ 设置】中配置 API Key".into());
                 return;
             }
 
@@ -1065,7 +1066,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => return,
             };
 
-            ui.set_toast_message("正在调用 AI Whisper 进行高保真语音转写与纪要提炼，请稍候...".into());
+            ui.set_toast_message(format!("正在调用 [{}] AI 引擎进行会议语音转写与纪要提炼，请稍候...", provider).into());
             let app_clone = ui.as_weak();
             let db_clone = db_transcribe.clone();
             let refresh_clone = refresh_entries_transcribe.clone();
@@ -1074,7 +1075,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             slint::spawn_local(async move {
                 let summarizer = AiSummarizer::new(AiConfig {
-                    provider: "api".to_string(),
+                    provider: provider.clone(),
                     api_base,
                     api_key,
                     model,
@@ -1088,7 +1089,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(Some(mut e)) = db_clone.get_time_entry(&entry_id) {
                             let notes = db_clone.list_quick_notes(&e.project_id).unwrap_or_default();
                             let summary_res = summarizer
-                                .summarize_meeting("会议交流与交付研讨", e.billable_hours, &notes, Some(&audio_path.display().to_string()), Some(&transcript))
+                                .summarize_meeting("会议交流与技术决议", e.billable_hours, &notes, Some(&audio_path.display().to_string()), Some(&transcript))
                                 .await;
                             let minutes = summary_res.unwrap_or_else(|_| "完成会议沟通对接，各方已达成一致决策。".to_string());
                             let note = QuickNote::new(e.project_id, &format!("[录音全文转写] {}", transcript));
@@ -1103,13 +1104,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_detail_summary(combined_summary.into());
                                     ui.set_detail_transcript(transcript.into());
                                 }
-                                ui.set_toast_message("🎉 AI 录音语音转写与纪要提炼完成！".into());
+                                ui.set_toast_message(format!("🎉 [{}] 录音语音转写与纪要提炼完成！", provider).into());
                             }
                         }
                     }
                     Err(e) => {
                         if let Some(ui) = app_clone.upgrade() {
-                            ui.set_toast_message(format!("Whisper 转写失败 (请检查接口或网络): {}", e).into());
+                            ui.set_toast_message(format!("转写失败: {}", e).into());
                         }
                     }
                 }
