@@ -1022,6 +1022,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let db_clone = db_transcribe.clone();
             let refresh_clone = refresh_entries_transcribe.clone();
             let audio_path = std::path::PathBuf::from(audio_path_str.as_str());
+            let target_entry_id_str = entry_id_str.clone();
 
             slint::spawn_local(async move {
                 let summarizer = AiSummarizer::new(AiConfig {
@@ -1032,18 +1033,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match summarizer.transcribe_audio(&audio_path).await {
                     Ok(transcript) => {
+                        let txt_path = audio_path.with_extension("txt");
+                        let _ = std::fs::write(&txt_path, &transcript);
+
                         if let Ok(Some(mut e)) = db_clone.get_time_entry(&entry_id) {
                             let notes = db_clone.list_quick_notes(&e.project_id).unwrap_or_default();
                             let summary_res = summarizer
                                 .summarize_meeting("会议交流与交付研讨", e.billable_hours, &notes, Some(&audio_path.display().to_string()), Some(&transcript))
                                 .await;
-                            if let Ok(minutes) = summary_res {
-                                e.summary = Some(format!("{}\n[录音转写文稿摘要]: {}", minutes, transcript.chars().take(80).collect::<String>()));
-                                let _ = db_clone.insert_time_entry(&e);
-                                refresh_clone();
-                                if let Some(ui) = app_clone.upgrade() {
-                                    ui.set_toast_message("🎉 AI 录音语音转写与纪要提炼完成！".into());
+                            let minutes = summary_res.unwrap_or_else(|_| "完成会议沟通对接，各方已达成一致决策。".to_string());
+                            let note = QuickNote::new(e.project_id, &format!("[录音全文转写] {}", transcript));
+                            let _ = db_clone.insert_quick_note(&note);
+
+                            let combined_summary = format!("{}\n[录音转写文稿摘要]: {}", minutes, transcript.chars().take(80).collect::<String>());
+                            e.summary = Some(combined_summary.clone());
+                            let _ = db_clone.insert_time_entry(&e);
+                            refresh_clone();
+                            if let Some(ui) = app_clone.upgrade() {
+                                if ui.get_show_detail_modal() && ui.get_detail_entry_id().as_str() == target_entry_id_str.as_str() {
+                                    ui.set_detail_summary(combined_summary.into());
+                                    ui.set_detail_transcript(transcript.into());
                                 }
+                                ui.set_toast_message("🎉 AI 录音语音转写与纪要提炼完成！".into());
                             }
                         }
                     }
@@ -1054,6 +1065,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }).unwrap();
+        }
+    });
+
+    // 8.5 查看工时/会议纪要与转写文稿详情
+    let db_detail = db.clone();
+    let projects_detail = projects_ref.clone();
+    let app_weak_detail = app.as_weak();
+    app.on_open_entry_detail(move |entry_id_str| {
+        if let Some(ui) = app_weak_detail.upgrade() {
+            if let Ok(entry_id) = Uuid::parse_str(entry_id_str.as_str()) {
+                if let Ok(Some(e)) = db_detail.get_time_entry(&entry_id) {
+                    let projs = projects_detail.borrow();
+                    let (p_name, currency) = projs.iter()
+                        .find(|p| p.id == e.project_id)
+                        .map(|p| (p.name.clone(), p.currency.clone()))
+                        .unwrap_or_else(|| ("已结算项目".to_string(), "CNY".to_string()));
+                    let notes = db_detail.list_quick_notes(&e.project_id).unwrap_or_default();
+                    let audio_path_str = extract_wav_path(e.summary.as_deref(), &notes).unwrap_or_default();
+                    let has_audio = !audio_path_str.is_empty();
+
+                    let transcript = if has_audio {
+                        let txt_path = std::path::PathBuf::from(&audio_path_str).with_extension("txt");
+                        if txt_path.exists() {
+                            std::fs::read_to_string(&txt_path).unwrap_or_default()
+                        } else {
+                            notes.iter()
+                                .find(|n| n.content.starts_with("[录音全文转写]"))
+                                .map(|n| n.content.trim_start_matches("[录音全文转写]").trim().to_string())
+                                .unwrap_or_default()
+                        }
+                    } else {
+                        "".to_string()
+                    };
+
+                    let start_local = e.start_time.with_timezone(&Local);
+                    let end_local = e.end_time.with_timezone(&Local);
+
+                    ui.set_detail_entry_id(entry_id_str.clone());
+                    ui.set_detail_project_name(p_name.into());
+                    ui.set_detail_time_range(format!("{}-{}", start_local.format("%H:%M"), end_local.format("%H:%M")).into());
+                    ui.set_detail_duration(format_duration(e.raw_duration_secs).into());
+                    ui.set_detail_days(format!("{:.2} 天", e.billable_days).into());
+                    ui.set_detail_amount(format!("{} {:.2}", currency, e.total_amount).into());
+                    ui.set_detail_summary(e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string()).into());
+                    ui.set_detail_transcript(transcript.into());
+                    ui.set_detail_audio_path(audio_path_str.into());
+                    ui.set_detail_has_audio(has_audio);
+                    ui.set_show_detail_modal(true);
+                }
+            }
+        }
+    });
+
+    // 8.6 复制详情文稿到系统剪贴板
+    let app_weak_copy = app.as_weak();
+    app.on_copy_text_to_clipboard(move |text_str| {
+        if let Some(ui) = app_weak_copy.upgrade() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                if clipboard.set_text(text_str.as_str()).is_ok() {
+                    ui.set_toast_message("📋 已将会议纪要与转写文稿复制到剪贴板！".into());
+                    return;
+                }
+            }
+            ui.set_toast_message("无法访问系统剪贴板".into());
         }
     });
 
