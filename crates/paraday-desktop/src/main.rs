@@ -72,6 +72,11 @@ fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> 
                 BillingType::NonBillable => "自用/不计费".to_string(),
             };
             let client_name = get_client_name(db, p.client_id);
+            let entries = db.list_entries_for_project(&p.id).unwrap_or_default();
+            let entries_count = entries.len() as i32;
+            let total_secs: u64 = entries.iter().map(|e| e.raw_duration_secs).sum();
+            let today_duration = format_duration(total_secs);
+
             ProjectItem {
                 id: p.id.to_string().into(),
                 name: p.name.clone().into(),
@@ -82,6 +87,8 @@ fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> 
                 amount_text: format!("{} 0.00", p.currency).into(),
                 is_running: false,
                 is_paused: false,
+                today_duration: today_duration.into(),
+                entries_count,
             }
         })
         .collect()
@@ -158,6 +165,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let projects_ref = Rc::new(RefCell::new(projects));
 
     // 3. 读取并填充设置数据
+    if let Ok(Some(val)) = db.get_setting("ai_provider") {
+        app.set_setting_ai_provider(val.into());
+    } else {
+        app.set_setting_ai_provider("agy".into());
+    }
     if let Ok(Some(val)) = db.get_setting("ai_base") {
         app.set_setting_ai_base(val.into());
     }
@@ -197,16 +209,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.set_meeting_selected_proj_rate(rate_str.into());
     }
 
-
+    let model_for_refresh = model.clone();
     let refresh_entries_ui = {
         let db = db.clone();
         let app_weak = app.as_weak();
         let projects_ref = projects_ref.clone();
+        let model_sync = model_for_refresh.clone();
         move || {
             let projs = projects_ref.borrow();
             let mut all_entries = Vec::new();
-            for p in projs.iter() {
+            for (idx, p) in projs.iter().enumerate() {
                 if let Ok(entries) = db.list_entries_for_project(&p.id) {
+                    let total_secs: u64 = entries.iter().map(|e| e.raw_duration_secs).sum();
+                    if let Some(mut item) = model_sync.row_data(idx) {
+                        item.entries_count = entries.len() as i32;
+                        item.today_duration = format_duration(total_secs).into();
+                        model_sync.set_row_data(idx, item);
+                    }
+
                     let notes = db.list_quick_notes(&p.id).unwrap_or_default();
                     for e in entries {
                         let start_local = e.start_time.with_timezone(&Local);
@@ -215,6 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let has_audio = !audio_path.is_empty();
                         all_entries.push(EntryItem {
                             id: e.id.to_string().into(),
+                            project_id: p.id.to_string().into(),
                             project_name: p.name.clone().into(),
                             duration_text: format_duration(e.raw_duration_secs).into(),
                             days_text: format!("{:.2} 天", e.billable_days).into(),
@@ -251,6 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let local_time = n.logged_at.with_timezone(&Local);
                     items.push(NoteItem {
                         id: n.id.to_string().into(),
+                        project_id: n.project_id.to_string().into(),
                         project_name: proj_name.into(),
                         time_text: local_time.format("%H:%M").to_string().into(),
                         content: n.content.into(),
@@ -422,7 +444,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // 6. 交互回调：通道 启动 / 暂停 / 继续 / 结算 (具备崩溃容灾持久化)
+    // 6. 交互回调：通道 启动 / 暂停 / 继续 / 结束工时 (具备崩溃容灾持久化)
     let timer_mgr_start = timer_manager.clone();
     let db_start = db.clone();
     let app_weak_start = app.as_weak();
@@ -516,7 +538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             let mut mgr = timer_mgr_stop.borrow_mut();
             if let Some((start_at, end_at, elapsed_secs)) = mgr.stop_channel(id) {
-                // 1. 结算完成，从 active_timers 移除持久化记录
+                // 1. 结束工时完成，从 active_timers 移除持久化记录
                 let _ = db_stop.delete_active_timer(&id);
 
                 // 2. 如果当前停止的项目正在录音，停止录音并保存 WAV 凭证
@@ -608,7 +630,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     refresh_entries_stop();
 
                     if let Some(ui) = app_weak_stop.upgrade() {
-                        ui.set_toast_message(format!("工时已自动结算入库：{:.2} 人天", billable_days).into());
+                        ui.set_toast_message(format!("工时已归档入库：{:.2} 人天", billable_days).into());
                     }
 
                     // 5. 后台全自动静默调用 AI 润色提炼交付总结 / 会议纪要
@@ -617,13 +639,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let app_async = app_weak_stop.clone();
                     let proj_name = p.name.clone();
 
+                    let ai_provider = db_stop.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".into());
                     let ai_base = db_stop.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.deepseek.com/v1".into());
                     let ai_key = db_stop.get_setting("ai_key").ok().flatten().unwrap_or_default();
                     let ai_model = db_stop.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "deepseek-chat".into());
 
-                    if !ai_key.is_empty() || ai_base.contains("localhost") || ai_base.contains("127.0.0.1") {
+                    let is_cli = ai_provider == "agy" || ai_provider == "codex";
+                    if is_cli || !ai_key.is_empty() || ai_base.contains("localhost") || ai_base.contains("127.0.0.1") {
                         slint::spawn_local(async move {
                             let summarizer = AiSummarizer::new(AiConfig {
+                                provider: ai_provider,
                                 api_base: ai_base,
                                 api_key: ai_key,
                                 model: ai_model,
@@ -639,7 +664,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let _ = db_async.insert_time_entry(&e);
                                     refresh_async();
                                     if let Some(ui) = app_async.upgrade() {
-                                        ui.set_toast_message(format!("🤖 AI 已自动提炼完成交付总结：{}", proj_name).into());
+                                        ui.set_toast_message(format!("🤖 AI 已自动提炼完成工时成果：{}", proj_name).into());
                                     }
                                 }
                             }
@@ -665,6 +690,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             refresh_notes_add();
             if let Some(ui) = app_weak_note.upgrade() {
                 ui.set_toast_message(format!("便签已登记: {}", text).into());
+            }
+        }
+    });
+
+    let db_for_proj_notes = db.clone();
+    let app_weak_proj_note = app.as_weak();
+    let refresh_notes_proj_add = refresh_notes_ui.clone();
+    app.on_add_project_note(move |pid_str, content| {
+        let text = content.as_str().trim();
+        if !text.is_empty() {
+            if let Ok(pid) = Uuid::parse_str(pid_str.as_str()) {
+                let note = QuickNote::new(pid, text);
+                let _ = db_for_proj_notes.insert_quick_note(&note);
+                refresh_notes_proj_add();
+                if let Some(ui) = app_weak_proj_note.upgrade() {
+                    ui.set_toast_message(format!("项目备忘已记录: {}", text).into());
+                }
             }
         }
     });
@@ -1026,6 +1068,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             slint::spawn_local(async move {
                 let summarizer = AiSummarizer::new(AiConfig {
+                    provider: "api".to_string(),
                     api_base,
                     api_key,
                     model,
@@ -1080,7 +1123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (p_name, currency) = projs.iter()
                         .find(|p| p.id == e.project_id)
                         .map(|p| (p.name.clone(), p.currency.clone()))
-                        .unwrap_or_else(|| ("已结算项目".to_string(), "CNY".to_string()));
+                        .unwrap_or_else(|| ("已归档项目".to_string(), "CNY".to_string()));
                     let notes = db_detail.list_quick_notes(&e.project_id).unwrap_or_default();
                     let audio_path_str = extract_wav_path(e.summary.as_deref(), &notes).unwrap_or_default();
                     let has_audio = !audio_path_str.is_empty();
@@ -1137,44 +1180,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_weak_settings = app.as_weak();
     app.on_save_settings(move || {
         if let Some(ui) = app_weak_settings.upgrade() {
+            let _ = db_settings.set_setting("ai_provider", ui.get_setting_ai_provider().trim());
             let _ = db_settings.set_setting("ai_base", ui.get_setting_ai_base().trim());
             let _ = db_settings.set_setting("ai_key", ui.get_setting_ai_key().trim());
             let _ = db_settings.set_setting("ai_model", ui.get_setting_ai_model().trim());
             let _ = db_settings.set_setting("hours_per_day", ui.get_setting_hours_per_day().trim());
             let _ = db_settings.set_setting("afk_minutes", ui.get_setting_afk_minutes().trim());
 
-            ui.set_toast_message("系统配置与 AI 服务商参数已保存！".into());
+            ui.set_toast_message("系统配置与 AI 引擎参数已保存！".into());
         }
     });
 
     let app_weak_test_ai = app.as_weak();
     app.on_test_ai_connection(move || {
         if let Some(ui) = app_weak_test_ai.upgrade() {
+            let provider = ui.get_setting_ai_provider().trim().to_string();
             let base = ui.get_setting_ai_base().trim().to_string();
             let key = ui.get_setting_ai_key().trim().to_string();
-            let _model = ui.get_setting_ai_model().trim().to_string();
+            let model = ui.get_setting_ai_model().trim().to_string();
 
-            if key.is_empty() {
-                ui.set_toast_message("请先在输入框填入您的 API Key".into());
+            if provider == "api" && key.is_empty() {
+                ui.set_toast_message("使用自定义 API 时请先填入 API Key".into());
                 return;
             }
 
+            ui.set_toast_message(format!("正在测试 [{}] AI 引擎连通性...", provider).into());
+
             let app_clone = ui.as_weak();
             slint::spawn_local(async move {
-                let client = reqwest::Client::new();
-                let url = format!("{}/models", base.trim_end_matches('/'));
-                let res = client.get(&url).header("Authorization", format!("Bearer {}", key)).send().await;
-
-                if let Some(ui) = app_clone.upgrade() {
-                    match res {
-                        Ok(resp) if resp.status().is_success() => {
-                            ui.set_toast_message("AI 服务连接测试成功！接口通信正常。".into());
+                let summarizer = AiSummarizer::new(AiConfig {
+                    provider: provider.clone(),
+                    api_base: base,
+                    api_key: key,
+                    model,
+                });
+                match summarizer.test_connection().await {
+                    Ok(resp) => {
+                        if let Some(ui) = app_clone.upgrade() {
+                            let preview: String = resp.chars().take(50).collect();
+                            ui.set_toast_message(format!("✅ AI [{}] 通信测试成功: {}", provider, preview).into());
                         }
-                        Ok(resp) => {
-                            ui.set_toast_message(format!("接口通信响应状态: {}", resp.status()).into());
-                        }
-                        Err(e) => {
-                            ui.set_toast_message(format!("连接失败: {}", e).into());
+                    }
+                    Err(e) => {
+                        if let Some(ui) = app_clone.upgrade() {
+                            ui.set_toast_message(format!("❌ AI [{}] 测试失败: {}", provider, e).into());
                         }
                     }
                 }
@@ -1189,17 +1238,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let refresh_entries_ai = refresh_entries_ui.clone();
     app.on_trigger_ai_summarize(move || {
         if let Some(ui) = app_weak_ai.upgrade() {
+            let provider = ui.get_setting_ai_provider().trim().to_string();
             let api_key = ui.get_setting_ai_key().trim().to_string();
-            if api_key.is_empty() {
-                ui.set_toast_message("提示：请在【⚙️ 设置】中填入 API Key 即可启动大模型生成".into());
+            let api_base = ui.get_setting_ai_base().trim().to_string();
+            let model = ui.get_setting_ai_model().trim().to_string();
+
+            if provider == "api" && api_key.is_empty() {
+                ui.set_toast_message("提示：使用自定义 API 时请在【⚙️ 设置】中填入 API Key".into());
                 return;
             }
 
-            ui.set_toast_message("正在调用 AI 大模型分析生成交付报告，请稍候...".into());
+            ui.set_toast_message(format!("正在调用 [{}] AI 引擎分析生成工作日报，请稍候...", provider).into());
             let ai_config = AiConfig {
-                api_base: ui.get_setting_ai_base().trim().to_string(),
+                provider,
+                api_base,
                 api_key,
-                model: ui.get_setting_ai_model().trim().to_string(),
+                model,
             };
 
             let app_clone = ui.as_weak();
@@ -1231,7 +1285,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 refresh_clone();
                 if let Some(ui) = app_clone.upgrade() {
-                    ui.set_toast_message("AI 智能分析与润色已全部完成！".into());
+                    ui.set_toast_message("🎉 AI 工作成果与日报分析已全部提炼完成！".into());
                 }
             }).unwrap();
         }
@@ -1289,15 +1343,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 12. 复制 Markdown 结算单到剪贴板
+    // 12. 复制 Markdown 工时日报到剪贴板
     let db_markdown = db.clone();
     let projects_markdown = projects_ref.clone();
     let app_weak_copy = app.as_weak();
 
     app.on_copy_markdown(move || {
         let projs = projects_markdown.borrow();
-        let mut md = String::from("# ParaDay 客户项目交付结算单\n\n");
-        md.push_str("| 日期 | 项目名称 | 投入工时 | 核算人天 | 金额 | 交付成果摘要 |\n");
+        let mut md = String::from("# ParaDay 项目研发工时日报\n\n");
+        md.push_str("| 日期 | 项目名称 | 投入工时 | 核算人天 | 金额 | 成果与会议纪要 |\n");
         md.push_str("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
 
         let mut grand_days = 0.0;
@@ -1324,14 +1378,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        md.push_str(&format!("\n**总计核算**：**{:.2} 人天**，总应收：**¥ {:.2}**\n", grand_days, grand_amount));
+        md.push_str(&format!("\n**今日累计投入**：**{:.2} 人天**，核算价值：**¥ {:.2}**\n", grand_days, grand_amount));
 
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(md);
         }
 
         if let Some(ui) = app_weak_copy.upgrade() {
-            ui.set_toast_message("Markdown 结算对账单已复制到剪贴板！".into());
+            ui.set_toast_message("Markdown 研发工时日报已复制到剪贴板！".into());
         }
     });
 
