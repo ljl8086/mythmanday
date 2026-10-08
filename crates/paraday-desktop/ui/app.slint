@@ -29,6 +29,7 @@ export struct EntryItem {
     amount-text: string,
     summary-text: string,
     time-range: string,
+    date-str: string,
     has-audio: bool,
     audio-path: string,
 }
@@ -266,6 +267,95 @@ component DarkInput inherits Rectangle {
     }
 }
 
+component ProjectSidebarCard inherits Rectangle {
+    in property <string> name: "";
+    in property <string> client: "";
+    in property <string> rate-info: "";
+    in property <string> today-duration: "";
+    in property <int> entries-count: 0;
+    in property <bool> is-running: false;
+    in property <bool> is-paused: false;
+    in property <bool> is-selected: false;
+    callback clicked <=> touch.clicked;
+
+    height: 64px;
+    border-radius: 8px;
+    background: is-selected ? #1c2128 : (touch.has-hover ? #161b22 : #0d1117);
+    border-width: 1px;
+    border-color: is-selected ? #58a6ff : (is-running ? #238636 : (touch.has-hover ? #30363d : #21262d));
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 4px;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: is-running ? #3fb950 : (is-paused ? #d29922 : #6e7681);
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.name;
+                    font-size: 13px;
+                    font-weight: root.is-selected ? 800 : 600;
+                    color: root.is-selected ? #ffffff : #f0f6fc;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+            }
+            if root.is-running : Rectangle {
+                height: 16px;
+                border-radius: 3px;
+                background: #0f2417;
+                HorizontalLayout {
+                    padding-left: 4px; padding-right: 4px;
+                    Text { text: "计时中"; font-size: 9px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.client;
+                    font-size: 11px;
+                    color: #8b949e;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+                Text { text: "·"; font-size: 11px; color: #484f58; }
+                Text {
+                    text: root.entries-count + "条明细";
+                    font-size: 11px;
+                    color: #8b949e;
+                }
+            }
+            Text {
+                text: root.today-duration != "" && root.today-duration != "00:00:00" ? root.today-duration : "";
+                font-size: 11px;
+                font-weight: 600;
+                color: #58a6ff;
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "ParaDay - Multi-Channel Time Tracker v1.0";
     icon: @image-url("icon.png");
@@ -281,8 +371,8 @@ export component MainWindow inherits Window {
     // AI 提供商: "agy" | "codex" | "api"
     in-out property <string> setting-ai-provider: "agy";
 
-    // 项目筛选过滤: "all" 显示全部项目，或者单个项目ID
-    in-out property <string> active-project-filter: "all";
+    // 当前在左侧项目列表选中的项目ID (默认空，将在启动时选中首个)
+    in-out property <string> selected-project-id: "";
 
     // 独立模态浮层控制
     in-out property <bool> show-meeting-modal: false;
@@ -655,113 +745,93 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // ================= Tab 0: 📁 项目工作区 =================
-                if root.active-tab == 0 : VerticalLayout {
-                    spacing: 12px;
+                // ================= Tab 0: 📁 左右分屏项目工作区 =================
+                if root.active-tab == 0 : HorizontalLayout {
+                    spacing: 14px;
 
-                    // 顶部项目快速切换与过滤 Chips (左对齐，防止文本被挤压成省略号)
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: start;
-                        ChipButton {
-                            text: root.active-project-filter == "all" ? "● 全部项目" : "○ 全部项目";
-                            clicked => { root.active-project-filter = "all"; }
-                        }
-                        for p in root.projects : ChipButton {
-                            text: (root.active-project-filter == p.id ? "● " : "○ ") + p.name;
-                            clicked => {
-                                root.active-project-filter = (root.active-project-filter == p.id ? "all" : p.id);
+                    // ------------------ 左侧：项目列表面板 (固定 240px 宽) ------------------
+                    Rectangle {
+                        width: 240px;
+                        background: #11161f;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: #21262d;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                alignment: space-between;
+                                Text { text: "📁 研发与会议项目"; font-size: 13px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
+                                Text { text: root.projects.length + " 个项目"; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+                            }
+
+                            // 项目列表滑动区域
+                            ScrollView {
+                                height: 490px;
+                                VerticalLayout {
+                                    padding-right: 4px;
+                                    spacing: 8px;
+
+                                    if root.projects.length == 0 : Rectangle {
+                                        height: 80px;
+                                        Text { text: "暂无项目，点击右上角【+ 新建项目】"; font-size: 11px; color: #6e7681; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+
+                                    for p in root.projects : ProjectSidebarCard {
+                                        name: p.name;
+                                        client: p.client;
+                                        rate-info: p.rate-info;
+                                        today-duration: p.today-duration;
+                                        entries-count: p.entries-count;
+                                        is-running: p.is-running;
+                                        is-paused: p.is-paused;
+                                        is-selected: root.selected-project-id == p.id;
+                                        clicked => {
+                                            root.selected-project-id = p.id;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // 项目列表与各项目工作区
-                    ScrollView {
-                        height: 510px;
+                    // ------------------ 右侧：选中项目的工时明细看板 (一天一个卡片) ------------------
+                    Rectangle {
+                        background: transparent;
+
                         VerticalLayout {
-                            padding: 2px;
-                            spacing: 14px;
+                            spacing: 12px;
 
-                            if root.projects.length == 0 : Rectangle {
-                                height: 140px;
-                                background: #161b22;
-                                border-radius: 12px;
-                                border-width: 1px;
-                                border-color: #21262d;
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 8px;
-                                    Text {
-                                        text: "暂无进行中的项目，点击右上角【➕ 新建项目】开启研发工时管理";
-                                        font-size: 13px;
-                                        color: #6e7681;
-                                        horizontal-alignment: center;
-                                    }
-                                }
-                            }
-
+                            // 1. 顶部操作栏 (时钟与计时控制)
                             for item[proj-idx] in root.projects : VerticalLayout {
-                                if root.active-project-filter == "all" || root.active-project-filter == item.id : Rectangle {
-                                    background: item.is-running ? #161b22 : #11161f;
+                                if root.selected-project-id == item.id : Rectangle {
+                                    background: #161b22;
                                     border-radius: 12px;
                                     border-width: 1px;
-                                    border-color: item.is-running ? #238636 : #21262d;
+                                    border-color: item.is-running ? #238636 : #30363d;
 
                                     VerticalLayout {
-                                    padding: 14px;
-                                    spacing: 12px;
+                                        padding: 14px;
+                                        spacing: 10px;
 
-                                    // 第一部分：项目信息、时钟与主操作栏
-                                    HorizontalLayout {
-                                        alignment: space-between;
-
-                                        // 左侧信息
                                         HorizontalLayout {
-                                            spacing: 12px;
-                                            alignment: center;
-
-                                            Rectangle {
-                                                width: 42px;
-                                                height: 42px;
-                                                border-radius: 10px;
-                                                background: item.is-running ? #0f2417 : #1c2128;
-                                                border-width: 1px;
-                                                border-color: item.is-running ? #238636 : #30363d;
-                                                Text {
-                                                    text: "📁";
-                                                    font-size: 20px;
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
-                                            }
+                                            alignment: space-between;
 
                                             VerticalLayout {
                                                 spacing: 4px;
-                                                alignment: center;
-
                                                 HorizontalLayout {
                                                     spacing: 8px;
                                                     alignment: start;
-                                                    Text {
-                                                        text: item.name;
-                                                        font-size: 15px;
-                                                        font-weight: 700;
-                                                        color: #f0f6fc;
-                                                        vertical-alignment: center;
-                                                    }
+                                                    Text { text: item.name; font-size: 16px; font-weight: 800; color: #f0f6fc; }
                                                     Rectangle {
                                                         height: 20px;
                                                         border-radius: 4px;
                                                         background: #21262d;
                                                         HorizontalLayout {
                                                             padding-left: 6px; padding-right: 6px;
-                                                            Text {
-                                                                text: item.client;
-                                                                font-size: 11px;
-                                                                font-weight: 600;
-                                                                color: #8b949e;
-                                                                vertical-alignment: center;
-                                                            }
+                                                            Text { text: item.client; font-size: 11px; color: #8b949e; vertical-alignment: center; }
                                                         }
                                                     }
                                                     if item.is-running : Rectangle {
@@ -772,52 +842,31 @@ export component MainWindow inherits Window {
                                                         border-color: #238636;
                                                         HorizontalLayout {
                                                             padding-left: 6px; padding-right: 6px;
-                                                            Text {
-                                                                text: "● 工时计时中";
-                                                                font-size: 10px;
-                                                                font-weight: 700;
-                                                                color: #3fb950;
-                                                                vertical-alignment: center;
-                                                            }
+                                                            Text { text: "● 正在计时"; font-size: 10px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
                                                         }
                                                     }
                                                 }
-
                                                 HorizontalLayout {
                                                     spacing: 10px;
-                                                    Text {
-                                                        text: "核算标准: " + item.rate-info;
-                                                        font-size: 11px;
-                                                        color: #8b949e;
-                                                    }
+                                                    Text { text: "核算标准: " + item.rate-info; font-size: 11px; color: #8b949e; }
                                                     Text { text: "•"; font-size: 11px; color: #484f58; }
-                                                    Text {
-                                                        text: "今日累计投入: " + item.today-duration + " (" + item.days-text + ")";
-                                                        font-size: 11px;
-                                                        font-weight: 600;
-                                                        color: #58a6ff;
-                                                    }
+                                                    Text { text: "今日累计投入: " + item.today-duration + " (" + item.days-text + ")"; font-size: 11px; font-weight: 700; color: #58a6ff; }
                                                 }
                                             }
-                                        }
 
-                                        // 右侧时钟与操作按钮 (严格不换行)
-                                        HorizontalLayout {
-                                            spacing: 14px;
-                                            alignment: center;
-
-                                            Text {
-                                                text: item.timer-text;
-                                                font-size: 24px;
-                                                font-weight: 900;
-                                                font-family: "monospace";
-                                                color: item.is-running ? #3fb950 : #8b949e;
-                                                vertical-alignment: center;
-                                            }
-
+                                            // 右侧大时钟与控制按钮
                                             HorizontalLayout {
-                                                spacing: 6px;
+                                                spacing: 12px;
                                                 alignment: center;
+
+                                                Text {
+                                                    text: item.timer-text;
+                                                    font-size: 24px;
+                                                    font-weight: 900;
+                                                    font-family: "monospace";
+                                                    color: item.is-running ? #3fb950 : #8b949e;
+                                                    vertical-alignment: center;
+                                                }
 
                                                 if !item.is-running && !item.is-paused : HorizontalLayout {
                                                     spacing: 6px;
@@ -869,128 +918,13 @@ export component MainWindow inherits Window {
                                                 }
                                             }
                                         }
-                                    }
 
-                                    // 分割线
-                                    Rectangle { height: 1px; background: #21262d; }
-
-                                    // 第二部分：附属于该项目的工时明细与会议记录
-                                    VerticalLayout {
-                                        spacing: 8px;
-
-                                        HorizontalLayout {
-                                            alignment: space-between;
-                                            Text {
-                                                text: "📋 附属于本项目的工时明细与会议凭证";
-                                                font-size: 12px;
-                                                font-weight: 700;
-                                                color: #58a6ff;
-                                            }
-                                            Text {
-                                                text: item.entries-count > 0 ? (item.entries-count + " 条已归档记录") : "暂无归档工时";
-                                                font-size: 11px;
-                                                color: #6e7681;
-                                            }
-                                        }
-
-                                        if item.entries-count == 0 : Rectangle {
-                                            height: 36px;
-                                            background: #0d1117;
-                                            border-radius: 6px;
-                                            Text {
-                                                text: "本项目今日暂无归档工时记录。点击上方【▶ 开始工时】计时，完成后点击【⏹ 结束工时】自动归档入库。";
-                                                font-size: 11px;
-                                                color: #6e7681;
-                                                x: 12px;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-
-                                        for e in root.recent-entries : VerticalLayout {
-                                            if e.project-id == item.id : Rectangle {
-                                                background: #0d1117;
-                                                border-radius: 8px;
-                                                border-width: 1px;
-                                                border-color: #21262d;
-
-                                                VerticalLayout {
-                                                    padding: 10px;
-                                                    spacing: 6px;
-
-                                                    HorizontalLayout {
-                                                        alignment: space-between;
-                                                        HorizontalLayout {
-                                                            spacing: 12px;
-                                                            Text { text: "🕒 " + e.time-range; font-size: 12px; font-weight: 700; color: #f0f6fc; vertical-alignment: center; }
-                                                            Text { text: "工时: " + e.duration-text; font-size: 11px; color: #8b949e; vertical-alignment: center; }
-                                                            Text { text: "折算: " + e.days-text; font-size: 11px; font-weight: 700; color: #d29922; vertical-alignment: center; }
-                                                            Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
-                                                        }
-                                                    }
-
-                                                    Text {
-                                                        text: e.summary-text;
-                                                        font-size: 12px;
-                                                        color: #c9d1d9;
-                                                        wrap: word-wrap;
-                                                    }
-
-                                                    HorizontalLayout {
-                                                        alignment: space-between;
-
-                                                        if e.has-audio : HorizontalLayout {
-                                                            spacing: 6px;
-                                                            alignment: start;
-                                                            MiniButton {
-                                                                text: root.playing-entry-id == e.id ? "⏹ 停止播放" : "▶ 播放录音";
-                                                                bg-color: root.playing-entry-id == e.id ? #da3633 : #6366f1;
-                                                                hover-color: root.playing-entry-id == e.id ? #b62324 : #4f46e5;
-                                                                clicked => {
-                                                                    if (root.playing-entry-id == e.id) {
-                                                                        root.stop-audio-playback();
-                                                                    } else {
-                                                                        root.play-entry-audio(e.id, e.audio-path);
-                                                                    }
-                                                                }
-                                                            }
-                                                            OutlineButton {
-                                                                text: "📂 录音目录";
-                                                                custom-height: 24px;
-                                                                clicked => { root.open-entry-folder(e.audio-path); }
-                                                            }
-                                                            MiniButton {
-                                                                text: "🤖 AI转写";
-                                                                bg-color: #238636;
-                                                                hover-color: #2ea043;
-                                                                clicked => { root.transcribe-entry-audio(e.id, e.audio-path); }
-                                                            }
-                                                        }
-
-                                                        if !e.has-audio : Rectangle {}
-
-                                                        OutlineButton {
-                                                            text: "📄 查看纪要与文稿";
-                                                            custom-height: 24px;
-                                                            clicked => { root.open-entry-detail(e.id); }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // 分割线
-                                    Rectangle { height: 1px; background: #21262d; }
-
-                                    // 第三部分：附属于该项目的工作备忘与沟通速记
-                                    VerticalLayout {
-                                        spacing: 6px;
-
+                                        // 快速工作备忘输入框 (当前选中项目)
                                         HorizontalLayout {
                                             spacing: 8px;
                                             alignment: center;
                                             proj_note_input := DarkInput {
-                                                custom-height: 32px;
+                                                custom-height: 30px;
                                                 placeholder: "为【" + item.name + "】添加工作备忘、需求变更或沟通速记...";
                                                 accepted => {
                                                     if (self.text != "") {
@@ -1004,7 +938,7 @@ export component MainWindow inherits Window {
                                                 bg-color: #21262d;
                                                 hover-color: #30363d;
                                                 text-color: #c9d1d9;
-                                                custom-height: 32px;
+                                                custom-height: 30px;
                                                 clicked => {
                                                     if (proj_note_input.text != "") {
                                                         root.add-project-note(item.id, proj_note_input.text);
@@ -1013,28 +947,146 @@ export component MainWindow inherits Window {
                                                 }
                                             }
                                         }
+                                    }
+                                }
+                            }
 
-                                        for n in root.note-items : VerticalLayout {
-                                            if n.project-id == item.id : Rectangle {
-                                                height: 28px;
-                                                background: #0d1117;
-                                                border-radius: 6px;
-                                                border-width: 1px;
-                                                border-color: #21262d;
+                            // 2. 每天一个卡片的历史工时明细流水 (包含录音、转写与交付纪要)
+                            ScrollView {
+                                height: 420px;
+                                VerticalLayout {
+                                    padding-right: 4px;
+                                    spacing: 12px;
+
+                                    // 【今日卡片】：优雅呈现当天该项目的所有归档记录
+                                    Rectangle {
+                                        background: #161b22;
+                                        border-radius: 12px;
+                                        border-width: 1px;
+                                        border-color: #21262d;
+
+                                        VerticalLayout {
+                                            padding: 14px;
+                                            spacing: 10px;
+
+                                            // 卡片 Header：日期与当天小计
+                                            HorizontalLayout {
+                                                alignment: space-between;
                                                 HorizontalLayout {
-                                                    padding-left: 10px;
-                                                    padding-right: 8px;
-                                                    alignment: space-between;
-                                                    HorizontalLayout {
-                                                        spacing: 8px;
-                                                        alignment: center;
-                                                        Text { text: "📝 [" + n.time-text + "]"; font-size: 11px; color: #58a6ff; vertical-alignment: center; }
-                                                        Text { text: n.content; font-size: 11px; color: #f0f6fc; vertical-alignment: center; }
+                                                    spacing: 8px;
+                                                    alignment: center;
+                                                    Rectangle { width: 4px; height: 14px; border-radius: 2px; background: #58a6ff; }
+                                                    Text { text: "📅 今日工时流水与交付明细"; font-size: 13px; font-weight: 800; color: #f0f6fc; }
+                                                }
+                                                Text { text: "实时自动归档入库"; font-size: 11px; color: #6e7681; vertical-alignment: center; }
+                                            }
+
+                                            // 分割线
+                                            Rectangle { height: 1px; background: #21262d; }
+
+                                            // 当天的明细条目列表
+                                            VerticalLayout {
+                                                spacing: 8px;
+
+                                                for e in root.recent-entries : VerticalLayout {
+                                                    if e.project-id == root.selected-project-id : Rectangle {
+                                                        background: #0d1117;
+                                                        border-radius: 8px;
+                                                        border-width: 1px;
+                                                        border-color: #21262d;
+
+                                                        VerticalLayout {
+                                                            padding: 10px;
+                                                            spacing: 6px;
+
+                                                            // 第一行：时间区间与投入产出
+                                                            HorizontalLayout {
+                                                                alignment: space-between;
+                                                                HorizontalLayout {
+                                                                    spacing: 12px;
+                                                                    Text { text: "🕒 " + e.time-range; font-size: 12px; font-weight: 700; color: #f0f6fc; vertical-alignment: center; }
+                                                                    Text { text: "投入: " + e.duration-text; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+                                                                    Text { text: "折算: " + e.days-text; font-size: 11px; font-weight: 700; color: #d29922; vertical-alignment: center; }
+                                                                    Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                                                                }
+                                                            }
+
+                                                            // 第二行：AI 会议纪要与交付成果内容
+                                                            Text {
+                                                                text: e.summary-text;
+                                                                font-size: 12px;
+                                                                color: #c9d1d9;
+                                                                wrap: word-wrap;
+                                                            }
+
+                                                            // 第三行：录音播放、AI转写与文稿操作栏
+                                                            HorizontalLayout {
+                                                                alignment: space-between;
+
+                                                                if e.has-audio : HorizontalLayout {
+                                                                    spacing: 6px;
+                                                                    alignment: start;
+                                                                    MiniButton {
+                                                                        text: root.playing-entry-id == e.id ? "⏹ 停止播放" : "▶ 播放录音";
+                                                                        bg-color: root.playing-entry-id == e.id ? #da3633 : #6366f1;
+                                                                        hover-color: root.playing-entry-id == e.id ? #b62324 : #4f46e5;
+                                                                        clicked => {
+                                                                            if (root.playing-entry-id == e.id) {
+                                                                                root.stop-audio-playback();
+                                                                            } else {
+                                                                                root.play-entry-audio(e.id, e.audio-path);
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    OutlineButton {
+                                                                        text: "📂 录音目录";
+                                                                        custom-height: 24px;
+                                                                        clicked => { root.open-entry-folder(e.audio-path); }
+                                                                    }
+                                                                    MiniButton {
+                                                                        text: "🤖 AI转写";
+                                                                        bg-color: #238636;
+                                                                        hover-color: #2ea043;
+                                                                        clicked => { root.transcribe-entry-audio(e.id, e.audio-path); }
+                                                                    }
+                                                                }
+
+                                                                if !e.has-audio : Rectangle {}
+
+                                                                OutlineButton {
+                                                                    text: "📄 查看纪要与文稿";
+                                                                    custom-height: 24px;
+                                                                    clicked => { root.open-entry-detail(e.id); }
+                                                                }
+                                                            }
+                                                        }
                                                     }
-                                                    TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => { root.delete-quick-note(n.id); }
-                                                        Text { text: "✕"; font-size: 11px; color: #6e7681; vertical-alignment: center; }
+                                                }
+
+                                                // 备忘速记条目
+                                                for n in root.note-items : VerticalLayout {
+                                                    if n.project-id == root.selected-project-id : Rectangle {
+                                                        height: 28px;
+                                                        background: #0d1117;
+                                                        border-radius: 6px;
+                                                        border-width: 1px;
+                                                        border-color: #21262d;
+                                                        HorizontalLayout {
+                                                            padding-left: 10px;
+                                                            padding-right: 8px;
+                                                            alignment: space-between;
+                                                            HorizontalLayout {
+                                                                spacing: 8px;
+                                                                alignment: center;
+                                                                Text { text: "📝 [" + n.time-text + "]"; font-size: 11px; color: #58a6ff; vertical-alignment: center; }
+                                                                Text { text: n.content; font-size: 11px; color: #f0f6fc; vertical-alignment: center; }
+                                                            }
+                                                            TouchArea {
+                                                                mouse-cursor: pointer;
+                                                                clicked => { root.delete-quick-note(n.id); }
+                                                                Text { text: "✕"; font-size: 11px; color: #6e7681; vertical-alignment: center; }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1042,7 +1094,6 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                        }
                         }
                     }
                 }

@@ -191,6 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.set_projects(ModelRc::from(model.clone()));
 
     if let Some(first_p) = projects_ref.borrow().first() {
+        app.set_selected_project_id(first_p.id.to_string().into());
         app.set_meeting_selected_proj_idx(0);
         app.set_meeting_selected_proj_name(first_p.name.clone().into());
         let cname = get_client_name(&db, first_p.client_id);
@@ -242,6 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             amount_text: format!("{} {:.2}", p.currency, e.total_amount).into(),
                             summary_text: e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string()).into(),
                             time_range: format!("{}-{}", start_local.format("%H:%M"), end_local.format("%H:%M")).into(),
+                            date_str: start_local.format("%Y-%m-%d").to_string().into(),
                             has_audio,
                             audio_path: audio_path.into(),
                         });
