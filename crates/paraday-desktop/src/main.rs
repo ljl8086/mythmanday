@@ -723,7 +723,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_new_proj_name("".into());
                 ui.set_new_proj_client("".into());
                 ui.set_new_proj_git("".into());
-                ui.set_active_tab(0);
+                ui.set_show_new_project_modal(false);
                 ui.set_toast_message("新项目已成功创建！".into());
             }
         }
@@ -816,7 +816,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             ui.set_meeting_topic_input("".into());
-            ui.set_active_tab(0);
+            ui.set_show_meeting_modal(false);
             if rec_started {
                 ui.set_toast_message(format!("已启动【{}】项目会议并开启全程录音！议题: {}", proj_name, topic).into());
             } else {
@@ -895,7 +895,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_meeting_rate_input("350".into());
                 ui.set_meeting_selected_proj_rate("350 CNY / 小时".into());
             }
-            ui.set_active_tab(6);
+            ui.set_show_meeting_modal(true);
         }
     });
 
@@ -1187,7 +1187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             ui.set_afk_items(ModelRc::from(Rc::new(VecModel::from(afk_list))));
-            ui.set_active_tab(5);
+            ui.set_show_afk_modal(true);
         }
     });
 
@@ -1210,7 +1210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 ui.set_toast_message("已保留全部活动工时（视作有效离线投入）".into());
             }
-            ui.set_active_tab(0);
+            ui.set_show_afk_modal(false);
         }
     });
 
