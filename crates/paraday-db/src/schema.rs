@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS time_entries (
     rate_at_moment REAL NOT NULL,
     total_amount REAL NOT NULL,
     summary TEXT,
+    audio_path TEXT,
     is_invoiced INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );

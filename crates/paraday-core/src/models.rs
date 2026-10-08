@@ -135,6 +135,8 @@ pub struct TimeEntry {
     pub total_amount: f64,
     /// AI 自动提炼或手动备注的工作成果描述
     pub summary: Option<String>,
+    /// 现场会议录音文件本地存储路径（若有录音凭证）
+    pub audio_path: Option<String>,
     /// 是否已出账/已开具对账单
     pub is_invoiced: bool,
     pub created_at: DateTime<Utc>,

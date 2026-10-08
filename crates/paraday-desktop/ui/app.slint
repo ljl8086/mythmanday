@@ -334,6 +334,7 @@ export component MainWindow inherits Window {
     in property <float> audio-volume-level: 0.0;
     in property <string> active-recording-project-name: "";
     in property <string> playing-audio-path: "";
+    in property <string> playing-entry-id: "";
 
     // 设置中心字段
     in-out property <string> setting-ai-base: "https://api.deepseek.com/v1";
@@ -364,7 +365,7 @@ export component MainWindow inherits Window {
     callback open-meeting-modal();
     callback toggle-audio-pause();
     callback stop-audio-recording();
-    callback play-entry-audio(string /* audio-path */);
+    callback play-entry-audio(string /* entry-id */, string /* audio-path */);
     callback stop-audio-playback();
     callback open-entry-folder(string /* audio-path */);
     callback transcribe-entry-audio(string /* entry-id */, string /* audio-path */);
@@ -661,15 +662,16 @@ export component MainWindow inherits Window {
                 if root.active-tab == 0 : VerticalLayout {
                     spacing: 12px;
 
-                    // 顶部项目快速切换与过滤 Chips
+                    // 顶部项目快速切换与过滤 Chips (左对齐，防止文本被挤压成省略号)
                     HorizontalLayout {
                         spacing: 8px;
+                        alignment: start;
                         ChipButton {
-                            text: root.active-project-filter == "all" ? "● 全部项目概览" : "○ 全部项目概览";
+                            text: root.active-project-filter == "all" ? "● 全部项目" : "○ 全部项目";
                             clicked => { root.active-project-filter = "all"; }
                         }
                         for p in root.projects : ChipButton {
-                            text: (root.active-project-filter == p.id ? "● " : "○ ") + p.name + " (" + p.today-duration + ")";
+                            text: (root.active-project-filter == p.id ? "● " : "○ ") + p.name;
                             clicked => {
                                 root.active-project-filter = (root.active-project-filter == p.id ? "all" : p.id);
                             }
@@ -933,6 +935,7 @@ export component MainWindow inherits Window {
                                                         text: e.summary-text;
                                                         font-size: 12px;
                                                         color: #c9d1d9;
+                                                        wrap: word-wrap;
                                                     }
 
                                                     HorizontalLayout {
@@ -941,36 +944,25 @@ export component MainWindow inherits Window {
                                                         if e.has-audio : HorizontalLayout {
                                                             spacing: 6px;
                                                             alignment: start;
-                                                            Rectangle {
-                                                                height: 24px;
-                                                                background: #1e1338;
-                                                                border-radius: 4px;
-                                                                border-width: 1px;
-                                                                border-color: #6366f1;
-                                                                HorizontalLayout {
-                                                                    padding-left: 8px; padding-right: 8px;
-                                                                    Text { text: "🎙️ 会议录音"; font-size: 11px; font-weight: 700; color: #c4b5fd; vertical-alignment: center; }
-                                                                }
-                                                            }
                                                             MiniButton {
-                                                                text: root.playing-audio-path == e.audio-path ? "⏹ 停止" : "▶ 播放";
-                                                                bg-color: root.playing-audio-path == e.audio-path ? #da3633 : #6366f1;
-                                                                hover-color: root.playing-audio-path == e.audio-path ? #b62324 : #4f46e5;
+                                                                text: root.playing-entry-id == e.id ? "⏹ 停止播放" : "▶ 播放录音";
+                                                                bg-color: root.playing-entry-id == e.id ? #da3633 : #6366f1;
+                                                                hover-color: root.playing-entry-id == e.id ? #b62324 : #4f46e5;
                                                                 clicked => {
-                                                                    if (root.playing-audio-path == e.audio-path) {
+                                                                    if (root.playing-entry-id == e.id) {
                                                                         root.stop-audio-playback();
                                                                     } else {
-                                                                        root.play-entry-audio(e.audio-path);
+                                                                        root.play-entry-audio(e.id, e.audio-path);
                                                                     }
                                                                 }
                                                             }
                                                             OutlineButton {
-                                                                text: "📂 目录";
+                                                                text: "📂 录音目录";
                                                                 custom-height: 24px;
                                                                 clicked => { root.open-entry-folder(e.audio-path); }
                                                             }
                                                             MiniButton {
-                                                                text: "🤖 转写";
+                                                                text: "🤖 AI转写";
                                                                 bg-color: #238636;
                                                                 hover-color: #2ea043;
                                                                 clicked => { root.transcribe-entry-audio(e.id, e.audio-path); }
@@ -1172,7 +1164,7 @@ export component MainWindow inherits Window {
                                                     Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #3fb950; }
                                                 }
                                             }
-                                            Text { text: e.summary-text; font-size: 12px; color: #c9d1d9; }
+                                            Text { text: e.summary-text; font-size: 12px; color: #c9d1d9; wrap: word-wrap; }
 
                                             HorizontalLayout {
                                                 spacing: 8px;
@@ -1181,36 +1173,25 @@ export component MainWindow inherits Window {
                                                 if e.has-audio : HorizontalLayout {
                                                     spacing: 6px;
                                                     alignment: start;
-                                                    Rectangle {
-                                                        height: 24px;
-                                                        background: #1e1338;
-                                                        border-radius: 4px;
-                                                        border-width: 1px;
-                                                        border-color: #6366f1;
-                                                        HorizontalLayout {
-                                                            padding-left: 8px; padding-right: 8px;
-                                                            Text { text: "🎙️ 会议录音"; font-size: 11px; font-weight: 700; color: #c4b5fd; vertical-alignment: center; }
-                                                        }
-                                                    }
                                                     MiniButton {
-                                                        text: root.playing-audio-path == e.audio-path ? "⏹ 停止" : "▶ 播放";
-                                                        bg-color: root.playing-audio-path == e.audio-path ? #da3633 : #6366f1;
-                                                        hover-color: root.playing-audio-path == e.audio-path ? #b62324 : #4f46e5;
+                                                        text: root.playing-entry-id == e.id ? "⏹ 停止播放" : "▶ 播放录音";
+                                                        bg-color: root.playing-entry-id == e.id ? #da3633 : #6366f1;
+                                                        hover-color: root.playing-entry-id == e.id ? #b62324 : #4f46e5;
                                                         clicked => {
-                                                            if (root.playing-audio-path == e.audio-path) {
+                                                            if (root.playing-entry-id == e.id) {
                                                                 root.stop-audio-playback();
                                                             } else {
-                                                                root.play-entry-audio(e.audio-path);
+                                                                root.play-entry-audio(e.id, e.audio-path);
                                                             }
                                                         }
                                                     }
                                                     OutlineButton {
-                                                        text: "📂 目录";
+                                                        text: "📂 录音目录";
                                                         custom-height: 24px;
                                                         clicked => { root.open-entry-folder(e.audio-path); }
                                                     }
                                                     MiniButton {
-                                                        text: "🤖 转写";
+                                                        text: "🤖 AI转写";
                                                         bg-color: #238636;
                                                         hover-color: #2ea043;
                                                         clicked => { root.transcribe-entry-audio(e.id, e.audio-path); }
@@ -2016,14 +1997,14 @@ export component MainWindow inherits Window {
                                 spacing: 6px;
                                 alignment: center;
                                 MiniButton {
-                                    text: root.playing-audio-path == root.detail-audio-path ? "⏹ 停止播放" : "▶ 播放录音";
-                                    bg-color: root.playing-audio-path == root.detail-audio-path ? #da3633 : #6366f1;
-                                    hover-color: root.playing-audio-path == root.detail-audio-path ? #b62324 : #4f46e5;
+                                    text: root.playing-entry-id == root.detail-entry-id ? "⏹ 停止播放" : "▶ 播放录音";
+                                    bg-color: root.playing-entry-id == root.detail-entry-id ? #da3633 : #6366f1;
+                                    hover-color: root.playing-entry-id == root.detail-entry-id ? #b62324 : #4f46e5;
                                     clicked => {
-                                        if (root.playing-audio-path == root.detail-audio-path) {
+                                        if (root.playing-entry-id == root.detail-entry-id) {
                                             root.stop-audio-playback();
                                         } else {
-                                            root.play-entry-audio(root.detail-audio-path);
+                                            root.play-entry-audio(root.detail-entry-id, root.detail-audio-path);
                                         }
                                     }
                                 }

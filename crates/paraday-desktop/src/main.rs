@@ -23,16 +23,9 @@ use std::sync::Arc;
 use tray::{spawn_tray, TrayEvent};
 use uuid::Uuid;
 
-fn extract_wav_path(summary: Option<&str>, notes: &[QuickNote]) -> Option<String> {
+fn extract_wav_path(summary: Option<&str>) -> Option<String> {
     if let Some(s) = summary {
         for word in s.split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '(' || c == ')' || c == ',' || c == ';') {
-            if word.ends_with(".wav") && std::path::Path::new(word).exists() {
-                return Some(word.to_string());
-            }
-        }
-    }
-    for n in notes {
-        for word in n.content.split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '(' || c == ')' || c == ',' || c == ';') {
             if word.ends_with(".wav") && std::path::Path::new(word).exists() {
                 return Some(word.to_string());
             }
@@ -233,12 +226,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         model_sync.set_row_data(idx, item);
                     }
 
-                    let notes = db.list_quick_notes(&p.id).unwrap_or_default();
                     for e in entries {
                         let start_local = e.start_time.with_timezone(&Local);
                         let end_local = e.end_time.with_timezone(&Local);
-                        let audio_path = extract_wav_path(e.summary.as_deref(), &notes).unwrap_or_default();
-                        let has_audio = !audio_path.is_empty();
+                        let audio_path = e.audio_path.clone().unwrap_or_else(|| {
+                            extract_wav_path(e.summary.as_deref()).unwrap_or_default()
+                        });
+                        let has_audio = !audio_path.is_empty() && std::path::Path::new(&audio_path).exists();
                         all_entries.push(EntryItem {
                             id: e.id.to_string().into(),
                             project_id: p.id.to_string().into(),
@@ -337,7 +331,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if !audio_player_timer.borrow().is_playing() {
                 if let Some(ui) = app_weak.upgrade() {
-                    if !ui.get_playing_audio_path().is_empty() {
+                    if !ui.get_playing_audio_path().is_empty() || !ui.get_playing_entry_id().is_empty() {
+                        ui.set_playing_entry_id("".into());
                         ui.set_playing_audio_path("".into());
                     }
                 }
@@ -547,29 +542,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 1. 结束工时完成，从 active_timers 移除持久化记录
                 let _ = db_stop.delete_active_timer(&id);
 
-                // 2. 如果当前停止的项目正在录音，停止录音并保存 WAV 凭证
-                let mut audio_info_str = None;
+                // 2. 如果当前停止的项目正在录音，停止录音并获取 WAV 文件凭证
+                let mut saved_audio_file: Option<String> = None;
                 let active_rec = active_rec_stop.borrow_mut().take();
-                if let Some((rec_pid, rec_topic, rec_path)) = active_rec {
+                if let Some((rec_pid, _rec_topic, rec_path)) = active_rec {
                     if rec_pid == id {
                         if audio_rec_stop.borrow().is_recording() {
                             if let Ok(saved_path) = audio_rec_stop.borrow_mut().stop_recording() {
-                                let size_mb = std::fs::metadata(&saved_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
-                                let info = format!("音频留存: {} ({:.2} MB)", saved_path.display(), size_mb);
-                                let note = QuickNote::new(id, &format!("[会议录音已归档] {}", info));
-                                let _ = db_stop.insert_quick_note(&note);
-                                audio_info_str = Some(info);
+                                saved_audio_file = Some(saved_path.display().to_string());
                             }
-                        } else {
-                            let size_mb = std::fs::metadata(&rec_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
-                            audio_info_str = Some(format!("音频留存: {} ({:.2} MB)", rec_path.display(), size_mb));
+                        } else if rec_path.exists() {
+                            saved_audio_file = Some(rec_path.display().to_string());
                         }
                         if let Some(ui) = app_weak_stop.upgrade() {
                             ui.set_is_recording_audio(false);
                             ui.set_active_recording_project_name("".into());
                         }
                     } else {
-                        *active_rec_stop.borrow_mut() = Some((rec_pid, rec_topic, rec_path));
+                        *active_rec_stop.borrow_mut() = Some((rec_pid, _rec_topic, rec_path));
                     }
                 }
 
@@ -593,25 +583,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     let notes = db_stop.list_quick_notes(&id).unwrap_or_default();
+                    let user_notes: Vec<&str> = notes.iter()
+                        .map(|n| n.content.as_str())
+                        .filter(|s| !s.starts_with('['))
+                        .collect();
 
-                    // 4. 构建智能兜底摘要（无需人工编写）
-                    let is_meeting = p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") || audio_info_str.is_some();
+                    // 4. 构建业务级规范工作成果摘要（绝不污染机器文件路径或内部调试标记）
+                    let is_meeting = p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") || saved_audio_file.is_some();
                     let summary_desc = if is_meeting {
-                        let mut base = if !notes.is_empty() {
-                            format!("会议沟通与决议：{}", notes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join("; "))
+                        if !user_notes.is_empty() {
+                            format!("会议沟通与决议：{}", user_notes.join("；"))
                         } else {
-                            "完成商业客户需求与技术方案对齐沟通".to_string()
-                        };
-                        if let Some(ref a_info) = audio_info_str {
-                            base.push_str(&format!(" [{}]", a_info));
+                            format!("会议沟通与技术决策：{}", p.name)
                         }
-                        base
                     } else if !git_summary.commits.is_empty() {
-                        format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "))
+                        format!("代码研发与提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "))
                     } else if git_summary.has_uncommitted_changes {
-                        format!("修改了 {} 个工作区文件，完成功能联调测试", git_summary.uncommitted_files.len())
-                    } else if !notes.is_empty() {
-                        format!("阶段性研发与联调：{}", notes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join("; "))
+                        format!("修改了 {} 个工作区文件，完成功能研发联调", git_summary.uncommitted_files.len())
+                    } else if !user_notes.is_empty() {
+                        format!("阶段性研发与联调：{}", user_notes.join("；"))
                     } else {
                         "完成阶段性功能需求研发与验证".to_string()
                     };
@@ -628,6 +618,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rate_at_moment: rate,
                         total_amount: amount,
                         summary: Some(summary_desc),
+                        audio_path: saved_audio_file.clone(),
                         is_invoiced: false,
                         created_at: Utc::now(),
                     };
@@ -660,7 +651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 model: ai_model,
                             });
                             let ai_summary_res = if is_meeting {
-                                summarizer.summarize_meeting(&proj_name, billable_hours, &notes, audio_info_str.as_deref(), None).await
+                                summarizer.summarize_meeting(&proj_name, billable_hours, &notes, saved_audio_file.as_deref(), None).await
                             } else {
                                 summarizer.summarize_session(&proj_name, billable_hours, &git_summary, &notes).await
                             };
@@ -835,10 +826,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 last_heartbeat: now,
             });
 
-            // 自动插入一条会议开始便签
-            let note = QuickNote::new(pid, &format!("[会议开启] 议题: {}", topic));
-            let _ = db_quick_meeting.insert_quick_note(&note);
-
             let mut rec_started = false;
             if record_audio {
                 let rec_dir = db_dir_recordings.join("recordings");
@@ -852,8 +839,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_is_recording_audio(true);
                         ui.set_is_audio_paused(false);
                         ui.set_active_recording_project_name(format!("{} · {}", proj_name, topic).into());
-                        let note_audio = QuickNote::new(pid, &format!("[录音开启] 现场音频写入: {}", wav_file.display()));
-                        let _ = db_quick_meeting.insert_quick_note(&note_audio);
                         rec_started = true;
                     }
                     Err(e) => {
@@ -971,9 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let audio_rec_stop_cmd = audio_recorder.clone();
     let active_rec_stop_cmd = active_recording_info.clone();
-    let db_stop_audio = db.clone();
     let app_weak_stop_audio = app.as_weak();
-    let refresh_notes_audio_stop = refresh_notes_ui.clone();
     app.on_stop_audio_recording(move || {
         let mut rec = audio_rec_stop_cmd.borrow_mut();
         if rec.is_recording() {
@@ -981,12 +964,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(path) => {
                     let file_size_mb = std::fs::metadata(&path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
                     if let Some((pid, topic, _)) = active_rec_stop_cmd.borrow().as_ref() {
-                        let note_content = format!("[录音提前结束] 议题: {} | 音频文件已就绪: {} ({:.2} MB)", topic, path.display(), file_size_mb);
-                        let note = QuickNote::new(*pid, &note_content);
-                        let _ = db_stop_audio.insert_quick_note(&note);
-                        refresh_notes_audio_stop();
+                        *active_rec_stop_cmd.borrow_mut() = Some((*pid, topic.clone(), path.clone()));
                     }
-                    *active_rec_stop_cmd.borrow_mut() = None;
                     if let Some(ui) = app_weak_stop_audio.upgrade() {
                         ui.set_is_recording_audio(false);
                         ui.set_active_recording_project_name("".into());
@@ -1005,12 +984,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 8.3 录音回放与文件管理回调
     let audio_player_play = audio_player.clone();
     let app_weak_play = app.as_weak();
-    app.on_play_entry_audio(move |path_str| {
+    app.on_play_entry_audio(move |entry_id_str, path_str| {
         let p = std::path::Path::new(path_str.as_str());
         let res = audio_player_play.borrow().play(p);
         if let Some(ui) = app_weak_play.upgrade() {
             match res {
                 Ok(_) => {
+                    ui.set_playing_entry_id(entry_id_str.clone());
                     ui.set_playing_audio_path(path_str.clone());
                     ui.set_toast_message("🔊 正在播放会议录音...".into());
                 }
@@ -1026,6 +1006,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.on_stop_audio_playback(move || {
         audio_player_stop.borrow().stop();
         if let Some(ui) = app_weak_stop_play.upgrade() {
+            ui.set_playing_entry_id("".into());
             ui.set_playing_audio_path("".into());
             ui.set_toast_message("已停止播放音频".into());
         }
@@ -1132,8 +1113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|p| (p.name.clone(), p.currency.clone()))
                         .unwrap_or_else(|| ("已归档项目".to_string(), "CNY".to_string()));
                     let notes = db_detail.list_quick_notes(&e.project_id).unwrap_or_default();
-                    let audio_path_str = extract_wav_path(e.summary.as_deref(), &notes).unwrap_or_default();
-                    let has_audio = !audio_path_str.is_empty();
+                    let audio_path_str = e.audio_path.clone().unwrap_or_else(|| {
+                        extract_wav_path(e.summary.as_deref()).unwrap_or_default()
+                    });
+                    let has_audio = !audio_path_str.is_empty() && std::path::Path::new(&audio_path_str).exists();
 
                     let transcript = if has_audio {
                         let txt_path = std::path::PathBuf::from(&audio_path_str).with_extension("txt");

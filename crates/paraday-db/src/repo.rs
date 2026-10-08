@@ -34,6 +34,7 @@ impl Database {
 
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(CREATE_TABLES_SQL)?;
+        let _ = self.conn.execute("ALTER TABLE time_entries ADD COLUMN audio_path TEXT", []);
         Ok(())
     }
 
@@ -175,8 +176,8 @@ impl Database {
             r#"INSERT OR REPLACE INTO time_entries (
                 id, project_id, start_time, end_time, raw_duration_secs,
                 billable_hours, billable_days, rate_at_moment, total_amount,
-                summary, is_invoiced, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
+                summary, audio_path, is_invoiced, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"#,
             params![
                 entry.id.to_string(),
                 entry.project_id.to_string(),
@@ -188,6 +189,7 @@ impl Database {
                 entry.rate_at_moment,
                 entry.total_amount,
                 entry.summary,
+                entry.audio_path,
                 if entry.is_invoiced { 1 } else { 0 },
                 entry.created_at.to_rfc3339(),
             ],
@@ -199,7 +201,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, project_id, start_time, end_time, raw_duration_secs,
                       billable_hours, billable_days, rate_at_moment, total_amount,
-                      summary, is_invoiced, created_at
+                      summary, audio_path, is_invoiced, created_at
                FROM time_entries WHERE id = ?1"#,
         )?;
 
@@ -210,8 +212,8 @@ impl Database {
             let start_str: String = row.get(2)?;
             let end_str: String = row.get(3)?;
             let raw_secs: i64 = row.get(4)?;
-            let is_invoiced_int: i32 = row.get(10)?;
-            let created_at_str: String = row.get(11)?;
+            let is_invoiced_int: i32 = row.get(11)?;
+            let created_at_str: String = row.get(12)?;
 
             Ok(Some(TimeEntry {
                 id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -228,6 +230,7 @@ impl Database {
                 rate_at_moment: row.get(7)?,
                 total_amount: row.get(8)?,
                 summary: row.get(9)?,
+                audio_path: row.get(10)?,
                 is_invoiced: is_invoiced_int == 1,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -242,7 +245,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, project_id, start_time, end_time, raw_duration_secs,
                       billable_hours, billable_days, rate_at_moment, total_amount,
-                      summary, is_invoiced, created_at
+                      summary, audio_path, is_invoiced, created_at
                FROM time_entries WHERE project_id = ?1 ORDER BY start_time DESC"#,
         )?;
 
@@ -252,8 +255,8 @@ impl Database {
             let start_str: String = row.get(2)?;
             let end_str: String = row.get(3)?;
             let raw_secs: i64 = row.get(4)?;
-            let is_invoiced_int: i32 = row.get(10)?;
-            let created_at_str: String = row.get(11)?;
+            let is_invoiced_int: i32 = row.get(11)?;
+            let created_at_str: String = row.get(12)?;
 
             Ok(TimeEntry {
                 id: Uuid::parse_str(&id_str).unwrap_or_default(),
@@ -270,6 +273,7 @@ impl Database {
                 rate_at_moment: row.get(7)?,
                 total_amount: row.get(8)?,
                 summary: row.get(9)?,
+                audio_path: row.get(10)?,
                 is_invoiced: is_invoiced_int == 1,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
