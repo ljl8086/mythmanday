@@ -62,8 +62,8 @@ export struct AfkItem {
 
 component PrimaryButton inherits Rectangle {
     in property <string> text;
-    in property <color> bg-color: #6366f1;
-    in property <color> hover-color: #4f46e5;
+    in property <color> bg-color: #2563eb;
+    in property <color> hover-color: #1d4ed8;
     in property <color> text-color: #ffffff;
     in property <length> custom-height: 34px;
     callback clicked <=> touch.clicked;
@@ -94,16 +94,16 @@ component PrimaryButton inherits Rectangle {
 
 component OutlineButton inherits Rectangle {
     in property <string> text;
-    in property <color> border-col: #30363d;
-    in property <color> text-color: #c9d1d9;
+    in property <color> border-col: #e2e8f0;
+    in property <color> text-color: #475569;
     in property <length> custom-height: 30px;
     callback clicked <=> touch.clicked;
 
     height: custom-height;
     border-radius: 8px;
     border-width: 1px;
-    border-color: touch.has-hover ? #8b949e : border-col;
-    background: touch.pressed ? #21262d : (touch.has-hover ? #21262d : transparent);
+    border-color: touch.has-hover ? #cbd5e1 : border-col;
+    background: touch.pressed ? #e2e8f0 : (touch.has-hover ? #f1f5f9 : #ffffff);
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -117,7 +117,7 @@ component OutlineButton inherits Rectangle {
             text: root.text;
             font-size: 12px;
             font-weight: 600;
-            color: touch.has-hover ? #ffffff : root.text-color;
+            color: touch.has-hover ? #0f172a : root.text-color;
             vertical-alignment: center;
             overflow: elide;
             wrap: no-wrap;
@@ -162,9 +162,9 @@ component ChipButton inherits Rectangle {
 
     height: 26px;
     border-radius: 6px;
-    background: touch.pressed ? #30363d : (touch.has-hover ? #21262d : #161b22);
+    background: touch.pressed ? #e2e8f0 : (touch.has-hover ? #f1f5f9 : #ffffff);
     border-width: 1px;
-    border-color: touch.has-hover ? #58a6ff : #30363d;
+    border-color: touch.has-hover ? #2563eb : #e2e8f0;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -178,7 +178,7 @@ component ChipButton inherits Rectangle {
             text: root.text;
             font-size: 11px;
             font-weight: 500;
-            color: touch.has-hover ? #ffffff : #c9d1d9;
+            color: touch.has-hover ? #0f172a : #475569;
             vertical-alignment: center;
             overflow: elide;
             wrap: no-wrap;
@@ -195,7 +195,9 @@ component SidebarTabItem inherits Rectangle {
 
     height: 38px;
     border-radius: 8px;
-    background: active ? #21262d : (touch.has-hover ? #161b22 : transparent);
+    background: active ? #ffffff : (touch.has-hover ? #f1f5f9 : transparent);
+    border-width: active ? 1px : 0px;
+    border-color: active ? #e2e8f0 : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -219,7 +221,7 @@ component SidebarTabItem inherits Rectangle {
                 text: root.title;
                 font-size: 13px;
                 font-weight: root.active ? 700 : 500;
-                color: root.active ? #ffffff : (touch.has-hover ? #f0f6fc : #8b949e);
+                color: root.active ? #0f172a : (touch.has-hover ? #1e293b : #64748b);
                 vertical-alignment: center;
                 overflow: elide;
                 wrap: no-wrap;
@@ -230,7 +232,7 @@ component SidebarTabItem inherits Rectangle {
             width: 6px;
             height: 6px;
             border-radius: 3px;
-            background: #3fb950;
+            background: #16a34a;
             y: (parent.height - self.height) / 2;
         }
     }
@@ -240,9 +242,9 @@ component DarkInput inherits Rectangle {
     in-out property <string> text;
     in property <string> placeholder: "";
     in property <length> custom-height: 36px;
-    in property <color> input-bg: #0d1117;
-    in property <color> border-col: #30363d;
-    in property <color> focus-border-col: #6366f1;
+    in property <color> input-bg: #f8fafc;
+    in property <color> border-col: #e2e8f0;
+    in property <color> focus-border-col: #2563eb;
     callback accepted();
     callback edited(string);
 
@@ -258,7 +260,7 @@ component DarkInput inherits Rectangle {
         width: parent.width - 24px;
         height: parent.height;
         text <=> root.text;
-        color: #f0f6fc;
+        color: #0f172a;
         font-size: 13px;
         vertical-alignment: center;
         single-line: true;
@@ -271,7 +273,7 @@ component DarkInput inherits Rectangle {
         width: parent.width - 24px;
         height: parent.height;
         text: root.placeholder;
-        color: #6e7681;
+        color: #94a3b8;
         font-size: 13px;
         vertical-alignment: center;
         overflow: elide;
@@ -291,9 +293,9 @@ component ProjectSidebarCard inherits Rectangle {
 
     height: 64px;
     border-radius: 8px;
-    background: is-selected ? #1c2128 : (touch.has-hover ? #161b22 : #0d1117);
+    background: is-selected ? #ffffff : (touch.has-hover ? #f8fafc : #f8fafc);
     border-width: 1px;
-    border-color: is-selected ? #58a6ff : (is-running ? #238636 : (touch.has-hover ? #30363d : #21262d));
+    border-color: is-selected ? #2563eb : (is-running ? #16a34a : (touch.has-hover ? #cbd5e1 : #e2e8f0));
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -316,14 +318,14 @@ component ProjectSidebarCard inherits Rectangle {
                     width: 7px;
                     height: 7px;
                     border-radius: 3.5px;
-                    background: is-running ? #3fb950 : (is-paused ? #d29922 : #6e7681);
+                    background: is-running ? #16a34a : (is-paused ? #d97706 : #94a3b8);
                     y: (parent.height - self.height) / 2;
                 }
                 Text {
                     text: root.name;
                     font-size: 13px;
                     font-weight: root.is-selected ? 800 : 600;
-                    color: root.is-selected ? #ffffff : #f0f6fc;
+                    color: root.is-selected ? #2563eb : #0f172a;
                     overflow: elide;
                     wrap: no-wrap;
                 }
@@ -331,10 +333,12 @@ component ProjectSidebarCard inherits Rectangle {
             if root.is-running : Rectangle {
                 height: 16px;
                 border-radius: 3px;
-                background: #0f2417;
+                background: #f0fdf4;
+                border-width: 1px;
+                border-color: #bbf7d0;
                 HorizontalLayout {
                     padding-left: 4px; padding-right: 4px;
-                    Text { text: "计时中"; font-size: 9px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                    Text { text: "计时中"; font-size: 9px; font-weight: 700; color: #16a34a; vertical-alignment: center; }
                 }
             }
         }
@@ -346,22 +350,22 @@ component ProjectSidebarCard inherits Rectangle {
                 Text {
                     text: root.client;
                     font-size: 11px;
-                    color: #8b949e;
+                    color: #64748b;
                     overflow: elide;
                     wrap: no-wrap;
                 }
-                Text { text: "·"; font-size: 11px; color: #484f58; }
+                Text { text: "·"; font-size: 11px; color: #cbd5e1; }
                 Text {
                     text: root.entries-count + "条明细";
                     font-size: 11px;
-                    color: #8b949e;
+                    color: #64748b;
                 }
             }
             Text {
                 text: root.today-duration != "" && root.today-duration != "00:00:00" ? root.today-duration : "";
                 font-size: 11px;
                 font-weight: 600;
-                color: #58a6ff;
+                color: #2563eb;
             }
         }
     }
@@ -374,7 +378,7 @@ export component MainWindow inherits Window {
     min-height: 640px;
     preferred-width: 1180px;
     preferred-height: 780px;
-    background: #090d16;
+    background: #f8fafc;
 
     // 0: 项目工作区, 1: 全局工时统计, 2: 系统与AI设置
     in-out property <int> active-tab: 0;
@@ -483,7 +487,7 @@ export component MainWindow inherits Window {
         // ----------------- 左侧导航边栏 (230px 宽) -----------------
         Rectangle {
             width: 230px;
-            background: #090d16;
+            background: #f8fafc;
 
             VerticalLayout {
                 padding: 16px;
@@ -502,7 +506,7 @@ export component MainWindow inherits Window {
                             width: 32px;
                             height: 32px;
                             border-radius: 8px;
-                            background: #6366f1;
+                            background: #2563eb;
                             Text {
                                 text: "P";
                                 font-size: 16px;
@@ -519,12 +523,12 @@ export component MainWindow inherits Window {
                                 text: "ParaDay";
                                 font-size: 16px;
                                 font-weight: 800;
-                                color: #f0f6fc;
+                                color: #0f172a;
                             }
                             Text {
                                 text: "平行人天 · 研发计费";
                                 font-size: 11px;
-                                color: #8b949e;
+                                color: #64748b;
                             }
                         }
                     }
@@ -532,8 +536,8 @@ export component MainWindow inherits Window {
                     // 核心主动作：发起会议沟通 (全宽单行，永远不折行)
                     PrimaryButton {
                         text: "🎙️ 发起会议沟通";
-                        bg-color: #6366f1;
-                        hover-color: #4f46e5;
+                        bg-color: #2563eb;
+                        hover-color: #1d4ed8;
                         custom-height: 38px;
                         clicked => {
                             root.open-meeting-modal();
@@ -550,7 +554,7 @@ export component MainWindow inherits Window {
                                 text: "工作台";
                                 font-size: 11px;
                                 font-weight: 700;
-                                color: #6e7681;
+                                color: #94a3b8;
                             }
                         }
 
@@ -580,10 +584,10 @@ export component MainWindow inherits Window {
 
                 // 边栏底部：今日累计研发工时
                 Rectangle {
-                    background: #161b22;
+                    background: #ffffff;
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #21262d;
+                    border-color: #e2e8f0;
 
                     VerticalLayout {
                         padding: 12px;
@@ -592,14 +596,14 @@ export component MainWindow inherits Window {
                         Text {
                             text: "今日累计投入";
                             font-size: 11px;
-                            color: #8b949e;
+                            color: #64748b;
                         }
 
                         Text {
                             text: root.total-days + " 人天";
                             font-size: 18px;
                             font-weight: 900;
-                            color: #3fb950;
+                            color: #16a34a;
                         }
 
                         HorizontalLayout {
@@ -607,13 +611,13 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "核算价值:";
                                 font-size: 11px;
-                                color: #8b949e;
+                                color: #64748b;
                             }
                             Text {
                                 text: root.total-amount;
                                 font-size: 11px;
                                 font-weight: 700;
-                                color: #f0f6fc;
+                                color: #0f172a;
                             }
                         }
                     }
@@ -624,12 +628,12 @@ export component MainWindow inherits Window {
         // 垂直分割线
         Rectangle {
             width: 1px;
-            background: #21262d;
+            background: #e2e8f0;
         }
 
         // ----------------- 右侧主工作区画布 -----------------
         Rectangle {
-            background: #0d1117;
+            background: #f8fafc;
 
             VerticalLayout {
                 padding: 20px;
@@ -646,12 +650,12 @@ export component MainWindow inherits Window {
                             text: root.active-tab == 0 ? "项目工作区" : (root.active-tab == 1 ? "全局工时统计与日报" : "系统配置与AI引擎");
                             font-size: 18px;
                             font-weight: 800;
-                            color: #f0f6fc;
+                            color: #0f172a;
                         }
                         Text {
                             text: root.active-tab == 0 ? "以项目为中心 · 实时秒级时钟 · 工时明细与会议录音一体化管理" : (root.active-tab == 1 ? "全项目工时透视 · AI一键提炼工作日报 · Markdown格式导出" : "支持本地免Key agy/codex 与云端大模型 · AFK 防摸鱼守护");
                             font-size: 11px;
-                            color: #8b949e;
+                            color: #64748b;
                         }
                     }
 
@@ -664,9 +668,9 @@ export component MainWindow inherits Window {
                         Rectangle {
                             height: 28px;
                             border-radius: 14px;
-                            background: root.running-count > 0 ? #0f2417 : #161b22;
+                            background: root.running-count > 0 ? #f0fdf4 : #ffffff;
                             border-width: 1px;
-                            border-color: root.running-count > 0 ? #238636 : #30363d;
+                            border-color: root.running-count > 0 ? #bbf7d0 : #e2e8f0;
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
@@ -676,13 +680,13 @@ export component MainWindow inherits Window {
                                     width: 6px;
                                     height: 6px;
                                     border-radius: 3px;
-                                    background: root.running-count > 0 ? #3fb950 : #6e7681;
+                                    background: root.running-count > 0 ? #16a34a : #94a3b8;
                                 }
                                 Text {
                                     text: root.running-count > 0 ? (root.running-count + " 个通道计时中") : "无活动通道";
                                     font-size: 11px;
                                     font-weight: 600;
-                                    color: root.running-count > 0 ? #3fb950 : #8b949e;
+                                    color: root.running-count > 0 ? #16a34a : #64748b;
                                     vertical-alignment: center;
                                 }
                             }
@@ -711,10 +715,10 @@ export component MainWindow inherits Window {
                 // 录音状态微幅横幅 (录音时显示)
                 if root.is-recording-audio : Rectangle {
                     height: 40px;
-                    background: #1e1338;
+                    background: #eff6ff;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #8b5cf6;
+                    border-color: #bfdbfe;
 
                     HorizontalLayout {
                         padding-left: 14px;
@@ -728,13 +732,13 @@ export component MainWindow inherits Window {
                                 width: 8px;
                                 height: 8px;
                                 border-radius: 4px;
-                                background: #a855f7;
+                                background: #2563eb;
                             }
                             Text {
                                 text: "🎙️ 会议录音中: " + root.active-recording-project-name + " · " + root.audio-timer-text;
                                 font-size: 12px;
                                 font-weight: 700;
-                                color: #ede9fe;
+                                color: #1e40af;
                                 vertical-alignment: center;
                             }
                         }
@@ -765,10 +769,10 @@ export component MainWindow inherits Window {
                     // ------------------ 左侧：项目列表面板 (固定 240px 宽) ------------------
                     Rectangle {
                         width: 240px;
-                        background: #11161f;
+                        background: #ffffff;
                         border-radius: 12px;
                         border-width: 1px;
-                        border-color: #21262d;
+                        border-color: #e2e8f0;
 
                         VerticalLayout {
                             padding: 12px;
@@ -776,8 +780,8 @@ export component MainWindow inherits Window {
 
                             HorizontalLayout {
                                 alignment: space-between;
-                                Text { text: "📁 研发与会议项目"; font-size: 13px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
-                                Text { text: root.projects.length + " 个项目"; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+                                Text { text: "📁 研发与会议项目"; font-size: 13px; font-weight: 800; color: #0f172a; vertical-alignment: center; }
+                                Text { text: root.projects.length + " 个项目"; font-size: 11px; color: #64748b; vertical-alignment: center; }
                             }
 
                             // 项目列表滑动区域
@@ -789,7 +793,7 @@ export component MainWindow inherits Window {
 
                                     if root.projects.length == 0 : Rectangle {
                                         height: 80px;
-                                        Text { text: "暂无项目，点击右上角【+ 新建项目】"; font-size: 11px; color: #6e7681; horizontal-alignment: center; vertical-alignment: center; }
+                                        Text { text: "暂无项目，点击右上角【+ 新建项目】"; font-size: 11px; color: #94a3b8; horizontal-alignment: center; vertical-alignment: center; }
                                     }
 
                                     for p in root.projects : ProjectSidebarCard {
@@ -821,10 +825,10 @@ export component MainWindow inherits Window {
                             // 1. 顶部操作栏 (时钟与计时控制)
                             for item[proj-idx] in root.projects : VerticalLayout {
                                 if root.selected-project-id == item.id : Rectangle {
-                                    background: #161b22;
+                                    background: #ffffff;
                                     border-radius: 12px;
                                     border-width: 1px;
-                                    border-color: item.is-running ? #238636 : #30363d;
+                                    border-color: item.is-running ? #16a34a : #e2e8f0;
 
                                     VerticalLayout {
                                         padding: 14px;
@@ -838,33 +842,35 @@ export component MainWindow inherits Window {
                                                 HorizontalLayout {
                                                     spacing: 8px;
                                                     alignment: start;
-                                                    Text { text: item.name; font-size: 16px; font-weight: 800; color: #f0f6fc; }
+                                                    Text { text: item.name; font-size: 16px; font-weight: 800; color: #0f172a; }
                                                     Rectangle {
                                                         height: 20px;
                                                         border-radius: 4px;
-                                                        background: #21262d;
+                                                        background: #f1f5f9;
+                                                        border-width: 1px;
+                                                        border-color: #e2e8f0;
                                                         HorizontalLayout {
                                                             padding-left: 6px; padding-right: 6px;
-                                                            Text { text: item.client; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+                                                            Text { text: item.client; font-size: 11px; color: #64748b; vertical-alignment: center; }
                                                         }
                                                     }
                                                     if item.is-running : Rectangle {
                                                         height: 20px;
                                                         border-radius: 4px;
-                                                        background: #0f2417;
+                                                        background: #f0fdf4;
                                                         border-width: 1px;
-                                                        border-color: #238636;
+                                                        border-color: #bbf7d0;
                                                         HorizontalLayout {
                                                             padding-left: 6px; padding-right: 6px;
-                                                            Text { text: "● 正在计时"; font-size: 10px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                                                            Text { text: "● 正在计时"; font-size: 10px; font-weight: 700; color: #16a34a; vertical-alignment: center; }
                                                         }
                                                     }
                                                 }
                                                 HorizontalLayout {
                                                     spacing: 10px;
-                                                    Text { text: "核算标准: " + item.rate-info; font-size: 11px; color: #8b949e; }
-                                                    Text { text: "•"; font-size: 11px; color: #484f58; }
-                                                    Text { text: "今日累计投入: " + item.today-duration + " (" + item.days-text + ")"; font-size: 11px; font-weight: 700; color: #58a6ff; }
+                                                    Text { text: "核算标准: " + item.rate-info; font-size: 11px; color: #64748b; }
+                                                    Text { text: "•"; font-size: 11px; color: #cbd5e1; }
+                                                    Text { text: "今日累计投入: " + item.today-duration + " (" + item.days-text + ")"; font-size: 11px; font-weight: 700; color: #2563eb; }
                                                 }
                                             }
 
@@ -878,7 +884,7 @@ export component MainWindow inherits Window {
                                                     font-size: 24px;
                                                     font-weight: 900;
                                                     font-family: "monospace";
-                                                    color: item.is-running ? #3fb950 : #8b949e;
+                                                    color: item.is-running ? #16a34a : #64748b;
                                                     vertical-alignment: center;
                                                 }
 
@@ -949,9 +955,9 @@ export component MainWindow inherits Window {
                                             PrimaryButton {
                                                 width: 88px;
                                                 text: "存入备忘";
-                                                bg-color: #21262d;
-                                                hover-color: #30363d;
-                                                text-color: #c9d1d9;
+                                                bg-color: #f1f5f9;
+                                                hover-color: #e2e8f0;
+                                                text-color: #334155;
                                                 custom-height: 32px;
                                                 clicked => {
                                                     if (proj_note_input.text != "") {
@@ -974,10 +980,10 @@ export component MainWindow inherits Window {
 
                                     // 【每日卡片流】：一天一个独立卡片呈现，支持多天流水浏览
                                     for day in root.daily-groups : Rectangle {
-                                        background: #161b22;
+                                        background: #ffffff;
                                         border-radius: 12px;
                                         border-width: 1px;
-                                        border-color: #21262d;
+                                        border-color: #e2e8f0;
 
                                         VerticalLayout {
                                             padding: 14px;
@@ -989,40 +995,42 @@ export component MainWindow inherits Window {
                                                 HorizontalLayout {
                                                     spacing: 8px;
                                                     alignment: center;
-                                                    Rectangle { width: 4px; height: 14px; border-radius: 2px; background: #58a6ff; }
-                                                    Text { text: "📅 " + day.display-date; font-size: 13px; font-weight: 800; color: #f0f6fc; }
+                                                    Rectangle { width: 4px; height: 14px; border-radius: 2px; background: #2563eb; }
+                                                    Text { text: "📅 " + day.display-date; font-size: 13px; font-weight: 800; color: #0f172a; }
                                                     Rectangle {
                                                         height: 18px;
                                                         border-radius: 4px;
-                                                        background: #1f6feb26;
+                                                        background: #eff6ff;
+                                                        border-width: 1px;
+                                                        border-color: #dbeafe;
                                                         HorizontalLayout {
                                                             padding-left: 6px;
                                                             padding-right: 6px;
-                                                            Text { text: day.entries-count + " 笔工时记录"; font-size: 10px; font-weight: 700; color: #58a6ff; vertical-alignment: center; }
+                                                            Text { text: day.entries-count + " 笔工时记录"; font-size: 10px; font-weight: 700; color: #2563eb; vertical-alignment: center; }
                                                         }
                                                     }
                                                 }
                                                 HorizontalLayout {
                                                     spacing: 12px;
                                                     alignment: center;
-                                                    Text { text: "投入: " + day.total-duration; font-size: 11px; color: #8b949e; vertical-alignment: center; }
-                                                    Text { text: "折合: " + day.total-days; font-size: 11px; font-weight: 700; color: #d29922; vertical-alignment: center; }
-                                                    Text { text: "价值: " + day.total-amount; font-size: 11px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                                                    Text { text: "投入: " + day.total-duration; font-size: 11px; color: #64748b; vertical-alignment: center; }
+                                                    Text { text: "折合: " + day.total-days; font-size: 11px; font-weight: 700; color: #d97706; vertical-alignment: center; }
+                                                    Text { text: "价值: " + day.total-amount; font-size: 11px; font-weight: 700; color: #16a34a; vertical-alignment: center; }
                                                 }
                                             }
 
                                             // 分割线
-                                            Rectangle { height: 1px; background: #21262d; }
+                                            Rectangle { height: 1px; background: #f1f5f9; }
 
                                             // 当天的明细条目列表
                                             VerticalLayout {
                                                 spacing: 8px;
 
                                                 for e in day.entries : Rectangle {
-                                                    background: #0d1117;
+                                                    background: #f8fafc;
                                                     border-radius: 8px;
                                                     border-width: 1px;
-                                                    border-color: #21262d;
+                                                    border-color: #e2e8f0;
 
                                                     VerticalLayout {
                                                         padding: 10px;
@@ -1033,10 +1041,10 @@ export component MainWindow inherits Window {
                                                             alignment: space-between;
                                                             HorizontalLayout {
                                                                 spacing: 12px;
-                                                                Text { text: "🕒 " + e.time-range; font-size: 12px; font-weight: 700; color: #f0f6fc; vertical-alignment: center; }
-                                                                Text { text: "投入: " + e.duration-text; font-size: 11px; color: #8b949e; vertical-alignment: center; }
-                                                                Text { text: "折算: " + e.days-text; font-size: 11px; font-weight: 700; color: #d29922; vertical-alignment: center; }
-                                                                Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #3fb950; vertical-alignment: center; }
+                                                                Text { text: "🕒 " + e.time-range; font-size: 12px; font-weight: 700; color: #0f172a; vertical-alignment: center; }
+                                                                Text { text: "投入: " + e.duration-text; font-size: 11px; color: #64748b; vertical-alignment: center; }
+                                                                Text { text: "折算: " + e.days-text; font-size: 11px; font-weight: 700; color: #d97706; vertical-alignment: center; }
+                                                                Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #16a34a; vertical-alignment: center; }
                                                             }
                                                         }
 
@@ -1044,7 +1052,7 @@ export component MainWindow inherits Window {
                                                         Text {
                                                             text: e.summary-text;
                                                             font-size: 12px;
-                                                            color: #c9d1d9;
+                                                            color: #334155;
                                                             wrap: word-wrap;
                                                         }
 
@@ -1096,10 +1104,10 @@ export component MainWindow inherits Window {
 
                                     // 【项目即时备忘随手记卡片】
                                     Rectangle {
-                                        background: #161b22;
+                                        background: #ffffff;
                                         border-radius: 12px;
                                         border-width: 1px;
-                                        border-color: #21262d;
+                                        border-color: #e2e8f0;
 
                                         VerticalLayout {
                                             padding: 12px;
@@ -1108,16 +1116,16 @@ export component MainWindow inherits Window {
                                             HorizontalLayout {
                                                 spacing: 6px;
                                                 alignment: center;
-                                                Text { text: "📝 项目即时备忘流水"; font-size: 12px; font-weight: 700; color: #8b949e; }
+                                                Text { text: "📝 项目即时备忘流水"; font-size: 12px; font-weight: 700; color: #64748b; }
                                             }
 
                                             for n in root.note-items : VerticalLayout {
                                                 if n.project-id == root.selected-project-id : Rectangle {
                                                     height: 28px;
-                                                    background: #0d1117;
+                                                    background: #f8fafc;
                                                     border-radius: 6px;
                                                     border-width: 1px;
-                                                    border-color: #21262d;
+                                                    border-color: #e2e8f0;
                                                     HorizontalLayout {
                                                         padding-left: 10px;
                                                         padding-right: 8px;
@@ -1125,13 +1133,13 @@ export component MainWindow inherits Window {
                                                         HorizontalLayout {
                                                             spacing: 8px;
                                                             alignment: center;
-                                                            Text { text: "📝 [" + n.time-text + "]"; font-size: 11px; color: #58a6ff; vertical-alignment: center; }
-                                                            Text { text: n.content; font-size: 11px; color: #f0f6fc; vertical-alignment: center; }
+                                                            Text { text: "📝 [" + n.time-text + "]"; font-size: 11px; color: #2563eb; vertical-alignment: center; }
+                                                            Text { text: n.content; font-size: 11px; color: #1e293b; vertical-alignment: center; }
                                                         }
                                                         TouchArea {
                                                             mouse-cursor: pointer;
                                                             clicked => { root.delete-quick-note(n.id); }
-                                                            Text { text: "✕"; font-size: 11px; color: #6e7681; vertical-alignment: center; }
+                                                            Text { text: "✕"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
                                                         }
                                                     }
                                                 }
@@ -1149,10 +1157,10 @@ export component MainWindow inherits Window {
                     spacing: 12px;
 
                     Rectangle {
-                        background: #161b22;
+                        background: #ffffff;
                         border-radius: 12px;
                         border-width: 1px;
-                        border-color: #21262d;
+                        border-color: #e2e8f0;
 
                         VerticalLayout {
                             padding: 16px;
@@ -1162,8 +1170,8 @@ export component MainWindow inherits Window {
                                 alignment: space-between;
                                 VerticalLayout {
                                     spacing: 2px;
-                                    Text { text: "今日全项目研发工时汇总"; font-size: 15px; font-weight: 700; color: #f0f6fc; }
-                                    Text { text: "跨项目工时聚合 · 阶梯人天核算 · 快速生成并导出技术日报"; font-size: 11px; color: #8b949e; }
+                                    Text { text: "今日全项目研发工时汇总"; font-size: 15px; font-weight: 700; color: #0f172a; }
+                                    Text { text: "跨项目工时聚合 · 阶梯人天核算 · 快速生成并导出技术日报"; font-size: 11px; color: #64748b; }
                                 }
                                 HorizontalLayout {
                                     spacing: 8px;
@@ -1186,39 +1194,39 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 12px;
                                 Rectangle {
-                                    background: #0d1117;
+                                    background: #f8fafc;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: #21262d;
+                                    border-color: #e2e8f0;
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 4px;
-                                        Text { text: "今日总核算工时"; font-size: 11px; color: #8b949e; }
-                                        Text { text: root.total-days + " 人天"; font-size: 18px; font-weight: 800; color: #3fb950; }
+                                        Text { text: "今日总核算工时"; font-size: 11px; color: #64748b; }
+                                        Text { text: root.total-days + " 人天"; font-size: 18px; font-weight: 800; color: #16a34a; }
                                     }
                                 }
                                 Rectangle {
-                                    background: #0d1117;
+                                    background: #f8fafc;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: #21262d;
+                                    border-color: #e2e8f0;
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 4px;
-                                        Text { text: "今日核算价值"; font-size: 11px; color: #8b949e; }
-                                        Text { text: root.total-amount; font-size: 18px; font-weight: 800; color: #f0f6fc; }
+                                        Text { text: "今日核算价值"; font-size: 11px; color: #64748b; }
+                                        Text { text: root.total-amount; font-size: 18px; font-weight: 800; color: #0f172a; }
                                     }
                                 }
                                 Rectangle {
-                                    background: #0d1117;
+                                    background: #f8fafc;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: #21262d;
+                                    border-color: #e2e8f0;
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 4px;
-                                        Text { text: "当前活跃通道"; font-size: 11px; color: #8b949e; }
-                                        Text { text: root.running-count > 0 ? (root.running-count + " 个计时中") : "无活动通道"; font-size: 18px; font-weight: 800; color: root.running-count > 0 ? #3fb950 : #6e7681; }
+                                        Text { text: "当前活跃通道"; font-size: 11px; color: #64748b; }
+                                        Text { text: root.running-count > 0 ? (root.running-count + " 个计时中") : "无活动通道"; font-size: 18px; font-weight: 800; color: root.running-count > 0 ? #16a34a : #94a3b8; }
                                     }
                                 }
                             }
@@ -1231,13 +1239,13 @@ export component MainWindow inherits Window {
                                     if root.recent-entries.length == 0 : Text {
                                         text: "今日尚无已归档工时记录。在项目工作区点击【⏹ 结束工时】后自动记录入库。";
                                         font-size: 12px;
-                                        color: #6e7681;
+                                        color: #94a3b8;
                                     }
                                     for e in root.recent-entries : Rectangle {
-                                        background: #0d1117;
+                                        background: #f8fafc;
                                         border-radius: 8px;
                                         border-width: 1px;
-                                        border-color: #21262d;
+                                        border-color: #e2e8f0;
 
                                         VerticalLayout {
                                             padding: 12px;
@@ -1248,16 +1256,16 @@ export component MainWindow inherits Window {
                                                     spacing: 8px;
                                                     alignment: center;
                                                     Text { text: "📁 " + e.project-name; font-size: 13px; font-weight: 700; color: #58a6ff; }
-                                                    Text { text: "🕒 " + e.time-range; font-size: 11px; color: #8b949e; }
+                                                    Text { text: "🕒 " + e.time-range; font-size: 11px; color: #64748b; }
                                                 }
                                                 HorizontalLayout {
                                                     spacing: 12px;
-                                                    Text { text: "工时: " + e.duration-text; font-size: 11px; color: #8b949e; }
+                                                    Text { text: "工时: " + e.duration-text; font-size: 11px; color: #64748b; }
                                                     Text { text: "折算: " + e.days-text; font-size: 11px; font-weight: 700; color: #d29922; }
                                                     Text { text: "价值: " + e.amount-text; font-size: 11px; font-weight: 700; color: #3fb950; }
                                                 }
                                             }
-                                            Text { text: e.summary-text; font-size: 12px; color: #c9d1d9; wrap: word-wrap; }
+                                            Text { text: e.summary-text; font-size: 12px; color: #334155; wrap: word-wrap; }
 
                                             HorizontalLayout {
                                                 spacing: 8px;
@@ -1312,10 +1320,10 @@ export component MainWindow inherits Window {
                     spacing: 12px;
 
                     Rectangle {
-                        background: #161b22;
+                        background: #ffffff;
                         border-radius: 12px;
                         border-width: 1px;
-                        border-color: #21262d;
+                        border-color: #e2e8f0;
 
                         ScrollView {
                             height: 520px;
@@ -1344,10 +1352,10 @@ export component MainWindow inherits Window {
 
                                 if root.setting-ai-provider == "agy" : Rectangle {
                                     height: 52px;
-                                    background: #0f2417;
+                                    background: #f0fdf4;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: #238636;
+                                    border-color: #bbf7d0;
                                     HorizontalLayout {
                                         padding-left: 14px;
                                         padding-right: 14px;
@@ -1357,7 +1365,7 @@ export component MainWindow inherits Window {
                                         Text {
                                             text: "已启用 agy CLI。ParaDay 将直接调用本地已安装认证的 `agy` 命令行，无需填写或购买 API Key！";
                                             font-size: 12px;
-                                            color: #3fb950;
+                                            color: #16a34a;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -1365,10 +1373,10 @@ export component MainWindow inherits Window {
 
                                 if root.setting-ai-provider == "codex" : Rectangle {
                                     height: 52px;
-                                    background: #0d1e38;
+                                    background: #eff6ff;
                                     border-radius: 8px;
                                     border-width: 1px;
-                                    border-color: #1f6feb;
+                                    border-color: #bfdbfe;
                                     HorizontalLayout {
                                         padding-left: 14px;
                                         padding-right: 14px;
@@ -1378,7 +1386,7 @@ export component MainWindow inherits Window {
                                         Text {
                                             text: "已启用 codex CLI。ParaDay 将直接调用本地 `codex` 命令行，开箱即用，无需配置 API Key！";
                                             font-size: 12px;
-                                            color: #58a6ff;
+                                            color: #2563eb;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -1386,13 +1394,13 @@ export component MainWindow inherits Window {
 
                                 if root.setting-ai-provider == "api" : VerticalLayout {
                                     spacing: 8px;
-                                    Text { text: "API Base URL (兼容 OpenAI / DeepSeek / Ollama)"; font-size: 12px; color: #8b949e; }
+                                    Text { text: "API Base URL (兼容 OpenAI / DeepSeek / Ollama)"; font-size: 12px; color: #64748b; }
                                     DarkInput { text <=> root.setting-ai-base; }
 
-                                    Text { text: "API Key (密钥)"; font-size: 12px; color: #8b949e; }
+                                    Text { text: "API Key (密钥)"; font-size: 12px; color: #64748b; }
                                     DarkInput { text <=> root.setting-ai-key; placeholder: "sk-xxxxxxxxxxxx (可留空或填入本地 Ollama)"; }
 
-                                    Text { text: "模型名称 (Model)"; font-size: 12px; color: #8b949e; }
+                                    Text { text: "模型名称 (Model)"; font-size: 12px; color: #64748b; }
                                     DarkInput { text <=> root.setting-ai-model; placeholder: "deepseek-chat"; }
                                 }
 
@@ -1407,7 +1415,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                Rectangle { height: 1px; background: #21262d; }
+                                Rectangle { height: 1px; background: #f1f5f9; }
 
                                 Text { text: "⏱️ 工时基准与防摸鱼守护规则"; font-size: 14px; font-weight: 700; color: #58a6ff; }
 
@@ -1415,12 +1423,12 @@ export component MainWindow inherits Window {
                                     spacing: 14px;
                                     VerticalLayout {
                                         spacing: 4px;
-                                        Text { text: "每日基准工时 (小时/人天)"; font-size: 12px; color: #8b949e; }
+                                        Text { text: "每日基准工时 (小时/人天)"; font-size: 12px; color: #64748b; }
                                         DarkInput { text <=> root.setting-hours-per-day; }
                                     }
                                     VerticalLayout {
                                         spacing: 4px;
-                                        Text { text: "AFK 空闲离开阈值 (分钟)"; font-size: 12px; color: #8b949e; }
+                                        Text { text: "AFK 空闲离开阈值 (分钟)"; font-size: 12px; color: #64748b; }
                                         DarkInput { text <=> root.setting-afk-minutes; }
                                     }
                                 }
@@ -1445,20 +1453,20 @@ export component MainWindow inherits Window {
         x: (parent.width - self.width) / 2;
         y: parent.height - 48px;
         height: 36px;
-        background: #0f2417;
+        background: #f0fdf4;
         border-radius: 18px;
         border-width: 1px;
-        border-color: #238636;
+        border-color: #86efac;
         HorizontalLayout {
             padding-left: 16px;
             padding-right: 12px;
             spacing: 10px;
             alignment: center;
-            Text { text: root.toast-message; font-size: 12px; font-weight: 600; color: #3fb950; vertical-alignment: center; }
+            Text { text: root.toast-message; font-size: 12px; font-weight: 600; color: #16a34a; vertical-alignment: center; }
             TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.toast-message = ""; }
-                Text { text: "✕"; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+                Text { text: "✕"; font-size: 11px; color: #64748b; vertical-alignment: center; }
             }
         }
     }
@@ -1469,7 +1477,7 @@ export component MainWindow inherits Window {
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: #000000ca;
+        background: #00000066;
 
         // 点击半透明遮罩背景即可快速关闭弹窗
         TouchArea {
@@ -1482,10 +1490,10 @@ export component MainWindow inherits Window {
             y: (parent.height - self.height) / 2;
             width: 530px;
             height: 450px;
-            background: #161b22;
+            background: #ffffff;
             border-radius: 14px;
             border-width: 1px;
-            border-color: #30363d;
+            border-color: #e2e8f0;
 
             // 拦截卡片内部点击，防止误触发背景关闭
             TouchArea {}
@@ -1516,8 +1524,8 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: center;
                             spacing: 2px;
-                            Text { text: "发起即时会议与讨论"; font-size: 15px; font-weight: 800; color: #f0f6fc; }
-                            Text { text: "独立计时通道 · 录音直写本地 · 自动提炼AI纪要"; font-size: 11px; color: #8b949e; }
+                            Text { text: "发起即时会议与讨论"; font-size: 15px; font-weight: 800; color: #0f172a; }
+                            Text { text: "独立计时通道 · 录音直写本地 · 自动提炼AI纪要"; font-size: 11px; color: #64748b; }
                         }
                     }
 
@@ -1530,12 +1538,12 @@ export component MainWindow inherits Window {
                             width: 28px;
                             height: 28px;
                             border-radius: 6px;
-                            background: parent.has-hover ? #30363d : #21262d;
+                            background: parent.has-hover ? #e2e8f0 : #f1f5f9;
                             Text {
                                 text: "✕";
                                 font-size: 12px;
                                 font-weight: 700;
-                                color: #8b949e;
+                                color: #64748b;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -1544,7 +1552,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 顶部分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // 2. 表单核心内容区
                 VerticalLayout {
@@ -1557,8 +1565,8 @@ export component MainWindow inherits Window {
                     // 关联客户项目
                     HorizontalLayout {
                         alignment: space-between;
-                        Text { text: "关联客户项目"; font-size: 12px; font-weight: 700; color: #c9d1d9; }
-                        Text { text: "临时会议单独立项，不计入既有项目"; font-size: 11px; color: #6e7681; }
+                        Text { text: "关联客户项目"; font-size: 12px; font-weight: 700; color: #334155; }
+                        Text { text: "临时会议单独立项，不计入既有项目"; font-size: 11px; color: #94a3b8; }
                     }
 
                     ScrollView {
@@ -1570,10 +1578,10 @@ export component MainWindow inherits Window {
                             // 临时会议
                             Rectangle {
                                 height: 32px;
-                                background: root.meeting-selected-proj-idx == -1 ? #1f242c : #0d1117;
+                                background: root.meeting-selected-proj-idx == -1 ? #eff6ff : #ffffff;
                                 border-radius: 6px;
                                 border-width: 1px;
-                                border-color: root.meeting-selected-proj-idx == -1 ? #6366f1 : #21262d;
+                                border-color: root.meeting-selected-proj-idx == -1 ? #2563eb : #e2e8f0;
                                 TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => { root.select-meeting-project(-1); }
@@ -1601,10 +1609,10 @@ export component MainWindow inherits Window {
                             // 客户项目列表
                             for p[idx] in root.projects : Rectangle {
                                 height: 32px;
-                                background: root.meeting-selected-proj-idx == idx ? #1f242c : #0d1117;
+                                background: root.meeting-selected-proj-idx == idx ? #eff6ff : #ffffff;
                                 border-radius: 6px;
                                 border-width: 1px;
-                                border-color: root.meeting-selected-proj-idx == idx ? #6366f1 : #21262d;
+                                border-color: root.meeting-selected-proj-idx == idx ? #2563eb : #e2e8f0;
                                 TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => { root.select-meeting-project(idx); }
@@ -1626,7 +1634,7 @@ export component MainWindow inherits Window {
                                         Text {
                                             text: "[" + p.client + "]";
                                             font-size: 10px;
-                                            color: #6e7681;
+                                            color: #94a3b8;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -1642,7 +1650,7 @@ export component MainWindow inherits Window {
                     }
 
                     // 议题
-                    Text { text: "会议/讨论议题"; font-size: 12px; font-weight: 700; color: #c9d1d9; }
+                    Text { text: "会议/讨论议题"; font-size: 12px; font-weight: 700; color: #334155; }
                     DarkInput {
                         custom-height: 32px;
                         placeholder: "例如：商业客户需求沟通与技术方案评审";
@@ -1673,7 +1681,7 @@ export component MainWindow inherits Window {
                     // 录音开关
                     Rectangle {
                         height: 38px;
-                        background: #0d1117;
+                        background: #f8fafc;
                         border-radius: 8px;
                         border-width: 1px;
                         border-color: root.meeting-record-audio ? #6366f1 : #21262d;
@@ -1689,7 +1697,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 alignment: center;
                                 Text { text: "🎙️"; font-size: 14px; vertical-alignment: center; }
-                                Text { text: "同步开启麦克风无损录音 (驱动 AI 纪要)"; font-size: 12px; font-weight: 600; color: #f0f6fc; vertical-alignment: center; }
+                                Text { text: "同步开启麦克风无损录音 (驱动 AI 纪要)"; font-size: 12px; font-weight: 600; color: #0f172a; vertical-alignment: center; }
                             }
                             Text {
                                 text: root.meeting-record-audio ? "● 录音开启中" : "○ 已关闭";
@@ -1703,7 +1711,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 底部分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // 3. 底部操作栏 (固定 48px，永远绝不裁切)
                 HorizontalLayout {
@@ -1738,7 +1746,7 @@ export component MainWindow inherits Window {
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: #000000ca;
+        background: #00000066;
 
         // 点击遮罩空白关闭弹窗
         TouchArea {
@@ -1750,10 +1758,10 @@ export component MainWindow inherits Window {
             y: (parent.height - self.height) / 2;
             width: 490px;
             height: 390px;
-            background: #161b22;
+            background: #ffffff;
             border-radius: 14px;
             border-width: 1px;
-            border-color: #30363d;
+            border-color: #e2e8f0;
 
             // 拦截卡片内部点击
             TouchArea {}
@@ -1765,7 +1773,7 @@ export component MainWindow inherits Window {
                     padding-left: 18px;
                     padding-right: 16px;
                     alignment: space-between;
-                    Text { text: "➕ 创建新的商业项目"; font-size: 15px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
+                    Text { text: "➕ 创建新的商业项目"; font-size: 15px; font-weight: 800; color: #0f172a; vertical-alignment: center; }
                     TouchArea {
                         width: 28px;
                         height: 28px;
@@ -1775,12 +1783,12 @@ export component MainWindow inherits Window {
                             width: 28px;
                             height: 28px;
                             border-radius: 6px;
-                            background: parent.has-hover ? #30363d : #21262d;
+                            background: parent.has-hover ? #e2e8f0 : #f1f5f9;
                             Text {
                                 text: "✕";
                                 font-size: 12px;
                                 font-weight: 700;
-                                color: #8b949e;
+                                color: #64748b;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -1789,7 +1797,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // Form Body
                 VerticalLayout {
@@ -1799,32 +1807,32 @@ export component MainWindow inherits Window {
                     padding-bottom: 12px;
                     spacing: 8px;
 
-                    Text { text: "项目名称 (必填)"; font-size: 11px; color: #8b949e; }
+                    Text { text: "项目名称 (必填)"; font-size: 11px; color: #64748b; }
                     DarkInput { custom-height: 30px; placeholder: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
 
-                    Text { text: "客户/组织名称"; font-size: 11px; color: #8b949e; }
+                    Text { text: "客户/组织名称"; font-size: 11px; color: #64748b; }
                     DarkInput { custom-height: 30px; placeholder: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
 
                     HorizontalLayout {
                         spacing: 12px;
                         VerticalLayout {
                             spacing: 4px;
-                            Text { text: "人天单价 (元/天)"; font-size: 11px; color: #8b949e; }
+                            Text { text: "人天单价 (元/天)"; font-size: 11px; color: #64748b; }
                             DarkInput { custom-height: 30px; placeholder: "3000"; text <=> root.new-proj-rate; }
                         }
                         VerticalLayout {
                             spacing: 4px;
-                            Text { text: "货币单位 (币种)"; font-size: 11px; color: #8b949e; }
+                            Text { text: "货币单位 (币种)"; font-size: 11px; color: #64748b; }
                             DarkInput { custom-height: 30px; placeholder: "CNY"; text <=> root.new-proj-currency; }
                         }
                     }
 
-                    Text { text: "本地 Git 仓库路径 (可选)"; font-size: 11px; color: #8b949e; }
+                    Text { text: "本地 Git 仓库路径 (可选)"; font-size: 11px; color: #64748b; }
                     DarkInput { custom-height: 30px; placeholder: "/home/beatle/dev/my-project"; text <=> root.new-proj-git; }
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // Footer (48px)
                 HorizontalLayout {
@@ -1857,7 +1865,7 @@ export component MainWindow inherits Window {
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: #000000ca;
+        background: #00000066;
 
         // 点击遮罩空白关闭弹窗
         TouchArea {
@@ -1869,10 +1877,10 @@ export component MainWindow inherits Window {
             y: (parent.height - self.height) / 2;
             width: 490px;
             height: 380px;
-            background: #161b22;
+            background: #ffffff;
             border-radius: 14px;
             border-width: 1px;
-            border-color: #30363d;
+            border-color: #e2e8f0;
 
             // 拦截卡片内部点击
             TouchArea {}
@@ -1884,7 +1892,7 @@ export component MainWindow inherits Window {
                     padding-left: 18px;
                     padding-right: 16px;
                     alignment: space-between;
-                    Text { text: "⚡ AFK 离开工时校准"; font-size: 15px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
+                    Text { text: "⚡ AFK 离开工时校准"; font-size: 15px; font-weight: 800; color: #0f172a; vertical-alignment: center; }
                     TouchArea {
                         width: 28px;
                         height: 28px;
@@ -1894,12 +1902,12 @@ export component MainWindow inherits Window {
                             width: 28px;
                             height: 28px;
                             border-radius: 6px;
-                            background: parent.has-hover ? #30363d : #21262d;
+                            background: parent.has-hover ? #e2e8f0 : #f1f5f9;
                             Text {
                                 text: "✕";
                                 font-size: 12px;
                                 font-weight: 700;
-                                color: #8b949e;
+                                color: #64748b;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -1908,7 +1916,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // Content Body
                 VerticalLayout {
@@ -1921,7 +1929,7 @@ export component MainWindow inherits Window {
                     Text {
                         text: "检测到您离开键盘超过设定阈值。系统已自动保护并发计时通道，请确认是否扣除离开工时：";
                         font-size: 12px;
-                        color: #8b949e;
+                        color: #64748b;
                     }
 
                     ScrollView {
@@ -1931,10 +1939,10 @@ export component MainWindow inherits Window {
                             spacing: 6px;
                             for a in root.afk-items : Rectangle {
                                 height: 42px;
-                                background: #0d1117;
+                                background: #f8fafc;
                                 border-radius: 6px;
                                 border-width: 1px;
-                                border-color: #21262d;
+                                border-color: #e2e8f0;
                                 HorizontalLayout {
                                     padding-left: 12px;
                                     padding-right: 12px;
@@ -1942,8 +1950,8 @@ export component MainWindow inherits Window {
                                     VerticalLayout {
                                         alignment: center;
                                         spacing: 2px;
-                                        Text { text: a.project-name; font-size: 12px; font-weight: 700; color: #f0f6fc; }
-                                        Text { text: "当前累计: " + a.elapsed-text; font-size: 11px; color: #8b949e; }
+                                        Text { text: a.project-name; font-size: 12px; font-weight: 700; color: #0f172a; }
+                                        Text { text: "当前累计: " + a.elapsed-text; font-size: 11px; color: #64748b; }
                                     }
                                     Text { text: "建议扣除"; font-size: 11px; color: #d29922; vertical-alignment: center; }
                                 }
@@ -1953,7 +1961,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // Footer (48px)
                 HorizontalLayout {
@@ -1986,7 +1994,7 @@ export component MainWindow inherits Window {
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: #000000ca;
+        background: #00000066;
 
         // 点击遮罩空白关闭弹窗
         TouchArea {
@@ -1998,10 +2006,10 @@ export component MainWindow inherits Window {
             y: (parent.height - self.height) / 2;
             width: 580px;
             height: 520px;
-            background: #161b22;
+            background: #ffffff;
             border-radius: 14px;
             border-width: 1px;
-            border-color: #30363d;
+            border-color: #e2e8f0;
 
             // 拦截卡片内部点击
             TouchArea {}
@@ -2032,8 +2040,8 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: center;
                             spacing: 2px;
-                            Text { text: "会议纪要与录音凭证详情"; font-size: 15px; font-weight: 800; color: #f0f6fc; }
-                            Text { text: root.detail-project-name + " · " + root.detail-time-range + " (" + root.detail-duration + " · " + root.detail-amount + ")"; font-size: 11px; color: #8b949e; }
+                            Text { text: "会议纪要与录音凭证详情"; font-size: 15px; font-weight: 800; color: #0f172a; }
+                            Text { text: root.detail-project-name + " · " + root.detail-time-range + " (" + root.detail-duration + " · " + root.detail-amount + ")"; font-size: 11px; color: #64748b; }
                         }
                     }
 
@@ -2046,12 +2054,12 @@ export component MainWindow inherits Window {
                             width: 28px;
                             height: 28px;
                             border-radius: 6px;
-                            background: parent.has-hover ? #30363d : #21262d;
+                            background: parent.has-hover ? #e2e8f0 : #f1f5f9;
                             Text {
                                 text: "✕";
                                 font-size: 12px;
                                 font-weight: 700;
-                                color: #8b949e;
+                                color: #64748b;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -2060,7 +2068,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // 2. Body
                 VerticalLayout {
@@ -2073,10 +2081,10 @@ export component MainWindow inherits Window {
                     // 音频操作横条 (如果有录音)
                     if root.detail-has-audio : Rectangle {
                         height: 38px;
-                        background: #0d1117;
+                        background: #f8fafc;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: #30363d;
+                        border-color: #e2e8f0;
                         HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
@@ -2125,17 +2133,17 @@ export component MainWindow inherits Window {
                         }
                         Rectangle {
                             height: 140px;
-                            background: #0d1117;
+                            background: #f8fafc;
                             border-radius: 8px;
                             border-width: 1px;
-                            border-color: #21262d;
+                            border-color: #e2e8f0;
                             ScrollView {
                                 VerticalLayout {
                                     padding: 8px;
                                     Text {
                                         text: root.detail-summary;
                                         font-size: 12px;
-                                        color: #f0f6fc;
+                                        color: #0f172a;
                                         wrap: word-wrap;
                                     }
                                 }
@@ -2157,10 +2165,10 @@ export component MainWindow inherits Window {
                         }
                         Rectangle {
                             height: 140px;
-                            background: #0d1117;
+                            background: #f8fafc;
                             border-radius: 8px;
                             border-width: 1px;
-                            border-color: #21262d;
+                            border-color: #e2e8f0;
                             ScrollView {
                                 VerticalLayout {
                                     padding: 8px;
@@ -2177,7 +2185,7 @@ export component MainWindow inherits Window {
                 }
 
                 // 分割线
-                Rectangle { height: 1px; background: #21262d; }
+                Rectangle { height: 1px; background: #f1f5f9; }
 
                 // 3. Footer (48px)
                 HorizontalLayout {
@@ -2198,7 +2206,7 @@ export component MainWindow inherits Window {
                         text: "关闭";
                         bg-color: #21262d;
                         hover-color: #30363d;
-                        text-color: #c9d1d9;
+                        text-color: #334155;
                         custom-height: 32px;
                         clicked => { root.show-detail-modal = false; }
                     }
