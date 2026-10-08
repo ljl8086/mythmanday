@@ -253,6 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             date_str: start_local.format("%Y-%m-%d").to_string().into(),
                             has_audio,
                             audio_path: audio_path.into(),
+                            raw_secs: e.raw_duration_secs as i32,
                         });
                     }
                 }
@@ -279,9 +280,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut day_days = 0.0f64;
                 let mut day_amount = 0.0f64;
+                let mut day_secs: u64 = 0;
                 let mut curr_sym = "¥";
 
                 for entry in &day_entries {
+                    day_secs += entry.raw_secs.max(0) as u64;
                     // 解析天数与金额
                     let d_parts: Vec<&str> = entry.days_text.split_whitespace().collect();
                     if let Some(d_val) = d_parts.first().and_then(|s| s.parse::<f64>().ok()) {
@@ -300,7 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     date_str: date_str.into(),
                     display_date: display_date.into(),
                     entries_count: count,
-                    total_duration: format!("{} 笔工时流水", count).into(),
+                    total_duration: format_duration(day_secs).into(),
                     total_days: format!("{:.2} 天", day_days).into(),
                     total_amount: format!("{} {:.2}", curr_sym, day_amount).into(),
                     entries: ModelRc::from(Rc::new(VecModel::from(day_entries))),

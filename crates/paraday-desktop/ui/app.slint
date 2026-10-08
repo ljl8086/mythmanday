@@ -32,6 +32,7 @@ export struct EntryItem {
     date-str: string,
     has-audio: bool,
     audio-path: string,
+    raw-secs: int,
 }
 
 export struct DayGroup {
@@ -369,10 +370,10 @@ component ProjectSidebarCard inherits Rectangle {
 export component MainWindow inherits Window {
     title: "ParaDay - Multi-Channel Time Tracker v1.0";
     icon: @image-url("icon.png");
-    min-width: 900px;
-    min-height: 620px;
-    preferred-width: 960px;
-    preferred-height: 680px;
+    min-width: 960px;
+    min-height: 640px;
+    preferred-width: 1180px;
+    preferred-height: 780px;
     background: #090d16;
 
     // 0: 项目工作区, 1: 全局工时统计, 2: 系统与AI设置
@@ -781,7 +782,7 @@ export component MainWindow inherits Window {
 
                             // 项目列表滑动区域
                             ScrollView {
-                                height: 490px;
+                                height: 630px;
                                 VerticalLayout {
                                     padding-right: 4px;
                                     spacing: 8px;
@@ -935,9 +936,8 @@ export component MainWindow inherits Window {
                                         // 快速工作备忘输入框 (当前选中项目)
                                         HorizontalLayout {
                                             spacing: 8px;
-                                            alignment: center;
                                             proj_note_input := DarkInput {
-                                                custom-height: 30px;
+                                                custom-height: 32px;
                                                 placeholder: "为【" + item.name + "】添加工作备忘、需求变更或沟通速记...";
                                                 accepted => {
                                                     if (self.text != "") {
@@ -947,11 +947,12 @@ export component MainWindow inherits Window {
                                                 }
                                             }
                                             PrimaryButton {
+                                                width: 88px;
                                                 text: "存入备忘";
                                                 bg-color: #21262d;
                                                 hover-color: #30363d;
                                                 text-color: #c9d1d9;
-                                                custom-height: 30px;
+                                                custom-height: 32px;
                                                 clicked => {
                                                     if (proj_note_input.text != "") {
                                                         root.add-project-note(item.id, proj_note_input.text);
@@ -966,7 +967,7 @@ export component MainWindow inherits Window {
 
                             // 2. 每天一个卡片的历史工时明细流水 (包含录音、转写与交付纪要)
                             ScrollView {
-                                height: 420px;
+                                height: 560px;
                                 VerticalLayout {
                                     padding-right: 4px;
                                     spacing: 12px;
