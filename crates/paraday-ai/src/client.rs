@@ -320,24 +320,56 @@ impl AiSummarizer {
         }
 
         let provider = self.config.provider.trim().to_lowercase();
-        // 2. 如果使用本地 AI 引擎 (agy 或 codex)，免 API Key 直接通过 AI 引擎智能提炼与转写
-        if provider == "agy" || provider == "codex" {
-            let meta_info = match std::fs::metadata(wav_path) {
-                Ok(m) => format!("文件大小: {:.2} MB", m.len() as f64 / 1024.0 / 1024.0),
-                Err(_) => "本地音频留存凭证已就绪".to_string(),
-            };
-
+        // 2. 如果使用本地 AI 引擎 (agy)，agy 原生具备多模态音频理解与语音转文字能力
+        if provider == "agy" {
+            let wav_str = wav_path.to_string_lossy().to_string();
+            let bin = find_binary("agy");
             let prompt = format!(
-                "请针对本次会议录音文件进行智能解析与对话转写文稿提取。\n音频文件路径：{}\n音频属性：{}\n\n请结合项目开发与会议研讨上下文，输出该录音对应的会议发言纪要与重点对话转写文稿内容（中文）：",
-                wav_path.display(),
-                meta_info
+                "请直接读取并聆听该本地音频文件：{}\n请直接转写该录音中说话人讲出的所有真实文字内容。要求：只输出转写后的纯中文/对话文字正文，不要输出任何解释说明、格式前缀或客套话。",
+                wav_str
             );
-            return self
-                .execute_completion(
-                    "你是一名专业的会议语音分析与纪要整理专家。请根据提供的会议音频档案信息，整理输出高质量的会议对话重点、发言记录与转写文稿内容，不带客套话，直接给出转写文稿正文。",
-                    &prompt,
-                )
-                .await;
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(bin)
+                    .arg("-p")
+                    .arg(&prompt)
+                    .output()
+            })
+            .await
+            .map_err(|e| AiError::ParseError(format!("子线程调度失败: {}", e)))?
+            .map_err(|e| AiError::ParseError(format!("本地启动 agy 失败: {}", e)))?;
+
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(AiError::ParseError(format!("agy 转写异常: {}", err)));
+            }
+            let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if res.is_empty() {
+                return Err(AiError::ParseError("agy 音频识别结果为空".into()));
+            }
+            return Ok(res);
+        } else if provider == "codex" {
+            let wav_str = wav_path.to_string_lossy().to_string();
+            let bin = find_binary("codex");
+            let prompt = format!(
+                "请直接读取并聆听该本地音频文件：{}\n请直接转写该录音中的说话人实际语音内容，只输出文字文本：",
+                wav_str
+            );
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(bin)
+                    .arg("exec")
+                    .arg(&prompt)
+                    .output()
+            })
+            .await
+            .map_err(|e| AiError::ParseError(format!("子线程调度失败: {}", e)))?
+            .map_err(|e| AiError::ParseError(format!("本地启动 codex 失败: {}", e)))?;
+
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(AiError::ParseError(format!("codex 执行异常: {}", err)));
+            }
+            let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Ok(res);
         }
 
         // 3. 走云端兼容 Whisper 标准的 HTTP API (/audio/transcriptions)
