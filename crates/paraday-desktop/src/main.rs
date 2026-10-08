@@ -98,6 +98,12 @@ fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
+    // 0. 初始化全局 Tokio Runtime 并持久进入上下文，供所有异步任务（包括子进程、网络驱动）使用
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_guard = tokio_rt.enter();
+
     // 1. 初始化本地持久化数据库
     let db_dir = dirs_or_local_data_dir();
     std::fs::create_dir_all(&db_dir)?;

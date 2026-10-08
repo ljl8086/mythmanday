@@ -72,6 +72,16 @@ pub struct AiSummarizer {
     client: reqwest::Client,
 }
 
+fn find_binary(name: &str) -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        let p = std::path::PathBuf::from(home).join(".local").join("bin").join(name);
+        if p.exists() {
+            return p;
+        }
+    }
+    std::path::PathBuf::from(name)
+}
+
 impl AiSummarizer {
     pub fn new(config: AiConfig) -> Self {
         Self {
@@ -85,12 +95,17 @@ impl AiSummarizer {
         let provider = self.config.provider.trim().to_lowercase();
         if provider == "agy" {
             let full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
-            let output = tokio::process::Command::new("agy")
-                .arg("-p")
-                .arg(&full_prompt)
-                .output()
-                .await
-                .map_err(|e| AiError::ParseError(format!("本地启动 agy 失败: {}", e)))?;
+            let bin = find_binary("agy");
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(bin)
+                    .arg("-p")
+                    .arg(&full_prompt)
+                    .output()
+            })
+            .await
+            .map_err(|e| AiError::ParseError(format!("子线程调度失败: {}", e)))?
+            .map_err(|e| AiError::ParseError(format!("本地启动 agy 失败: {}", e)))?;
+
             if !output.status.success() {
                 let err = String::from_utf8_lossy(&output.stderr);
                 return Err(AiError::ParseError(format!("agy 执行异常: {}", err)));
@@ -102,12 +117,17 @@ impl AiSummarizer {
             return Ok(res);
         } else if provider == "codex" {
             let full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
-            let output = tokio::process::Command::new("codex")
-                .arg("exec")
-                .arg(&full_prompt)
-                .output()
-                .await
-                .map_err(|e| AiError::ParseError(format!("本地启动 codex 失败: {}", e)))?;
+            let bin = find_binary("codex");
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(bin)
+                    .arg("exec")
+                    .arg(&full_prompt)
+                    .output()
+            })
+            .await
+            .map_err(|e| AiError::ParseError(format!("子线程调度失败: {}", e)))?
+            .map_err(|e| AiError::ParseError(format!("本地启动 codex 失败: {}", e)))?;
+
             if !output.status.success() {
                 let err = String::from_utf8_lossy(&output.stderr);
                 return Err(AiError::ParseError(format!("codex 执行异常: {}", err)));
