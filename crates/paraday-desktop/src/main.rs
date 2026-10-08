@@ -210,14 +210,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let model_for_refresh = model.clone();
+    let current_selected_id = Rc::new(RefCell::new(
+        projects_ref.borrow().first().map(|p| p.id.to_string()).unwrap_or_default()
+    ));
+
     let refresh_entries_ui = {
         let db = db.clone();
         let app_weak = app.as_weak();
         let projects_ref = projects_ref.clone();
         let model_sync = model_for_refresh.clone();
+        let selected_id_ref = current_selected_id.clone();
         move || {
             let projs = projects_ref.borrow();
             let mut all_entries = Vec::new();
+            let active_pid_str = selected_id_ref.borrow().clone();
+
             for (idx, p) in projs.iter().enumerate() {
                 if let Ok(entries) = db.list_entries_for_project(&p.id) {
                     let total_secs: u64 = entries.iter().map(|e| e.raw_duration_secs).sum();
@@ -250,12 +257,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+
+            // 按照日期将选中项目的条目聚合为「一天一个卡片」
+            let mut days_map: std::collections::BTreeMap<String, Vec<EntryItem>> = std::collections::BTreeMap::new();
+            for item in &all_entries {
+                if item.project_id.as_str() == active_pid_str {
+                    days_map.entry(item.date_str.to_string()).or_default().push(item.clone());
+                }
+            }
+
+            let today_str = Local::now().format("%Y-%m-%d").to_string();
+            let mut daily_groups: Vec<DayGroup> = Vec::new();
+            // 倒序排列：最新的日期显示在最前面
+            for (date_str, day_entries) in days_map.into_iter().rev() {
+                let count = day_entries.len() as i32;
+                let display_date = if date_str == today_str {
+                    format!("{} (今天)", date_str)
+                } else {
+                    date_str.clone()
+                };
+
+                let mut day_days = 0.0f64;
+                let mut day_amount = 0.0f64;
+                let mut curr_sym = "¥";
+
+                for entry in &day_entries {
+                    // 解析天数与金额
+                    let d_parts: Vec<&str> = entry.days_text.split_whitespace().collect();
+                    if let Some(d_val) = d_parts.first().and_then(|s| s.parse::<f64>().ok()) {
+                        day_days += d_val;
+                    }
+                    let a_parts: Vec<&str> = entry.amount_text.split_whitespace().collect();
+                    if a_parts.len() >= 2 {
+                        curr_sym = a_parts[0];
+                        if let Ok(a_val) = a_parts[1].parse::<f64>() {
+                            day_amount += a_val;
+                        }
+                    }
+                }
+
+                daily_groups.push(DayGroup {
+                    date_str: date_str.into(),
+                    display_date: display_date.into(),
+                    entries_count: count,
+                    total_duration: format!("{} 笔工时流水", count).into(),
+                    total_days: format!("{:.2} 天", day_days).into(),
+                    total_amount: format!("{} {:.2}", curr_sym, day_amount).into(),
+                    entries: ModelRc::from(Rc::new(VecModel::from(day_entries))),
+                });
+            }
+
             if let Some(ui) = app_weak.upgrade() {
                 ui.set_recent_entries(ModelRc::from(Rc::new(VecModel::from(all_entries))));
+                ui.set_daily_groups(ModelRc::from(Rc::new(VecModel::from(daily_groups))));
             }
         }
     };
     refresh_entries_ui();
+
+    // 选中项目交互
+    let refresh_on_select = refresh_entries_ui.clone();
+    let current_selected_for_cb = current_selected_id.clone();
+    app.on_select_project(move |pid_str| {
+        *current_selected_for_cb.borrow_mut() = pid_str.to_string();
+        refresh_on_select();
+    });
 
     let refresh_notes_ui = {
         let db = db.clone();
