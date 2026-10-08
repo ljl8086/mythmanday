@@ -4,8 +4,10 @@
 // Version: V1.0
 // Description: Native microphone audio recording & acoustic processing engine.
 
+pub mod player;
 pub mod recorder;
 
+pub use player::AudioPlayer;
 pub use recorder::{AudioError, AudioRecorder};
 
 #[cfg(test)]

@@ -161,6 +161,7 @@ impl AiSummarizer {
         duration_hours: f64,
         notes: &[QuickNote],
         audio_file_info: Option<&str>,
+        audio_transcript: Option<&str>,
     ) -> Result<String, AiError> {
         let mut prompt_content = format!(
             "会议议题：{}\n会议时长：{:.2} 小时\n\n",
@@ -171,6 +172,12 @@ impl AiSummarizer {
             prompt_content.push_str(&format!("【音频留存凭证】：{}\n\n", audio_info));
         }
 
+        if let Some(transcript) = audio_transcript {
+            if !transcript.trim().is_empty() {
+                prompt_content.push_str(&format!("【会议录音全量转写文稿】：\n{}\n\n", transcript));
+            }
+        }
+
         if !notes.is_empty() {
             prompt_content.push_str("【会议要点记录/即时速记】：\n");
             for n in notes {
@@ -179,7 +186,7 @@ impl AiSummarizer {
             prompt_content.push('\n');
         }
 
-        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长与现场速记要点，撰写一份条理清晰、专业体面的会议交付纪要。要求：\n1. 结构包含：【核心议题】、【达成共识与技术决议】、【后续跟进待办】；\n2. 语言干练严谨，适合呈报给客户或项目团队作为工时交付凭证；\n3. 控制在 150 字以内，不带任何客套寒暄。";
+        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、专业体面的会议交付纪要。要求：\n1. 结构包含：【核心议题】、【达成共识与技术决议】、【后续跟进待办】；\n2. 语言干练严谨，适合呈报给客户或项目团队作为工时交付凭证；\n3. 控制在 180 字以内，不带任何客套寒暄。";
 
         let url = format!("{}/chat/completions", self.config.api_base.trim_end_matches('/'));
         let request_body = ChatRequest {
@@ -195,7 +202,7 @@ impl AiSummarizer {
                 },
             ],
             temperature: 0.3,
-            max_tokens: 350,
+            max_tokens: 400,
         };
 
         let resp = self
@@ -220,5 +227,50 @@ impl AiSummarizer {
             .unwrap_or_else(|| format!("完成【{}】沟通对接，各方已达成一致决策。", meeting_topic));
 
         Ok(result)
+    }
+
+    /// 调用兼容 Whisper 标准规范的语音转文字接口 (/audio/transcriptions)
+    pub async fn transcribe_audio(&self, wav_path: &std::path::Path) -> Result<String, AiError> {
+        if !wav_path.exists() {
+            return Err(AiError::ParseError(format!("音频文件不存在: {}", wav_path.display())));
+        }
+
+        let file_bytes = tokio::fs::read(wav_path)
+            .await
+            .map_err(|e| AiError::ParseError(e.to_string()))?;
+        let filename = wav_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("audio.wav")
+            .to_string();
+
+        let part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(filename)
+            .mime_str("audio/wav")
+            .map_err(|e| AiError::ParseError(e.to_string()))?;
+
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("model", "whisper-1")
+            .text("response_format", "text");
+
+        let url = format!("{}/audio/transcriptions", self.config.api_base.trim_end_matches('/'));
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(AiError::ApiError(status, err_text));
+        }
+
+        let text = resp.text().await.map_err(AiError::Reqwest)?;
+        Ok(text.trim().to_string())
     }
 }
