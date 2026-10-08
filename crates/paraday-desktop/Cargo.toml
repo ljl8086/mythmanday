@@ -11,6 +11,7 @@ paraday-core = { path = "../paraday-core" }
 paraday-db = { path = "../paraday-db" }
 paraday-git = { path = "../paraday-git" }
 paraday-ai = { path = "../paraday-ai" }
+paraday-audio = { path = "../paraday-audio" }
 slint = "1.9"
 arboard = "3.4"
 ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }

@@ -10,6 +10,7 @@ mod tray;
 
 use chrono::{Local, Utc};
 use paraday_ai::{AiConfig, AiSummarizer};
+use paraday_audio::AudioRecorder;
 use paraday_core::billing::BillingEngine;
 use paraday_core::models::{BillingType, DayCalcMode, Project, QuickNote, TimeEntry};
 use paraday_core::timer::MultiChannelManager;
@@ -99,6 +100,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. 初始化核心多通道状态机与崩溃容灾恢复
     let timer_manager = Rc::new(RefCell::new(MultiChannelManager::new()));
+    let audio_recorder = Rc::new(RefCell::new(AudioRecorder::new()));
+    let active_recording_info = Rc::new(RefCell::new(None::<(Uuid, String, std::path::PathBuf)>));
     let app = MainWindow::new()?;
 
     // 自动恢复崩溃/重启前运行中的通道 (Wall-Clock 绝对时间持久化)
@@ -220,11 +223,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_window_vis_clone = is_window_visible.clone();
     let db_timer = db.clone();
     let heartbeat_tick = Rc::new(RefCell::new(0u32));
+    let audio_rec_timer = audio_recorder.clone();
 
     timer.start(
         slint::TimerMode::Repeated,
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_millis(150),
         move || {
+            let is_rec = audio_rec_timer.borrow().is_recording();
+            let is_paused = audio_rec_timer.borrow().is_paused();
+            if is_rec {
+                let vol = audio_rec_timer.borrow().current_volume();
+                let elapsed = audio_rec_timer.borrow().elapsed_secs();
+                if let Some(ui) = app_weak.upgrade() {
+                    ui.set_is_recording_audio(true);
+                    ui.set_is_audio_paused(is_paused);
+                    ui.set_audio_volume_level(vol);
+                    ui.set_audio_timer_text(format_duration(elapsed).into());
+                }
+            } else {
+                if let Some(ui) = app_weak.upgrade() {
+                    if ui.get_is_recording_audio() {
+                        ui.set_is_recording_audio(false);
+                        ui.set_is_audio_paused(false);
+                        ui.set_audio_volume_level(0.0);
+                    }
+                }
+            }
+
+            let mut tick = heartbeat_tick.borrow_mut();
+            *tick = tick.wrapping_add(1);
+
+            // 每 1 秒 (~7 个 150ms 周期) 执行通道时间更新与对账计算
+            if *tick % 7 != 0 {
+                return;
+            }
+
             let mgr = timer_mgr_clone.borrow();
             let projs = projects_cache.borrow();
             let mut total_days = 0.0;
@@ -265,9 +298,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 定期更新活动通道心跳与容灾存档 (每15秒更新一次)
-            let mut tick = heartbeat_tick.borrow_mut();
-            *tick = tick.wrapping_add(1);
-            if *tick % 15 == 0 {
+            if *tick % 105 == 0 {
                 let now = Utc::now();
                 for p in projs.iter() {
                     let status = mgr.get_status(&p.id);
@@ -352,9 +383,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer_mgr_pause = timer_manager.clone();
     let db_pause = db.clone();
     let app_weak_pause = app.as_weak();
+    let active_rec_pause = active_recording_info.clone();
+    let audio_rec_pause = audio_recorder.clone();
     app.on_pause_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_pause.borrow_mut().pause_channel(id);
+            if let Some((rec_pid, _, _)) = active_rec_pause.borrow().as_ref() {
+                if *rec_pid == id {
+                    audio_rec_pause.borrow_mut().pause_recording();
+                }
+            }
             let elapsed = timer_mgr_pause.borrow().get_elapsed(&id);
             let session_start = timer_mgr_pause.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or_else(Utc::now);
             let _ = db_pause.upsert_active_timer(&ActiveTimerRecord {
@@ -374,9 +412,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer_mgr_resume = timer_manager.clone();
     let db_resume = db.clone();
     let app_weak_resume = app.as_weak();
+    let active_rec_resume = active_recording_info.clone();
+    let audio_rec_resume = audio_recorder.clone();
     app.on_resume_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_resume.borrow_mut().start_channel(id);
+            if let Some((rec_pid, _, _)) = active_rec_resume.borrow().as_ref() {
+                if *rec_pid == id {
+                    audio_rec_resume.borrow_mut().resume_recording();
+                }
+            }
             let now = Utc::now();
             let elapsed = timer_mgr_resume.borrow().get_elapsed(&id);
             let session_start = timer_mgr_resume.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or(now);
@@ -399,6 +444,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let projects_stop = projects_ref.clone();
     let app_weak_stop = app.as_weak();
     let refresh_entries_stop = refresh_entries_ui.clone();
+    let active_rec_stop = active_recording_info.clone();
+    let audio_rec_stop = audio_recorder.clone();
 
     app.on_stop_project(move |id_str| {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
@@ -407,13 +454,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 1. 结算完成，从 active_timers 移除持久化记录
                 let _ = db_stop.delete_active_timer(&id);
 
+                // 2. 如果当前停止的项目正在录音，停止录音并保存 WAV 凭证
+                let mut audio_info_str = None;
+                let active_rec = active_rec_stop.borrow_mut().take();
+                if let Some((rec_pid, rec_topic, rec_path)) = active_rec {
+                    if rec_pid == id {
+                        if audio_rec_stop.borrow().is_recording() {
+                            if let Ok(saved_path) = audio_rec_stop.borrow_mut().stop_recording() {
+                                let size_mb = std::fs::metadata(&saved_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
+                                let info = format!("音频留存: {} ({:.2} MB)", saved_path.display(), size_mb);
+                                let note = QuickNote::new(id, &format!("[会议录音已归档] {}", info));
+                                let _ = db_stop.insert_quick_note(&note);
+                                audio_info_str = Some(info);
+                            }
+                        } else {
+                            let size_mb = std::fs::metadata(&rec_path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
+                            audio_info_str = Some(format!("音频留存: {} ({:.2} MB)", rec_path.display(), size_mb));
+                        }
+                        if let Some(ui) = app_weak_stop.upgrade() {
+                            ui.set_is_recording_audio(false);
+                            ui.set_active_recording_project_name("".into());
+                        }
+                    } else {
+                        *active_rec_stop.borrow_mut() = Some((rec_pid, rec_topic, rec_path));
+                    }
+                }
+
                 let projs = projects_stop.borrow();
                 if let Some(p) = projs.iter().find(|proj| proj.id == id) {
                     let billable_hours = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
                     let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
                     let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
-                    // 2. 智能嗅探 Git 活动与便签记录
+                    // 3. 智能嗅探 Git 活动与便签记录
                     let mut git_summary = paraday_git::GitActivitySummary {
                         commits: vec![],
                         diff_stat: "".to_string(),
@@ -428,13 +501,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let notes = db_stop.list_quick_notes(&id).unwrap_or_default();
 
-                    // 3. 构建智能兜底摘要（无需人工编写）
-                    let summary_desc = if p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") {
-                        if !notes.is_empty() {
+                    // 4. 构建智能兜底摘要（无需人工编写）
+                    let is_meeting = p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") || audio_info_str.is_some();
+                    let summary_desc = if is_meeting {
+                        let mut base = if !notes.is_empty() {
                             format!("会议沟通与决议：{}", notes.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join("; "))
                         } else {
                             "完成商业客户需求与技术方案对齐沟通".to_string()
+                        };
+                        if let Some(ref a_info) = audio_info_str {
+                            base.push_str(&format!(" [{}]", a_info));
                         }
+                        base
                     } else if !git_summary.commits.is_empty() {
                         format!("代码提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "))
                     } else if git_summary.has_uncommitted_changes {
@@ -468,7 +546,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_toast_message(format!("工时已自动结算入库：{:.2} 人天", billable_days).into());
                     }
 
-                    // 4. 后台全自动静默调用 AI 润色提炼交付总结（完全无需用户每日手动点击！）
+                    // 5. 后台全自动静默调用 AI 润色提炼交付总结 / 会议纪要
                     let db_async = db_stop.clone();
                     let refresh_async = refresh_entries_stop.clone();
                     let app_async = app_weak_stop.clone();
@@ -485,7 +563,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 api_key: ai_key,
                                 model: ai_model,
                             });
-                            if let Ok(ai_summary) = summarizer.summarize_session(&proj_name, billable_hours, &git_summary, &notes).await {
+                            let ai_summary_res = if is_meeting {
+                                summarizer.summarize_meeting(&proj_name, billable_hours, &notes, audio_info_str.as_deref()).await
+                            } else {
+                                summarizer.summarize_session(&proj_name, billable_hours, &git_summary, &notes).await
+                            };
+                            if let Ok(ai_summary) = ai_summary_res {
                                 if let Ok(Some(mut e)) = db_async.get_time_entry(&entry_id) {
                                     e.summary = Some(ai_summary);
                                     let _ = db_async.insert_time_entry(&e);
@@ -581,14 +664,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 8.1 快速发起会议与技术讨论计时
+    // 8.1 快速发起会议与技术讨论计时 (支持同步开启麦克风录音)
     let db_quick_meeting = db.clone();
     let projects_quick_meeting = projects_ref.clone();
     let model_quick_meeting = model.clone();
     let timer_mgr_quick_meeting = timer_manager.clone();
     let app_weak_meeting = app.as_weak();
+    let audio_rec_meeting = audio_recorder.clone();
+    let active_rec_meeting = active_recording_info.clone();
+    let db_dir_recordings = db_dir.clone();
 
-    app.on_start_quick_meeting(move |topic_str, rate_str| {
+    app.on_start_quick_meeting(move |topic_str, rate_str, record_audio| {
         if let Some(ui) = app_weak_meeting.upgrade() {
             let topic = if topic_str.trim().is_empty() {
                 "客户需求与方案沟通会".to_string()
@@ -625,9 +711,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let note = QuickNote::new(pid, &format!("[会议开启] 议题: {}", topic));
                 let _ = db_quick_meeting.insert_quick_note(&note);
 
+                let mut rec_started = false;
+                if record_audio {
+                    let rec_dir = db_dir_recordings.join("recordings");
+                    let _ = std::fs::create_dir_all(&rec_dir);
+                    let timestamp_str = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    let wav_file = rec_dir.join(format!("meeting_{}_{}.wav", pid, timestamp_str));
+                    let mut rec = audio_rec_meeting.borrow_mut();
+                    match rec.start_recording(&wav_file) {
+                        Ok(_) => {
+                            *active_rec_meeting.borrow_mut() = Some((pid, topic.clone(), wav_file.clone()));
+                            ui.set_is_recording_audio(true);
+                            ui.set_is_audio_paused(false);
+                            ui.set_active_recording_project_name(topic.clone().into());
+                            let note_audio = QuickNote::new(pid, &format!("[录音开启] 现场音频写入: {}", wav_file.display()));
+                            let _ = db_quick_meeting.insert_quick_note(&note_audio);
+                            rec_started = true;
+                        }
+                        Err(e) => {
+                            tracing::warn!("启动录音失败: {}", e);
+                            ui.set_toast_message(format!("提示: 无法启动录音 ({})", e).into());
+                        }
+                    }
+                }
+
                 ui.set_meeting_topic_input("".into());
                 ui.set_active_tab(0);
-                ui.set_toast_message(format!("会议通道已启动计时：{}", topic).into());
+                if rec_started {
+                    ui.set_toast_message(format!("会议通道已启动计时并开启麦克风全程录音！议题: {}", topic).into());
+                } else {
+                    ui.set_toast_message(format!("会议通道已启动计时：{}", topic).into());
+                }
+            }
+        }
+    });
+
+    // 8.2 录音控制交互回调 (暂停/继续、结束录音)
+    let audio_rec_toggle = audio_recorder.clone();
+    let app_weak_toggle = app.as_weak();
+    app.on_toggle_audio_pause(move || {
+        let mut rec = audio_rec_toggle.borrow_mut();
+        if rec.is_recording() {
+            if rec.is_paused() {
+                rec.resume_recording();
+                if let Some(ui) = app_weak_toggle.upgrade() {
+                    ui.set_toast_message("🎙️ 麦克风录音已继续".into());
+                }
+            } else {
+                rec.pause_recording();
+                if let Some(ui) = app_weak_toggle.upgrade() {
+                    ui.set_toast_message("🎙️ 麦克风录音已暂停".into());
+                }
+            }
+        }
+    });
+
+    let audio_rec_stop_cmd = audio_recorder.clone();
+    let active_rec_stop_cmd = active_recording_info.clone();
+    let db_stop_audio = db.clone();
+    let app_weak_stop_audio = app.as_weak();
+    let refresh_notes_audio_stop = refresh_notes_ui.clone();
+    app.on_stop_audio_recording(move || {
+        let mut rec = audio_rec_stop_cmd.borrow_mut();
+        if rec.is_recording() {
+            match rec.stop_recording() {
+                Ok(path) => {
+                    let file_size_mb = std::fs::metadata(&path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
+                    if let Some((pid, topic, _)) = active_rec_stop_cmd.borrow().as_ref() {
+                        let note_content = format!("[录音提前结束] 议题: {} | 音频文件已就绪: {} ({:.2} MB)", topic, path.display(), file_size_mb);
+                        let note = QuickNote::new(*pid, &note_content);
+                        let _ = db_stop_audio.insert_quick_note(&note);
+                        refresh_notes_audio_stop();
+                    }
+                    *active_rec_stop_cmd.borrow_mut() = None;
+                    if let Some(ui) = app_weak_stop_audio.upgrade() {
+                        ui.set_is_recording_audio(false);
+                        ui.set_active_recording_project_name("".into());
+                        ui.set_toast_message(format!("会议录音已安全归档 ({:.2} MB)", file_size_mb).into());
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = app_weak_stop_audio.upgrade() {
+                        ui.set_toast_message(format!("停止录音失败: {}", e).into());
+                    }
+                }
             }
         }
     });

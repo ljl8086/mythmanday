@@ -187,6 +187,14 @@ export component MainWindow inherits Window {
     // 快速会议与讨论字段
     in-out property <string> meeting-topic-input: "";
     in-out property <string> meeting-rate-input: "350";
+    in-out property <bool> meeting-record-audio: true;
+
+    // 麦克风录音与声波状态
+    in property <bool> is-recording-audio: false;
+    in property <bool> is-audio-paused: false;
+    in property <string> audio-timer-text: "00:00:00";
+    in property <float> audio-volume-level: 0.0;
+    in property <string> active-recording-project-name: "";
 
     // 设置中心字段
     in-out property <string> setting-ai-base: "https://api.deepseek.com/v1";
@@ -211,7 +219,9 @@ export component MainWindow inherits Window {
     callback add-quick-note(string /* note-content */);
     callback delete-quick-note(string /* note-id */);
     callback submit-new-project();
-    callback start-quick-meeting(string /* topic */, string /* rate */);
+    callback start-quick-meeting(string /* topic */, string /* rate */, bool /* record-audio */);
+    callback toggle-audio-pause();
+    callback stop-audio-recording();
     callback save-settings();
     callback test-ai-connection();
     callback trigger-ai-summarize();
@@ -302,6 +312,87 @@ export component MainWindow inherits Window {
                     text: "⚙ 系统与AI设置";
                     active: root.active-tab == 3;
                     clicked => { root.active-tab = 3; }
+                }
+            }
+        }
+
+        // ================= 顶部录音状态实时动态栏 =================
+        if root.is-recording-audio : Rectangle {
+            height: 44px;
+            background: root.is-audio-paused ? #27272a : #3b0764;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: root.is-audio-paused ? #71717a : #a855f7;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: root.is-audio-paused ? #f59e0b : #ef4444;
+                    }
+
+                    Text {
+                        text: root.is-audio-paused ? "🎙️ 会议录音已暂停" : "🎙️ 会议录音中";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: root.is-audio-paused ? #fde68a : #f5d0fe;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "[" + root.audio-timer-text + "]";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+
+                    if root.active-recording-project-name != "" : Text {
+                        text: "· " + root.active-recording-project-name;
+                        font-size: 11px;
+                        color: #d8b4fe;
+                        vertical-alignment: center;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    // 麦克风实时跳动声波指示器
+                    HorizontalLayout {
+                        spacing: 3px;
+                        alignment: center;
+                        Rectangle { width: 3px; height: 4px + (14px * root.audio-volume-level); background: #c084fc; border-radius: 1px; }
+                        Rectangle { width: 3px; height: 4px + (22px * root.audio-volume-level); background: #d946ef; border-radius: 1px; }
+                        Rectangle { width: 3px; height: 4px + (26px * root.audio-volume-level); background: #f43f5e; border-radius: 1px; }
+                        Rectangle { width: 3px; height: 4px + (20px * root.audio-volume-level); background: #d946ef; border-radius: 1px; }
+                        Rectangle { width: 3px; height: 4px + (12px * root.audio-volume-level); background: #c084fc; border-radius: 1px; }
+                    }
+
+                    MiniButton {
+                        text: root.is-audio-paused ? "▶ 继续录音" : "⏸ 暂停";
+                        bg-color: root.is-audio-paused ? #2563eb : #78350f;
+                        hover-color: root.is-audio-paused ? #1d4ed8 : #92400e;
+                        clicked => { root.toggle-audio-pause(); }
+                    }
+
+                    MiniButton {
+                        text: "⏹ 结束录音";
+                        bg-color: #dc2626;
+                        hover-color: #b91c1c;
+                        clicked => { root.stop-audio-recording(); }
+                    }
                 }
             }
         }
@@ -899,17 +990,87 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // 麦克风录音控制选项
+                    Rectangle {
+                        height: 52px;
+                        background: root.meeting-record-audio ? #2e1065 : #1e293b;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: root.meeting-record-audio ? #8b5cf6 : #334155;
+
+                        rec-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.meeting-record-audio = !root.meeting-record-audio;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            alignment: space-between;
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: center;
+
+                                Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.meeting-record-audio ? #7c3aed : #334155;
+                                    border-width: 1px;
+                                    border-color: root.meeting-record-audio ? #a78bfa : #475569;
+
+                                    Text {
+                                        text: root.meeting-record-audio ? "✓" : "";
+                                        font-size: 13px;
+                                        font-weight: 800;
+                                        color: #ffffff;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: "同步开启麦克风录音 (留存音频凭证 & AI纪要提炼)";
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        color: root.meeting-record-audio ? #ede9fe : #cbd5e1;
+                                    }
+                                    Text {
+                                        text: "流式直写本地无损 WAV，结算时 AI 自动归纳议题决议与待办";
+                                        font-size: 10px;
+                                        color: #94a3b8;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: root.meeting-record-audio ? "已开启" : "已关闭";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: root.meeting-record-audio ? #a78bfa : #64748b;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
                     Rectangle { height: 6px; }
 
                     HorizontalLayout {
                         spacing: 10px;
                         PrimaryButton {
-                            text: "▶ 立即启动会议计时";
+                            text: root.meeting-record-audio ? "▶ 启动会议计时并开始录音" : "▶ 启动会议计时";
                             bg-color: #7c3aed;
                             hover-color: #6d28d9;
                             custom-height: 36px;
                             clicked => {
-                                root.start-quick-meeting(root.meeting-topic-input, root.meeting-rate-input);
+                                root.start-quick-meeting(root.meeting-topic-input, root.meeting-rate-input, root.meeting-record-audio);
                             }
                         }
                         OutlineButton {

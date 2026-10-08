@@ -1,0 +1,15 @@
+[package]
+name = "paraday-audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Native microphone audio recording & acoustic processing engine for ParaDay."
+
+[dependencies]
+cpal = "0.15"
+hound = "3.5"
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

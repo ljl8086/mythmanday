@@ -5,6 +5,7 @@ members = [
     "crates/paraday-db",
     "crates/paraday-git",
     "crates/paraday-ai",
+    "crates/paraday-audio",
     "crates/paraday-desktop",
 ]
 

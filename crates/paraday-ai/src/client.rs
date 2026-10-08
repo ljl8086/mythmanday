@@ -153,4 +153,72 @@ impl AiSummarizer {
 
         Ok(result)
     }
+
+    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼商业级会议纪要
+    pub async fn summarize_meeting(
+        &self,
+        meeting_topic: &str,
+        duration_hours: f64,
+        notes: &[QuickNote],
+        audio_file_info: Option<&str>,
+    ) -> Result<String, AiError> {
+        let mut prompt_content = format!(
+            "会议议题：{}\n会议时长：{:.2} 小时\n\n",
+            meeting_topic, duration_hours
+        );
+
+        if let Some(audio_info) = audio_file_info {
+            prompt_content.push_str(&format!("【音频留存凭证】：{}\n\n", audio_info));
+        }
+
+        if !notes.is_empty() {
+            prompt_content.push_str("【会议要点记录/即时速记】：\n");
+            for n in notes {
+                prompt_content.push_str(&format!("- {}\n", n.content));
+            }
+            prompt_content.push('\n');
+        }
+
+        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长与现场速记要点，撰写一份条理清晰、专业体面的会议交付纪要。要求：\n1. 结构包含：【核心议题】、【达成共识与技术决议】、【后续跟进待办】；\n2. 语言干练严谨，适合呈报给客户或项目团队作为工时交付凭证；\n3. 控制在 150 字以内，不带任何客套寒暄。";
+
+        let url = format!("{}/chat/completions", self.config.api_base.trim_end_matches('/'));
+        let request_body = ChatRequest {
+            model: self.config.model.clone(),
+            messages: vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: system_prompt.to_string(),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: prompt_content,
+                },
+            ],
+            temperature: 0.3,
+            max_tokens: 350,
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(AiError::ApiError(status, err_text));
+        }
+
+        let parsed: ChatResponse = resp.json().await?;
+        let result = parsed
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_else(|| format!("完成【{}】沟通对接，各方已达成一致决策。", meeting_topic));
+
+        Ok(result)
+    }
 }
