@@ -265,10 +265,10 @@ component DarkInput inherits Rectangle {
 export component MainWindow inherits Window {
     title: "ParaDay - Multi-Channel Time Tracker v1.0";
     icon: @image-url("icon.png");
-    min-width: 860px;
-    min-height: 600px;
-    preferred-width: 920px;
-    preferred-height: 650px;
+    min-width: 900px;
+    min-height: 620px;
+    preferred-width: 960px;
+    preferred-height: 680px;
     background: #090d16;
 
     // 0: 控制台, 1: 交付对账, 2: 闪念便签, 3: 设置中心
@@ -1112,391 +1112,10 @@ export component MainWindow inherits Window {
         }
     }
 
-    // ==================== 独立居中 Modal 1: 发起会议弹窗 ====================
-    if root.show-meeting-modal : Rectangle {
-        x: 0;
-        y: 0;
-        width: parent.width;
-        height: parent.height;
-        background: #000000ba;
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 540px;
-            background: #161b22;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: #30363d;
-
-            VerticalLayout {
-                padding: 22px;
-                spacing: 16px;
-
-                // 标题栏
-                HorizontalLayout {
-                    alignment: space-between;
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: center;
-                        Rectangle {
-                            width: 34px;
-                            height: 34px;
-                            border-radius: 8px;
-                            background: #6366f1;
-                            Text {
-                                text: "🎙️";
-                                font-size: 16px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
-                        }
-                        VerticalLayout {
-                            spacing: 2px;
-                            Text { text: "发起即时会议与讨论"; font-size: 16px; font-weight: 800; color: #f0f6fc; }
-                            Text { text: "沟通工时独立计时 · 录音直写本地 · 自动提炼纪要"; font-size: 11px; color: #8b949e; }
-                        }
-                    }
-                    TouchArea {
-                        width: 28px;
-                        height: 28px;
-                        mouse-cursor: pointer;
-                        clicked => { root.show-meeting-modal = false; }
-                        Rectangle {
-                            width: 28px;
-                            height: 28px;
-                            border-radius: 6px;
-                            background: #21262d;
-                            Text {
-                                text: "✕";
-                                font-size: 12px;
-                                font-weight: 700;
-                                color: #8b949e;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
-                        }
-                    }
-                }
-
-                // 表单区
-                Text { text: "关联客户项目"; font-size: 13px; font-weight: 700; color: #f0f6fc; }
-                ScrollView {
-                    height: 110px;
-                    VerticalLayout {
-                        padding: 2px;
-                        spacing: 6px;
-                        Rectangle {
-                            height: 34px;
-                            background: root.meeting-selected-proj-idx == -1 ? #1f242c : #0d1117;
-                            border-radius: 6px;
-                            border-width: 1px;
-                            border-color: root.meeting-selected-proj-idx == -1 ? #6366f1 : #21262d;
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.select-meeting-project(-1); }
-                            }
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                alignment: space-between;
-                                Text {
-                                    text: "⚡ 独立临时会议 (单独立项 · 不计入客户)";
-                                    font-size: 12px;
-                                    font-weight: root.meeting-selected-proj-idx == -1 ? 700 : 500;
-                                    color: root.meeting-selected-proj-idx == -1 ? #ffffff : #c9d1d9;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: root.meeting-selected-proj-idx == -1 ? "✓ 已选" : "选择";
-                                    font-size: 11px;
-                                    color: root.meeting-selected-proj-idx == -1 ? #818cf8 : #6e7681;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        for p[idx] in root.projects : Rectangle {
-                            height: 34px;
-                            background: root.meeting-selected-proj-idx == idx ? #1f242c : #0d1117;
-                            border-radius: 6px;
-                            border-width: 1px;
-                            border-color: root.meeting-selected-proj-idx == idx ? #6366f1 : #21262d;
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.select-meeting-project(idx); }
-                            }
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                alignment: space-between;
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: center;
-                                    Text {
-                                        text: "📁 " + p.name;
-                                        font-size: 12px;
-                                        font-weight: root.meeting-selected-proj-idx == idx ? 700 : 500;
-                                        color: root.meeting-selected-proj-idx == idx ? #ffffff : #c9d1d9;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: "[" + p.client + "]";
-                                        font-size: 10px;
-                                        color: #6e7681;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                Text {
-                                    text: root.meeting-selected-proj-idx == idx ? "✓ 已选" : "选择";
-                                    font-size: 11px;
-                                    color: root.meeting-selected-proj-idx == idx ? #818cf8 : #6e7681;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text { text: "会议/讨论议题"; font-size: 13px; font-weight: 700; color: #f0f6fc; }
-                DarkInput {
-                    placeholder: "例如：商业客户需求沟通与技术方案评审";
-                    text <=> root.meeting-topic-input;
-                }
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    ChipButton {
-                        text: "架构方案评审";
-                        clicked => { root.meeting-topic-input = "技术架构方案与接口评审会"; }
-                    }
-                    ChipButton {
-                        text: "客户需求对接";
-                        clicked => { root.meeting-topic-input = "商业客户需求与排期沟通会"; }
-                    }
-                    ChipButton {
-                        text: "敏捷迭代站会";
-                        clicked => { root.meeting-topic-input = "项目日常敏捷对齐与进度同步"; }
-                    }
-                    ChipButton {
-                        text: "紧急故障排查";
-                        clicked => { root.meeting-topic-input = "线上紧急故障排查与复盘分析"; }
-                    }
-                }
-
-                Rectangle {
-                    height: 44px;
-                    background: #0d1117;
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: #21262d;
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.meeting-record-audio = !root.meeting-record-audio; }
-                    }
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        alignment: space-between;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: center;
-                            Text { text: "🎙️"; font-size: 14px; vertical-alignment: center; }
-                            Text { text: "同步开启麦克风无损录音 (驱动 AI 纪要)"; font-size: 12px; font-weight: 600; color: #f0f6fc; vertical-alignment: center; }
-                        }
-                        Text {
-                            text: root.meeting-record-audio ? "● 录音开启中" : "○ 已关闭";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: root.meeting-record-audio ? #3fb950 : #6e7681;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-                    PrimaryButton {
-                        text: root.meeting-record-audio ? "▶ 启动会议计时并录音" : "▶ 启动会议计时";
-                        bg-color: #6366f1;
-                        hover-color: #4f46e5;
-                        custom-height: 38px;
-                        clicked => {
-                            root.start-quick-meeting(root.meeting-selected-proj-idx, root.meeting-topic-input, root.meeting-rate-input, root.meeting-record-audio);
-                        }
-                    }
-                    OutlineButton {
-                        text: "取消返回";
-                        custom-height: 38px;
-                        clicked => { root.show-meeting-modal = false; }
-                    }
-                }
-            }
-        }
-    }
-
-    // ==================== 独立居中 Modal 2: 新建项目弹窗 ====================
-    if root.show-new-project-modal : Rectangle {
-        x: 0;
-        y: 0;
-        width: parent.width;
-        height: parent.height;
-        background: #000000ba;
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 500px;
-            background: #161b22;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: #30363d;
-
-            VerticalLayout {
-                padding: 22px;
-                spacing: 14px;
-
-                HorizontalLayout {
-                    alignment: space-between;
-                    Text { text: "➕ 创建新的商业项目"; font-size: 16px; font-weight: 800; color: #f0f6fc; }
-                    TouchArea {
-                        width: 24px;
-                        height: 24px;
-                        mouse-cursor: pointer;
-                        clicked => { root.show-new-project-modal = false; }
-                        Text { text: "✕"; font-size: 14px; color: #8b949e; vertical-alignment: center; }
-                    }
-                }
-
-                Text { text: "项目名称 (必填)"; font-size: 12px; color: #8b949e; }
-                DarkInput { placeholder: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
-
-                Text { text: "客户/组织名称"; font-size: 12px; color: #8b949e; }
-                DarkInput { placeholder: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
-
-                HorizontalLayout {
-                    spacing: 12px;
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text { text: "人天单价 (元/天)"; font-size: 12px; color: #8b949e; }
-                        DarkInput { placeholder: "3000"; text <=> root.new-proj-rate; }
-                    }
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text { text: "结算币种"; font-size: 12px; color: #8b949e; }
-                        DarkInput { placeholder: "CNY"; text <=> root.new-proj-currency; }
-                    }
-                }
-
-                Text { text: "本地 Git 仓库路径 (可选)"; font-size: 12px; color: #8b949e; }
-                DarkInput { placeholder: "/home/beatle/dev/my-project"; text <=> root.new-proj-git; }
-
-                HorizontalLayout {
-                    spacing: 10px;
-                    PrimaryButton {
-                        text: "保存并创建项目";
-                        bg-color: #238636;
-                        hover-color: #2ea043;
-                        custom-height: 36px;
-                        clicked => { root.submit-new-project(); }
-                    }
-                    OutlineButton {
-                        text: "取消返回";
-                        custom-height: 36px;
-                        clicked => { root.show-new-project-modal = false; }
-                    }
-                }
-            }
-        }
-    }
-
-    // ==================== 独立居中 Modal 3: AFK校准弹窗 ====================
-    if root.show-afk-modal : Rectangle {
-        x: 0;
-        y: 0;
-        width: parent.width;
-        height: parent.height;
-        background: #000000ba;
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 500px;
-            background: #161b22;
-            border-radius: 16px;
-            border-width: 1px;
-            border-color: #30363d;
-
-            VerticalLayout {
-                padding: 22px;
-                spacing: 14px;
-
-                HorizontalLayout {
-                    alignment: space-between;
-                    Text { text: "⚡ AFK 离开工时校准"; font-size: 16px; font-weight: 800; color: #f0f6fc; }
-                    TouchArea {
-                        width: 24px;
-                        height: 24px;
-                        mouse-cursor: pointer;
-                        clicked => { root.show-afk-modal = false; }
-                        Text { text: "✕"; font-size: 14px; color: #8b949e; vertical-alignment: center; }
-                    }
-                }
-
-                Text {
-                    text: "检测到您离开键盘超过设定阈值。系统已自动保护并发计时通道，请确认是否扣除该段离开工时：";
-                    font-size: 12px;
-                    color: #8b949e;
-                }
-
-                ScrollView {
-                    height: 180px;
-                    VerticalLayout {
-                        padding: 2px;
-                        spacing: 8px;
-                        for a in root.afk-items : Rectangle {
-                            background: #0d1117;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: #21262d;
-                            HorizontalLayout {
-                                padding: 10px;
-                                alignment: space-between;
-                                VerticalLayout {
-                                    Text { text: a.project-name; font-size: 13px; font-weight: 700; color: #f0f6fc; }
-                                    Text { text: "当前累计: " + a.elapsed-text; font-size: 11px; color: #8b949e; }
-                                }
-                                Text { text: "建议扣除"; font-size: 11px; color: #d29922; vertical-alignment: center; }
-                            }
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-                    PrimaryButton {
-                        text: "全部扣除离开时间";
-                        bg-color: #d29922;
-                        hover-color: #bb8009;
-                        custom-height: 36px;
-                        clicked => { root.apply-afk-resolution(true); }
-                    }
-                    OutlineButton {
-                        text: "全部保留有效投入";
-                        custom-height: 36px;
-                        clicked => { root.apply-afk-resolution(false); }
-                    }
-                }
-            }
-        }
-    }
-
-    // 底部 Toast 提示
-    if root.toast-message != "" : Rectangle {
+    // ==================== 底部 Toast 提示 (无弹窗时显示，绝不遮挡弹窗) ====================
+    if root.toast-message != "" && !root.show-meeting-modal && !root.show-new-project-modal && !root.show-afk-modal : Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height - 52px;
+        y: parent.height - 48px;
         height: 36px;
         background: #0f2417;
         border-radius: 18px;
@@ -1512,6 +1131,523 @@ export component MainWindow inherits Window {
                 mouse-cursor: pointer;
                 clicked => { root.toast-message = ""; }
                 Text { text: "✕"; font-size: 11px; color: #8b949e; vertical-alignment: center; }
+            }
+        }
+    }
+
+    // ==================== 独立居中 Modal 1: 发起会议弹窗 ====================
+    if root.show-meeting-modal : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #000000ca;
+
+        // 点击半透明遮罩背景即可快速关闭弹窗
+        TouchArea {
+            clicked => { root.show-meeting-modal = false; }
+        }
+
+        // 居中卡片本体 (固定高度与布局，Header/Footer 永不裁切)
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 530px;
+            height: 450px;
+            background: #161b22;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #30363d;
+
+            // 拦截卡片内部点击，防止误触发背景关闭
+            TouchArea {}
+
+            VerticalLayout {
+                // 1. 顶部 Header (固定 46px)
+                HorizontalLayout {
+                    height: 46px;
+                    padding-left: 18px;
+                    padding-right: 16px;
+                    alignment: space-between;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 8px;
+                            background: #6366f1;
+                            Text {
+                                text: "🎙️";
+                                font-size: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: "发起即时会议与讨论"; font-size: 15px; font-weight: 800; color: #f0f6fc; }
+                            Text { text: "独立计时通道 · 录音直写本地 · 自动提炼AI纪要"; font-size: 11px; color: #8b949e; }
+                        }
+                    }
+
+                    TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => { root.show-meeting-modal = false; }
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: parent.has-hover ? #30363d : #21262d;
+                            Text {
+                                text: "✕";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: #8b949e;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                // 顶部分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // 2. 表单核心内容区
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    spacing: 8px;
+
+                    // 关联客户项目
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text { text: "关联客户项目"; font-size: 12px; font-weight: 700; color: #c9d1d9; }
+                        Text { text: "临时会议单独立项，不计入既有项目"; font-size: 11px; color: #6e7681; }
+                    }
+
+                    ScrollView {
+                        height: 80px;
+                        VerticalLayout {
+                            padding: 2px;
+                            spacing: 5px;
+
+                            // 临时会议
+                            Rectangle {
+                                height: 32px;
+                                background: root.meeting-selected-proj-idx == -1 ? #1f242c : #0d1117;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: root.meeting-selected-proj-idx == -1 ? #6366f1 : #21262d;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.select-meeting-project(-1); }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    alignment: space-between;
+                                    Text {
+                                        text: "⚡ 独立临时会议 (单独立项 · 不计入客户)";
+                                        font-size: 12px;
+                                        font-weight: root.meeting-selected-proj-idx == -1 ? 700 : 500;
+                                        color: root.meeting-selected-proj-idx == -1 ? #ffffff : #c9d1d9;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.meeting-selected-proj-idx == -1 ? "✓ 已选" : "选择";
+                                        font-size: 11px;
+                                        color: root.meeting-selected-proj-idx == -1 ? #818cf8 : #6e7681;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // 客户项目列表
+                            for p[idx] in root.projects : Rectangle {
+                                height: 32px;
+                                background: root.meeting-selected-proj-idx == idx ? #1f242c : #0d1117;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: root.meeting-selected-proj-idx == idx ? #6366f1 : #21262d;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.select-meeting-project(idx); }
+                                }
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    alignment: space-between;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: center;
+                                        Text {
+                                            text: "📁 " + p.name;
+                                            font-size: 12px;
+                                            font-weight: root.meeting-selected-proj-idx == idx ? 700 : 500;
+                                            color: root.meeting-selected-proj-idx == idx ? #ffffff : #c9d1d9;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: "[" + p.client + "]";
+                                            font-size: 10px;
+                                            color: #6e7681;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Text {
+                                        text: root.meeting-selected-proj-idx == idx ? "✓ 已选" : "选择";
+                                        font-size: 11px;
+                                        color: root.meeting-selected-proj-idx == idx ? #818cf8 : #6e7681;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 议题
+                    Text { text: "会议/讨论议题"; font-size: 12px; font-weight: 700; color: #c9d1d9; }
+                    DarkInput {
+                        custom-height: 32px;
+                        placeholder: "例如：商业客户需求沟通与技术方案评审";
+                        text <=> root.meeting-topic-input;
+                    }
+
+                    // 快速标签 Chips
+                    HorizontalLayout {
+                        spacing: 6px;
+                        ChipButton {
+                            text: "架构方案评审";
+                            clicked => { root.meeting-topic-input = "技术架构方案与接口评审会"; }
+                        }
+                        ChipButton {
+                            text: "客户需求对接";
+                            clicked => { root.meeting-topic-input = "商业客户需求与排期沟通会"; }
+                        }
+                        ChipButton {
+                            text: "敏捷迭代站会";
+                            clicked => { root.meeting-topic-input = "项目日常敏捷对齐与进度同步"; }
+                        }
+                        ChipButton {
+                            text: "紧急故障排查";
+                            clicked => { root.meeting-topic-input = "线上紧急故障排查与复盘分析"; }
+                        }
+                    }
+
+                    // 录音开关
+                    Rectangle {
+                        height: 38px;
+                        background: #0d1117;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: root.meeting-record-audio ? #6366f1 : #21262d;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.meeting-record-audio = !root.meeting-record-audio; }
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            alignment: space-between;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Text { text: "🎙️"; font-size: 14px; vertical-alignment: center; }
+                                Text { text: "同步开启麦克风无损录音 (驱动 AI 纪要)"; font-size: 12px; font-weight: 600; color: #f0f6fc; vertical-alignment: center; }
+                            }
+                            Text {
+                                text: root.meeting-record-audio ? "● 录音开启中" : "○ 已关闭";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: root.meeting-record-audio ? #3fb950 : #6e7681;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // 底部分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // 3. 底部操作栏 (固定 48px，永远绝不裁切)
+                HorizontalLayout {
+                    height: 48px;
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    alignment: end;
+                    spacing: 10px;
+
+                    OutlineButton {
+                        text: "取消";
+                        custom-height: 32px;
+                        clicked => { root.show-meeting-modal = false; }
+                    }
+                    PrimaryButton {
+                        text: root.meeting-record-audio ? "🎙️ 启动会议计时并录音" : "▶ 启动会议计时";
+                        bg-color: #6366f1;
+                        hover-color: #4f46e5;
+                        custom-height: 32px;
+                        clicked => {
+                            root.start-quick-meeting(root.meeting-selected-proj-idx, root.meeting-topic-input, root.meeting-rate-input, root.meeting-record-audio);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==================== 独立居中 Modal 2: 新建项目弹窗 ====================
+    if root.show-new-project-modal : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #000000ca;
+
+        // 点击遮罩空白关闭弹窗
+        TouchArea {
+            clicked => { root.show-new-project-modal = false; }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 490px;
+            height: 390px;
+            background: #161b22;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #30363d;
+
+            // 拦截卡片内部点击
+            TouchArea {}
+
+            VerticalLayout {
+                // Header (46px)
+                HorizontalLayout {
+                    height: 46px;
+                    padding-left: 18px;
+                    padding-right: 16px;
+                    alignment: space-between;
+                    Text { text: "➕ 创建新的商业项目"; font-size: 15px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
+                    TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => { root.show-new-project-modal = false; }
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: parent.has-hover ? #30363d : #21262d;
+                            Text {
+                                text: "✕";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: #8b949e;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                // 分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // Form Body
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 8px;
+
+                    Text { text: "项目名称 (必填)"; font-size: 11px; color: #8b949e; }
+                    DarkInput { custom-height: 30px; placeholder: "例如：客户A 跨境商城二次重构"; text <=> root.new-proj-name; }
+
+                    Text { text: "客户/组织名称"; font-size: 11px; color: #8b949e; }
+                    DarkInput { custom-height: 30px; placeholder: "例如：张总 / 某某科技有限公司"; text <=> root.new-proj-client; }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "人天单价 (元/天)"; font-size: 11px; color: #8b949e; }
+                            DarkInput { custom-height: 30px; placeholder: "3000"; text <=> root.new-proj-rate; }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "结算币种"; font-size: 11px; color: #8b949e; }
+                            DarkInput { custom-height: 30px; placeholder: "CNY"; text <=> root.new-proj-currency; }
+                        }
+                    }
+
+                    Text { text: "本地 Git 仓库路径 (可选)"; font-size: 11px; color: #8b949e; }
+                    DarkInput { custom-height: 30px; placeholder: "/home/beatle/dev/my-project"; text <=> root.new-proj-git; }
+                }
+
+                // 分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // Footer (48px)
+                HorizontalLayout {
+                    height: 48px;
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    alignment: end;
+                    spacing: 10px;
+
+                    OutlineButton {
+                        text: "取消";
+                        custom-height: 32px;
+                        clicked => { root.show-new-project-modal = false; }
+                    }
+                    PrimaryButton {
+                        text: "➕ 保存并创建项目";
+                        bg-color: #238636;
+                        hover-color: #2ea043;
+                        custom-height: 32px;
+                        clicked => { root.submit-new-project(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==================== 独立居中 Modal 3: AFK校准弹窗 ====================
+    if root.show-afk-modal : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #000000ca;
+
+        // 点击遮罩空白关闭弹窗
+        TouchArea {
+            clicked => { root.show-afk-modal = false; }
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 490px;
+            height: 380px;
+            background: #161b22;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #30363d;
+
+            // 拦截卡片内部点击
+            TouchArea {}
+
+            VerticalLayout {
+                // Header (46px)
+                HorizontalLayout {
+                    height: 46px;
+                    padding-left: 18px;
+                    padding-right: 16px;
+                    alignment: space-between;
+                    Text { text: "⚡ AFK 离开工时校准"; font-size: 15px; font-weight: 800; color: #f0f6fc; vertical-alignment: center; }
+                    TouchArea {
+                        width: 28px;
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => { root.show-afk-modal = false; }
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: parent.has-hover ? #30363d : #21262d;
+                            Text {
+                                text: "✕";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: #8b949e;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+                    }
+                }
+
+                // 分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // Content Body
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "检测到您离开键盘超过设定阈值。系统已自动保护并发计时通道，请确认是否扣除离开工时：";
+                        font-size: 12px;
+                        color: #8b949e;
+                    }
+
+                    ScrollView {
+                        height: 150px;
+                        VerticalLayout {
+                            padding: 2px;
+                            spacing: 6px;
+                            for a in root.afk-items : Rectangle {
+                                height: 42px;
+                                background: #0d1117;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: #21262d;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    alignment: space-between;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 2px;
+                                        Text { text: a.project-name; font-size: 12px; font-weight: 700; color: #f0f6fc; }
+                                        Text { text: "当前累计: " + a.elapsed-text; font-size: 11px; color: #8b949e; }
+                                    }
+                                    Text { text: "建议扣除"; font-size: 11px; color: #d29922; vertical-alignment: center; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 分割线
+                Rectangle { height: 1px; background: #21262d; }
+
+                // Footer (48px)
+                HorizontalLayout {
+                    height: 48px;
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    alignment: end;
+                    spacing: 10px;
+
+                    OutlineButton {
+                        text: "全部保留有效投入";
+                        custom-height: 32px;
+                        clicked => { root.apply-afk-resolution(false); }
+                    }
+                    PrimaryButton {
+                        text: "全部扣除离开时间";
+                        bg-color: #d29922;
+                        hover-color: #bb8009;
+                        custom-height: 32px;
+                        clicked => { root.apply-afk-resolution(true); }
+                    }
+                }
             }
         }
     }
