@@ -1,0 +1,17 @@
+[package]
+name = "myth-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "AI work report and delivery summarizer pipeline for MythManDay."
+
+[dependencies]
+myth-core = { path = "../myth-core" }
+myth-git = { path = "../myth-git" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }

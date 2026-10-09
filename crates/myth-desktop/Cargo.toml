@@ -1,0 +1,26 @@
+[package]
+name = "myth-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Native Slint desktop host for MythManDay."
+
+[dependencies]
+myth-core = { path = "../myth-core" }
+myth-db = { path = "../myth-db" }
+myth-git = { path = "../myth-git" }
+myth-ai = { path = "../myth-ai" }
+myth-audio = { path = "../myth-audio" }
+slint = "1.9"
+arboard = "3.4"
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[build-dependencies]
+slint-build = "1.9"

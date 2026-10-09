@@ -1,22 +1,21 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/paraday-core",
-    "crates/paraday-db",
-    "crates/paraday-git",
-    "crates/paraday-ai",
-    "crates/paraday-audio",
-    "crates/paraday-desktop",
+    "crates/myth-core",
+    "crates/myth-db",
+    "crates/myth-git",
+    "crates/myth-ai",
+    "crates/myth-audio",
+    "crates/myth-desktop",
+    "crates/myth-app",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["ParaDay Authors <authors@paraday.dev>"]
+authors = ["MythManDay Authors <support@mythmanday.com>"]
 license = "MIT"
-repository = "https://github.com/paraday-dev/paraday"
-homepage = "https://paraday.dev"
-description = "Parallel multi-channel time tracker & man-day billing desktop engine for developers."
+description = "人天神话-开发者人天中台 (MythManDay) 桌面引擎"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

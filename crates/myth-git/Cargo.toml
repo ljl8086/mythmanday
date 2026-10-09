@@ -1,0 +1,13 @@
+[package]
+name = "myth-git"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Git repository activity scanner and diff extractor for MythManDay."
+
+[dependencies]
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "mythmanday-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mythmanday-app"
+path = "src/main.rs"
+
+[dependencies]
+myth-core = { path = "../myth-core" }
+myth-db = { path = "../myth-db" }
+myth-git = { path = "../myth-git" }
+myth-ai = { path = "../myth-ai" }
+myth-audio = { path = "../myth-audio" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+tauri = { version = "2.2.0", features = ["tray-icon"] }
+tauri-plugin-shell = "2.2.0"
+
+[build-dependencies]
+tauri-build = { version = "2.2.0", features = [] }
