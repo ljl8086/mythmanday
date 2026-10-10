@@ -10,7 +10,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="mythmanday-app"
 APP_NAME="MythManDay"
 APP_TITLE="人天神话-开发者人天中台 (MythManDay)"
-VERSION="1.0.0"
+VERSION="0.1.0"
 
 INSTALL_PREFIX="${HOME}/.local"
 BIN_INSTALL_DIR="${INSTALL_PREFIX}/bin"

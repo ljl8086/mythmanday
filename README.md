@@ -2,7 +2,7 @@
 
 **中文文档** | [**English Documentation**](README_EN.md)
 
-> **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] V1.0  
+> **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] v0.1.0 (Early Access)  
 > **A local-first, multi-channel time tracking and contract billing platform tailored for modern AI-assisted software development.**  
 > 专为现代开发者打造的高性能多通道并发工时、智能商业计费与人天对账结算桌面中台。
 
@@ -142,6 +142,6 @@ cargo build --release --bin mythmanday-app
 
 ## 📜 著作权与开源许可
 
-- **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] V1.0
+- **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] v0.1.0 (Early Access)
 - **版权所有**：Copyright (c) 2026 ljl8086 and MythManDay Authors.
 - **开源协议**：本项目基于 [MIT 许可证](LICENSE) 授权开源。
