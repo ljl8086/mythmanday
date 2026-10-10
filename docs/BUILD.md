@@ -90,7 +90,7 @@ sudo pacman -S --needed \
 chmod +x ./install.sh
 ./install.sh
 ```
-- **安装位置**：`~/.local/bin/paraday-app`
+- **安装位置**：`~/.local/bin/mythmanday-app`
 - **命令行快捷入口**：`mythmanday`
 - **桌面应用快捷方式**：自动写入 `~/.local/share/applications/mythmanday.desktop`，可直接在应用启动台搜索图标启动。
 - **一键卸载**：运行 `./uninstall.sh`。
@@ -138,12 +138,12 @@ pnpm build
 cd ..
 
 # 2. 编译并运行 Debug 版
-cargo run --bin paraday-app
+cargo run --bin mythmanday-app
 
 # 3. 编译独立的 Release 二进制
-cargo build --release --bin paraday-app
+cargo build --release --bin mythmanday-app
 ```
-编译产物位于：`target\release\paraday-app.exe`。双击即可独立运行。
+编译产物位于：`target\release\mythmanday-app.exe`。双击即可独立运行。
 
 ### 生成 Windows 安装包 (.exe / .msi)
 使用 Tauri CLI 一键打包：
@@ -184,10 +184,10 @@ pnpm build
 cd ..
 
 # 2. 本地调试运行
-cargo run --bin paraday-app
+cargo run --bin mythmanday-app
 
 # 3. 编译独立的 Release 产物
-cargo build --release --bin paraday-app
+cargo build --release --bin mythmanday-app
 ```
 
 ### 生成 macOS 安装包 (.dmg / .app)
@@ -288,6 +288,6 @@ jobs:
 2. **Windows 无法麦克风录音**：
    检查系统设置中的“麦克风隐私权限”，确保允许桌面应用访问麦克风。
 3. **数据文件存储在哪里？**
-   - **Linux**: `~/.local/share/paraday/paraday.db`
-   - **Windows**: `C:\Users\<用户名>\AppData\Local\paraday\paraday.db`
-   - **macOS**: `~/Library/Application Support/paraday/paraday.db`
+   - **Linux**: `~/.config/mythmanday/mythmanday.db`
+   - **Windows**: `C:\Users\<用户名>\AppData\Roaming\mythmanday\mythmanday.db`
+   - **macOS**: `~/Library/Application Support/mythmanday/mythmanday.db`

@@ -1,0 +1,37 @@
+name: Rust & Frontend CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node & pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+      - name: Frontend build check
+        run: |
+          cd frontend
+          pnpm install
+          pnpm build
+
+      - name: Rust cargo check & unit tests
+        run: |
+          cargo check --workspace
+          cargo test -p myth-core -p myth-db
