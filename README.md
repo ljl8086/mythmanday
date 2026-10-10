@@ -143,4 +143,5 @@ cargo build --release --bin mythmanday-app
 ## 📜 著作权与开源许可
 
 - **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] V1.0
+- **版权所有**：Copyright (c) 2026 ljl8086 and MythManDay Authors.
 - **开源协议**：本项目基于 [MIT 许可证](LICENSE) 授权开源。
