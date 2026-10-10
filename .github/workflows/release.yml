@@ -1,0 +1,53 @@
+name: Release Multi-Platform Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-linux:
+    name: Build Linux .deb & tar.gz
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node & pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          pnpm install
+          pnpm build
+
+      - name: Build Release Binary
+        run: |
+          cargo build --release --bin mythmanday-app
+
+      - name: Package .deb & tar.gz
+        run: |
+          chmod +x ./scripts/build-deb.sh
+          ./scripts/build-deb.sh
+          tar -czf dist/mythmanday_${{ github.ref_name }}_linux_x86_64.tar.gz -C target/release mythmanday-app
+          cd dist && sha256sum *.deb *.tar.gz > SHA256SUMS.txt
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
