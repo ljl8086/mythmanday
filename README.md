@@ -1,7 +1,9 @@
 # 人天神话-开发者人天中台 (MythManDay)
 
+**中文文档** | [**English Documentation**](README_EN.md)
+
 > **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] V1.0  
-> **Parallel multi-channel time tracker & man-day billing desktop platform for modern developers.**  
+> **A local-first, multi-channel time tracking and contract billing platform tailored for modern AI-assisted software development.**  
 > 专为现代开发者打造的高性能多通道并发工时、智能商业计费与人天对账结算桌面中台。
 
 ---
