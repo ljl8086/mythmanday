@@ -9,6 +9,8 @@ jobs:
   release-linux:
     name: Build Linux .deb & tar.gz
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
