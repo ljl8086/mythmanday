@@ -105,10 +105,10 @@ chmod +x ./install.sh
 chmod +x ./scripts/build-deb.sh
 ./scripts/build-deb.sh
 ```
-- **生成产物**：`dist/mythmanday_1.0.0_amd64.deb`
+- **生成产物**：`dist/mythmanday_0.1.0_amd64.deb`
 - **目标机安装**：
   ```bash
-  sudo dpkg -i mythmanday_1.0.0_amd64.deb
+  sudo dpkg -i mythmanday_0.1.0_amd64.deb
   ```
 
 ---
@@ -152,8 +152,8 @@ cd frontend
 pnpm tauri build
 ```
 打包成功后，将在 `target\release\bundle\msi\` 和 `nsis\` 目录下生成：
-- `MythManDay_1.0.0_x64-setup.exe` (NSIS 安装向导)
-- `MythManDay_1.0.0_x64_en-US.msi` (MSI 安装包)
+- `MythManDay_0.1.0_x64-setup.exe` (NSIS 安装向导)
+- `MythManDay_0.1.0_x64_en-US.msi` (MSI 安装包)
 
 ---
 
@@ -197,7 +197,7 @@ cd frontend
 pnpm tauri build --bundles dmg,app
 ```
 打包成功后，在 `target/release/bundle/dmg/` 目录下将生成：
-- **`MythManDay_1.0.0_aarch64.dmg`** (Apple Silicon) 或 **`x64.dmg`** (Intel)
+- **`MythManDay_0.1.0_aarch64.dmg`** (Apple Silicon) 或 **`x64.dmg`** (Intel)
 - 用户双击挂载后，直接将应用拖拽到 `Applications` 目录即可完成安装。
 
 > **提示（通用二进制 Universal Binary）**：

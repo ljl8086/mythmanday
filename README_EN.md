@@ -107,7 +107,7 @@ chmod +x ./install.sh && ./install.sh
 #### 📦 Linux (.deb Package)
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
-# Install: sudo dpkg -i dist/mythmanday_1.0.0_amd64.deb
+# Install: sudo dpkg -i dist/mythmanday_0.1.0_amd64.deb
 ```
 
 #### 🪟 Windows (.exe / .msi)

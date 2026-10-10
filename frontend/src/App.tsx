@@ -144,7 +144,7 @@ export function App() {
   const [exportSelectedMonths, setExportSelectedMonths] = useState<string[]>([currentMonthStr]);
   const [exportIncludeAmount, setExportIncludeAmount] = useState<boolean>(true); // 是否在 Excel 中导出金额
   const [hideAmount, setHideAmount] = useState<boolean>(() => {
-    return localStorage.getItem("mythmanday_hide_amount") === "true" || localStorage.getItem("paraday_hide_amount") === "true";
+    return localStorage.getItem("mythmanday_hide_amount") === "true";
   }); // 全局隐藏金额模式
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<Entry | null>(null);

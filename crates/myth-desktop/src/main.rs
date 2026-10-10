@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. 初始化本地持久化数据库
     let db_dir = dirs_or_local_data_dir();
     std::fs::create_dir_all(&db_dir)?;
-    let db_path = db_dir.join("paraday.db");
+    let db_path = db_dir.join("mythmanday.db");
     let db = Arc::new(Database::open(&db_path)?);
 
     // 初始化引导项目（包含代码开发与会议/沟通）
@@ -1481,7 +1481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn dirs_or_local_data_dir() -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("paraday")
+        std::path::PathBuf::from(home).join(".config").join("mythmanday")
     } else {
         std::path::PathBuf::from("./data")
     }

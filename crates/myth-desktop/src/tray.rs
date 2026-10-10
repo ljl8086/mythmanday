@@ -20,7 +20,7 @@ pub struct MythManDayTray {
 
 impl Tray for MythManDayTray {
     fn id(&self) -> String {
-        "paraday-time-tracker".into()
+        "mythmanday-time-tracker".into()
     }
 
     fn title(&self) -> String {
@@ -32,7 +32,7 @@ impl Tray for MythManDayTray {
     }
 
     fn icon_name(&self) -> String {
-        "paraday".into()
+        "mythmanday".into()
     }
 
     fn icon_theme_path(&self) -> String {

@@ -109,7 +109,7 @@ chmod +x ./install.sh && ./install.sh
 #### 📦 Linux 制作 .deb 安装包 (生成于 dist 目录)
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
-# 安装: sudo dpkg -i dist/mythmanday_1.0.0_amd64.deb
+# 安装: sudo dpkg -i dist/mythmanday_0.1.0_amd64.deb
 ```
 
 #### 🪟 Windows 编译与打包

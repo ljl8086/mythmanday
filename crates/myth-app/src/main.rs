@@ -1349,17 +1349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_dir = dirs_or_local_data_dir();
     std::fs::create_dir_all(&db_dir)?;
 
-    // 平滑兼容：若旧目录存在 paraday.db，自动平迁或复用
-    let legacy_db = if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("paraday").join("paraday.db")
-    } else {
-        std::path::PathBuf::from("./data/paraday.db")
-    };
     let db_path = db_dir.join("mythmanday.db");
-    if !db_path.exists() && legacy_db.exists() {
-        let _ = std::fs::copy(&legacy_db, &db_path);
-    }
-
     let db = Arc::new(Mutex::new(Database::open(&db_path)?));
 
     let timer_manager = Arc::new(Mutex::new(MultiChannelManager::new()));
