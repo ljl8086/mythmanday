@@ -6,6 +6,8 @@
 > **A local-first, multi-channel time tracking and contract billing platform tailored for modern AI-assisted software development.**  
 > 专为现代开发者打造的高性能多通道并发工时、智能商业计费与人天对账结算桌面中台。
 
+![MythManDay Dashboard](docs/images/dashboard_preview.png)
+
 ---
 
 ## 💡 为什么需要「人天神话 (MythManDay)」？

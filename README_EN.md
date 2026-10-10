@@ -4,6 +4,8 @@
 
 > **A local-first, multi-channel time tracking and contract billing platform tailored for modern AI-assisted software development.**
 
+![MythManDay Dashboard](docs/images/dashboard_preview.png)
+
 ---
 
 ## 💡 Why MythManDay?
