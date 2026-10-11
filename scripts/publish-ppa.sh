@@ -42,7 +42,7 @@ rm -rf "${PPA_WORK_ROOT}"
 mkdir -p "${PPA_WORK_ROOT}"
 
 # 2. 针对每个 Ubuntu 发行版生成 Debian Source Package 并上传
-PPA_REV="${PPA_REV:-2}"
+PPA_REV="${PPA_REV:-1}"
 PPA_OWNER_PATH=$(echo "${PPA_TARGET}" | sed -E 's|^ppa:([^/]+)/(.+)$|~\1/+archive/ubuntu/\2|')
 for SERIES in ${UBUNTU_SERIES}; do
   DEB_VERSION="${VERSION}~${SERIES}${PPA_REV}"
