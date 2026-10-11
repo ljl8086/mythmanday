@@ -165,6 +165,6 @@ cargo build --release --bin mythmanday-app
 ## 📄 License & Intellectual Property
 
 - **Official Name**: 人天神话-开发者人天中台 (MythManDay)
-- **Copyright**: Copyright (c) 2026 ljl8086 <ljl8086@126.com>. All Rights Reserved.
+- **Copyright**: Copyright (c) 2026 ljl8086 <ljl8086@gmail.com>. All Rights Reserved.
 - **License**: Released under the [MIT License](LICENSE).
 - **Contributing**: Please review [CONTRIBUTING.md](CONTRIBUTING.md) before submitting pull requests.

@@ -52,7 +52,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Maintainer: ljl8086 <ljl8086@126.com>
+Maintainer: ljl8086 <ljl8086@gmail.com>
 Depends: libc6, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, libgtk-3-0
 Description: 人天神话-开发者人天中台 (MythManDay)
  开发者人天中台 · 多通道并发工时 · 录音与交付凭证一体化沉淀。

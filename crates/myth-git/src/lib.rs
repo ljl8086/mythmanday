@@ -1,4 +1,4 @@
-// Copyright (C) 2026 ljl8086 <ljl8086@126.com>. All Rights Reserved.
+// Copyright (C) 2026 ljl8086 <ljl8086@gmail.com>. All Rights Reserved.
 //
 // Software Name: 平行人天多项目工时管理与交付结算软件 (MythManDay)
 // Version: V1.0

@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["ljl8086 <ljl8086@126.com>"]
+authors = ["ljl8086 <ljl8086@gmail.com>"]
 license = "MIT"
 description = "人天神话-开发者人天中台 (MythManDay) 桌面引擎"
 
