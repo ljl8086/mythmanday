@@ -28,6 +28,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update

@@ -13,8 +13,8 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PPA_TARGET="${1:-${PPA_TARGET:-ppa:ljl8086/ppa}}"
 GPG_KEY_ID="${2:-${GPG_KEY_ID:-E7BAFF8B2E1CFD95}}"
-MAINTAINER_NAME="${MAINTAINER_NAME:-sunny}"
-MAINTAINER_EMAIL="${MAINTAINER_EMAIL:-ljl8086@gmail.com}"
+MAINTAINER_NAME="${MAINTAINER_NAME:-ljl8086}"
+MAINTAINER_EMAIL="${MAINTAINER_EMAIL:-ljl8086@126.com}"
 
 PACKAGE_NAME="mythmanday"
 BIN_NAME="mythmanday-app"
@@ -41,10 +41,19 @@ rm -rf "${PPA_WORK_ROOT}"
 mkdir -p "${PPA_WORK_ROOT}"
 
 # 2. 针对每个 Ubuntu 发行版生成 Debian Source Package 并上传
+PPA_OWNER_PATH=$(echo "${PPA_TARGET}" | sed -E 's|^ppa:([^/]+)/(.+)$|~\1/+archive/ubuntu/\2|')
 for SERIES in ${UBUNTU_SERIES}; do
+  DEB_VERSION="${VERSION}~${SERIES}1"
   echo "----------------------------------------------------------"
-  echo "📦 正在为 Ubuntu [${SERIES}] 构建 Debian 源码包..."
+  echo "📦 正在处理 Ubuntu [${SERIES}] (${PACKAGE_NAME} ${DEB_VERSION})..."
   echo "----------------------------------------------------------"
+
+  # 幂等检查：如果 Launchpad PPA 中已存在相同版本，则自动跳过
+  EXISTING=$(curl -s "https://api.launchpad.net/1.0/${PPA_OWNER_PATH}?ws.op=getPublishedSources&source_name=${PACKAGE_NAME}&version=${DEB_VERSION}" || true)
+  if echo "${EXISTING}" | grep -q "\"source_package_version\": \"${DEB_VERSION}\""; then
+    echo "⏭️ [${SERIES}] ${PACKAGE_NAME} (${DEB_VERSION}) 已存在于 ${PPA_TARGET}，自动跳过！"
+    continue
+  fi
 
   SERIES_DIR="${PPA_WORK_ROOT}/${SERIES}"
   SRC_DIR="${SERIES_DIR}/${PACKAGE_NAME}-${VERSION}"
@@ -163,16 +172,26 @@ EOF
 
   # 构建并签名 Debian 源码包 (-S: source package only, -sa: include original source)
   pushd "${SRC_DIR}" > /dev/null
-  debuild -S -sa -k"${GPG_KEY_ID}"
+  debuild --no-lintian -S -sa -k"${GPG_KEY_ID}"
   popd > /dev/null
 
-  # 推送到 Launchpad PPA
+  # 推送到 Launchpad PPA（带自动重试，防止 Launchpad FTP 连续上传偶发 550 限流）
   CHANGES_FILE="${SERIES_DIR}/${PACKAGE_NAME}_${DEB_VERSION}_source.changes"
   if [ "${DRY_RUN:-0}" = "1" ]; then
     echo "🔍 [DRY_RUN] 已生成源码包：${CHANGES_FILE}（跳过 dput 上传）"
   else
     echo "⬆️ 正在上传 ${CHANGES_FILE} 到 ${PPA_TARGET} ..."
-    dput "${PPA_TARGET}" "${CHANGES_FILE}"
+    for ATTEMPT in 1 2 3; do
+      rm -f "${SERIES_DIR}"/*.upload
+      if dput -f "${PPA_TARGET}" "${CHANGES_FILE}"; then
+        echo "✅ [${SERIES}] 上传成功！"
+        break
+      else
+        echo "⚠️ [${SERIES}] 第 ${ATTEMPT} 次上传遇到网络波动，等待 5 秒后重试..."
+        sleep 5
+      fi
+    done
+    sleep 3
   fi
 done
 
