@@ -62,12 +62,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to Ubuntu Launchpad PPA
-        if: ${{ secrets.PPA_GPG_PRIVATE_KEY != '' }}
         env:
           PPA_GPG_PRIVATE_KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY }}
           PPA_TARGET: ppa:ljl8086/ppa
           GPG_KEY_ID: E7BAFF8B2E1CFD95
         run: |
+          if [ -z "$PPA_GPG_PRIVATE_KEY" ]; then
+            echo "PPA_GPG_PRIVATE_KEY not configured, skipping PPA upload."
+            exit 0
+          fi
           sudo apt-get install -y devscripts debhelper dput gnupg
           echo "$PPA_GPG_PRIVATE_KEY" | gpg --batch --import
           echo "A53EFED13CF55A5B4E2DD368E7BAFF8B2E1CFD95:6:" | gpg --import-ownertrust
