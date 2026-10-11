@@ -13,8 +13,9 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PPA_TARGET="${1:-${PPA_TARGET:-ppa:ljl8086/ppa}}"
 GPG_KEY_ID="${2:-${GPG_KEY_ID:-E7BAFF8B2E1CFD95}}"
-MAINTAINER_NAME="${MAINTAINER_NAME:-ljl8086}"
-MAINTAINER_EMAIL="${MAINTAINER_EMAIL:-ljl8086@126.com}"
+# 注意：MAINTAINER_NAME 和 MAINTAINER_EMAIL 必须与 Launchpad 账号及 GPG 密钥的 UID 完全一致
+MAINTAINER_NAME="${MAINTAINER_NAME:-sunny}"
+MAINTAINER_EMAIL="${MAINTAINER_EMAIL:-ljl8086@gmail.com}"
 
 PACKAGE_NAME="mythmanday"
 BIN_NAME="mythmanday-app"
@@ -41,17 +42,18 @@ rm -rf "${PPA_WORK_ROOT}"
 mkdir -p "${PPA_WORK_ROOT}"
 
 # 2. 针对每个 Ubuntu 发行版生成 Debian Source Package 并上传
+PPA_REV="${PPA_REV:-2}"
 PPA_OWNER_PATH=$(echo "${PPA_TARGET}" | sed -E 's|^ppa:([^/]+)/(.+)$|~\1/+archive/ubuntu/\2|')
 for SERIES in ${UBUNTU_SERIES}; do
-  DEB_VERSION="${VERSION}~${SERIES}1"
+  DEB_VERSION="${VERSION}~${SERIES}${PPA_REV}"
   echo "----------------------------------------------------------"
   echo "📦 正在处理 Ubuntu [${SERIES}] (${PACKAGE_NAME} ${DEB_VERSION})..."
   echo "----------------------------------------------------------"
 
-  # 幂等检查：如果 Launchpad PPA 中已存在相同版本，则自动跳过
-  EXISTING=$(curl -s "https://api.launchpad.net/1.0/${PPA_OWNER_PATH}?ws.op=getPublishedSources&source_name=${PACKAGE_NAME}&version=${DEB_VERSION}" || true)
-  if echo "${EXISTING}" | grep -q "\"source_package_version\": \"${DEB_VERSION}\""; then
-    echo "⏭️ [${SERIES}] ${PACKAGE_NAME} (${DEB_VERSION}) 已存在于 ${PPA_TARGET}，自动跳过！"
+  # 幂等检查：如果 Launchpad PPA 中该发行版已存在当前版本的包，则自动跳过
+  EXISTING=$(curl -s "https://api.launchpad.net/1.0/${PPA_OWNER_PATH}?ws.op=getPublishedSources&source_name=${PACKAGE_NAME}" || true)
+  if echo "${EXISTING}" | grep -q "\"source_package_version\": \"${VERSION}~${SERIES}"; then
+    echo "⏭️ [${SERIES}] ${PACKAGE_NAME} (${VERSION}~${SERIES}*) 已存在于 ${PPA_TARGET}，自动跳过！"
     continue
   fi
 
@@ -160,7 +162,6 @@ License: MIT
 EOF
 
   # 写入 debian/changelog
-  DEB_VERSION="${VERSION}~${SERIES}1"
   CHANGELOG_DATE="$(LC_ALL=C date -R)"
   cat << EOF > "${SRC_DIR}/debian/changelog"
 ${PACKAGE_NAME} (${DEB_VERSION}) ${SERIES}; urgency=medium
@@ -181,17 +182,17 @@ EOF
     echo "🔍 [DRY_RUN] 已生成源码包：${CHANGES_FILE}（跳过 dput 上传）"
   else
     echo "⬆️ 正在上传 ${CHANGES_FILE} 到 ${PPA_TARGET} ..."
-    for ATTEMPT in 1 2 3; do
+    for ATTEMPT in 1 2 3 4 5; do
       rm -f "${SERIES_DIR}"/*.upload
       if dput -f "${PPA_TARGET}" "${CHANGES_FILE}"; then
-        echo "✅ [${SERIES}] 上传成功！"
+        echo "✅ [${SERIES}] 上传成功！等待 35 秒供 Launchpad 队列处理..."
+        sleep 35
         break
       else
-        echo "⚠️ [${SERIES}] 第 ${ATTEMPT} 次上传遇到网络波动，等待 5 秒后重试..."
-        sleep 5
+        echo "⚠️ [${SERIES}] 第 ${ATTEMPT} 次上传遇到 Launchpad FTP 队列锁定，等待 20 秒后重试..."
+        sleep 20
       fi
     done
-    sleep 3
   fi
 done
 
