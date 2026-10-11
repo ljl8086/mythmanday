@@ -1,5 +1,11 @@
 # 人天神话-开发者人天中台 (MythManDay)
 
+[![CI Status](https://github.com/ljl8086/mythmanday/actions/workflows/ci.yml/badge.svg)](https://github.com/ljl8086/mythmanday/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ljl8086/mythmanday?include_prereleases&label=version&color=blue)](https://github.com/ljl8086/mythmanday/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8.svg?logo=tauri&logoColor=white)](https://v2.tauri.app/)
+
 **中文文档** | [**English Documentation**](README_EN.md)
 
 > **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] v0.1.0 (Early Access)  
