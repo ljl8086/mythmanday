@@ -104,7 +104,25 @@ For detailed multi-platform build requirements on **Linux**, **Windows**, and **
 
 ### Quick Packaging References:
 
-#### 🐧 Linux (Native User Install)
+#### 🐧 Ubuntu Launchpad PPA Install (Recommended)
+Supports Ubuntu 22.04 (`jammy`), 24.04 (`noble`), 26.04 (`resolute`), and newer releases:
+```bash
+# 1. Add PPA repository (once)
+sudo add-apt-repository ppa:ljl8086/ppa
+sudo apt update
+
+# 2. Install via apt
+sudo apt install mythmanday
+
+# 3. Launch via desktop app menu or terminal
+mythmanday
+
+# Upgrade / Uninstall:
+# sudo apt update && sudo apt upgrade mythmanday
+# sudo apt remove mythmanday
+```
+
+#### 🛠️ Linux (Native User Script Install)
 ```bash
 chmod +x ./install.sh && ./install.sh
 # Launch via app launcher or run 'mythmanday' in terminal
@@ -113,7 +131,7 @@ chmod +x ./install.sh && ./install.sh
 #### 📦 Linux (.deb Package)
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
-# Install: sudo dpkg -i dist/mythmanday_0.1.0_amd64.deb
+# Install: sudo apt install ./dist/mythmanday_0.1.0_amd64.deb
 ```
 
 #### 🪟 Windows (.exe / .msi)

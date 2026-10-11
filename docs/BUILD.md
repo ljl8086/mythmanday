@@ -97,6 +97,23 @@ chmod +x ./install.sh
 
 ---
 
+### Ubuntu PPA 软件源安装与自动发布
+对于 Ubuntu 用户，可直接通过 Launchpad PPA 软件源一键安装：
+
+```bash
+sudo add-apt-repository ppa:ljl8086/ppa
+sudo apt update
+sudo apt install mythmanday
+```
+
+若需手动或通过 CI 将新版本推送到 Launchpad PPA：
+```bash
+chmod +x ./scripts/publish-ppa.sh
+./scripts/publish-ppa.sh ppa:ljl8086/ppa
+```
+
+---
+
 ### 打包 Debian/Ubuntu (.deb) 安装包
 用于生成标准安装包分发给其他 Debian/Ubuntu 用户：
 
@@ -108,7 +125,7 @@ chmod +x ./scripts/build-deb.sh
 - **生成产物**：`dist/mythmanday_0.1.0_amd64.deb`
 - **目标机安装**：
   ```bash
-  sudo dpkg -i mythmanday_0.1.0_amd64.deb
+  sudo apt install ./dist/mythmanday_0.1.0_amd64.deb
   ```
 
 ---

@@ -106,7 +106,25 @@ cargo run --bin mythmanday-app
 
 ### 常用命令快捷参考：
 
-#### 🐧 Linux 本机一键安装 (无需 root)
+#### 🐧 Ubuntu 官方 PPA 软件源一键安装 (推荐)
+支持 Ubuntu 22.04 (`jammy`)、24.04 (`noble`)、26.04 (`resolute`) 等主流版本：
+```bash
+# 1. 添加软件源（首次安装需执行）
+sudo add-apt-repository ppa:ljl8086/ppa
+sudo apt update
+
+# 2. 直接通过 apt 安装
+sudo apt install mythmanday
+
+# 3. 启动运行（或在系统桌面应用菜单点击「人天神话 (MythManDay)」图标）
+mythmanday
+
+# 后续版本更新 / 卸载：
+# sudo apt update && sudo apt upgrade mythmanday
+# sudo apt remove mythmanday
+```
+
+#### 🛠️ Linux 源码本机一键安装 (无需 root)
 ```bash
 chmod +x ./install.sh && ./install.sh
 # 安装后直接在系统应用菜单中点击「人天神话 (MythManDay)」或终端执行 mythmanday
@@ -115,7 +133,7 @@ chmod +x ./install.sh && ./install.sh
 #### 📦 Linux 制作 .deb 安装包 (生成于 dist 目录)
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
-# 安装: sudo dpkg -i dist/mythmanday_0.1.0_amd64.deb
+# 安装: sudo apt install ./dist/mythmanday_0.1.0_amd64.deb
 ```
 
 #### 🪟 Windows 编译与打包
