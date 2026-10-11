@@ -5,3 +5,4 @@ node_modules/
 frontend/dist/
 frontend/node_modules/
 .DS_Store
+.cargo/config.toml

@@ -58,10 +58,10 @@ mythmanday/
 ├── install.sh                    # Linux 本机一键安装脚本 (注册桌面菜单与图标)
 ├── uninstall.sh                  # Linux 本机一键卸载脚本
 ├── scripts/
-│   └── build-deb.sh              # Debian / Ubuntu .deb 安装包自动打包脚本
+│   ├── build-deb.sh              # Debian / Ubuntu .deb 安装包自动打包脚本
+│   └── publish-ppa.sh            # Ubuntu Launchpad PPA 自动打包与上传脚本
 ├── docs/
-│   ├── BUILD.md                  # 跨平台 (Linux/Windows/macOS) 编译与打包发布指南
-│   └── copyright/                # 软件著作权申请辅助资料与源码生成脚本
+│   └── BUILD.md                  # 跨平台 (Linux/Windows/macOS) 编译与打包发布指南
 ├── frontend/                     # 基于 React 19 + TypeScript + Tailwind CSS 的现代化前端
 └── crates/
     ├── myth-core/                # 核心模型、多通道秒表状态机、四大商业人天结算引擎
@@ -143,5 +143,5 @@ cargo build --release --bin mythmanday-app
 ## 📜 著作权与开源许可
 
 - **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] v0.1.0 (Early Access)
-- **版权所有**：Copyright (c) 2026 ljl8086 and MythManDay Authors.
+- **版权所有**：Copyright (c) 2026 ljl8086 <ljl8086@126.com>. All Rights Reserved.
 - **开源协议**：本项目基于 [MIT 许可证](LICENSE) 授权开源。
