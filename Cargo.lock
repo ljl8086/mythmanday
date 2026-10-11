@@ -4033,6 +4033,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 name = "myth-ai"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "myth-core",
  "myth-git",
  "reqwest 0.12.28",
@@ -4041,6 +4042,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

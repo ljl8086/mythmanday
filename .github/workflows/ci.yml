@@ -39,4 +39,4 @@ jobs:
       - name: Rust cargo check & unit tests
         run: |
           cargo check --workspace
-          cargo test -p myth-core -p myth-db
+          cargo test -p myth-core -p myth-db -p myth-git -p myth-ai

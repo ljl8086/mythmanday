@@ -29,13 +29,45 @@ pub struct AiConfig {
 
 impl Default for AiConfig {
     fn default() -> Self {
+        let env_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+        let default_provider = if !env_key.is_empty() {
+            "openai"
+        } else {
+            "codex"
+        };
         Self {
-            provider: "agy".to_string(),
-            api_base: "https://api.deepseek.com/v1".to_string(),
-            api_key: "".to_string(),
-            model: "deepseek-chat".to_string(),
+            provider: default_provider.to_string(),
+            api_base: std::env::var("OPENAI_API_BASE")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
+            api_key: env_key,
+            model: std::env::var("OPENAI_MODEL")
+                .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
         }
     }
+}
+
+/// 标准化工作交付分类（用于商业对账单与 OpenAI 结构化审计输出）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkCategory {
+    FeatureDevelopment,
+    BugfixAndOptimization,
+    ArchitectureAndReview,
+    ClientAlignmentAndMeeting,
+    TestingAndDevOps,
+}
+
+/// OpenAI 结构化交付物审计报告 (Structured Deliverable Report)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredDeliverableReport {
+    /// 简洁的商业交付摘要（适合直接写入 Excel / Invoice 账单明细）
+    pub executive_summary: String,
+    /// 工作性质分类
+    pub category: WorkCategory,
+    /// 提炼出的关键交付物条目（Deliverable Bullet Points）
+    pub deliverables: Vec<String>,
+    /// 技术变更影响面评估（例如涉及的模块或架构层）
+    pub technical_scope: String,
 }
 
 #[derive(Serialize)]
@@ -45,11 +77,19 @@ struct ChatMessage {
 }
 
 #[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    format_type: String,
+}
+
+#[derive(Serialize)]
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
 }
 
 #[derive(Deserialize)]
@@ -157,7 +197,12 @@ impl AiSummarizer {
             return Ok(res);
         }
 
-        // 默认走 HTTP API (兼容 OpenAI / DeepSeek / Ollama)
+        // 默认走 OpenAI 兼容 HTTP API (原生支持 OpenAI gpt-4o / gpt-4o-mini / codex，并兼容自定义端点)
+        let api_key = if self.config.api_key.trim().is_empty() {
+            std::env::var("OPENAI_API_KEY").unwrap_or_default()
+        } else {
+            self.config.api_key.clone()
+        };
         let url = format!("{}/chat/completions", self.config.api_base.trim_end_matches('/'));
         let request_body = ChatRequest {
             model: self.config.model.clone(),
@@ -172,13 +217,14 @@ impl AiSummarizer {
                 },
             ],
             temperature: 0.3,
-            max_tokens: 400,
+            max_tokens: 500,
+            response_format: None,
         };
 
         let resp = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .json(&request_body)
             .send()
             .await?;
@@ -208,21 +254,20 @@ impl AiSummarizer {
         .await
     }
 
-    /// 结合 Git 活动与便签，提炼生成商业客户交付摘要
-    pub async fn summarize_session(
-        &self,
+    /// 构建用于 AI 分析的项目活动上下文文本（含 Commit 列表、Diff 统计、语义级代码 Patch 与便签）
+    pub fn build_session_context(
         project_name: &str,
         duration_hours: f64,
         git_summary: &GitActivitySummary,
         notes: &[QuickNote],
-    ) -> Result<String, AiError> {
+    ) -> String {
         let mut prompt_content = format!(
             "项目名称：{}\n投入工时：{:.2} 小时\n\n",
             project_name, duration_hours
         );
 
         if !git_summary.commits.is_empty() {
-            prompt_content.push_str("【代码提交记录】：\n");
+            prompt_content.push_str("【代码提交记录 (Git Commits)】：\n");
             for c in &git_summary.commits {
                 prompt_content.push_str(&format!("- {}\n", c));
             }
@@ -230,7 +275,14 @@ impl AiSummarizer {
         }
 
         if !git_summary.diff_stat.is_empty() {
-            prompt_content.push_str(&format!("【代码变更规模】：\n{}\n\n", git_summary.diff_stat));
+            prompt_content.push_str(&format!("【代码变更规模 (Diff Stat)】：\n{}\n\n", git_summary.diff_stat));
+        }
+
+        if !git_summary.diff_snippet.is_empty() {
+            prompt_content.push_str(&format!(
+                "【语义级代码变更片段 (Git Diff Patch)】：\n```diff\n{}\n```\n\n",
+                git_summary.diff_snippet
+            ));
         }
 
         if !notes.is_empty() {
@@ -241,9 +293,51 @@ impl AiSummarizer {
             prompt_content.push('\n');
         }
 
-        let system_prompt = "你是一名资深的技术架构师与软件工程专家。请根据开发者在本次工时区间内的真实代码变动及工作便签，撰写一段专业、严谨、有交付价值的工作成果摘要。要求：\n1. 语言干练体面，突出业务交付成果与技术严谨性；\n2. 涵盖代码开发、需求对齐或联调要点；\n3. 输出 1~3 句话（100字左右），不带任何客套寒暄。";
+        prompt_content
+    }
+
+    /// 结合 Git 活动（含语义级代码 Diff）与便签，提炼生成商业客户交付摘要
+    pub async fn summarize_session(
+        &self,
+        project_name: &str,
+        duration_hours: f64,
+        git_summary: &GitActivitySummary,
+        notes: &[QuickNote],
+    ) -> Result<String, AiError> {
+        let prompt_content = Self::build_session_context(project_name, duration_hours, git_summary, notes);
+
+        let system_prompt = "你是一名资深的技术架构师与软件工程专家。请根据开发者在本次工时区间内的真实代码变动（含 Git Commits 与代码 Diff 片段）及工作便签，撰写一段专业、严谨、有交付价值的工作成果摘要。要求：\n1. 语言干练体面，突出业务交付成果与技术严谨性（即使 commit 信息简略，也请从代码 Diff 中提炼出真实的业务/模块改动）；\n2. 涵盖代码开发、需求对齐或联调要点；\n3. 输出 1~3 句话（100字左右），不带任何客套寒暄。";
 
         self.execute_completion(system_prompt, &prompt_content).await
+    }
+
+    /// 生成 OpenAI 结构化交付物审计报告 (Structured JSON Output)
+    pub async fn summarize_session_structured(
+        &self,
+        project_name: &str,
+        duration_hours: f64,
+        git_summary: &GitActivitySummary,
+        notes: &[QuickNote],
+    ) -> Result<StructuredDeliverableReport, AiError> {
+        let prompt_content = Self::build_session_context(project_name, duration_hours, git_summary, notes);
+        let system_prompt = r#"You are a senior software engineering auditor. Analyze the developer's Git commits, code diff patches, and session notes, then output ONLY a valid JSON object matching this schema:
+{
+  "executive_summary": "Concise 1-2 sentence client-facing billing summary",
+  "category": "feature_development" | "bugfix_and_optimization" | "architecture_and_review" | "client_alignment_and_meeting" | "testing_and_dev_ops",
+  "deliverables": ["bullet 1", "bullet 2"],
+  "technical_scope": "Affected crates/modules/components"
+}"#;
+
+        let raw = self.execute_completion(system_prompt, &prompt_content).await?;
+        let cleaned = raw
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        serde_json::from_str::<StructuredDeliverableReport>(cleaned)
+            .map_err(|e| AiError::ParseError(format!("Failed to parse structured deliverable JSON: {} (raw: {})", e, cleaned)))
     }
 
     /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼商业级会议纪要
@@ -392,12 +486,17 @@ impl AiSummarizer {
             .text("model", "whisper-1")
             .text("response_format", "text");
 
+        let api_key = if self.config.api_key.trim().is_empty() {
+            std::env::var("OPENAI_API_KEY").unwrap_or_default()
+        } else {
+            self.config.api_key.clone()
+        };
         let url = format!("{}/audio/transcriptions", self.config.api_base.trim_end_matches('/'));
 
         let resp = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .multipart(form)
             .send()
             .await?;
@@ -412,3 +511,56 @@ impl AiSummarizer {
         Ok(text.trim().to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_default_ai_config_uses_openai_standard() {
+        let cfg = AiConfig::default();
+        assert_eq!(cfg.api_base, "https://api.openai.com/v1");
+        assert_eq!(cfg.model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_build_session_context_includes_diff_snippet() {
+        let git_summary = GitActivitySummary {
+            commits: vec!["feat: implement multi-channel billing [a1b2c3d]".to_string()],
+            diff_stat: "2 files changed, 45 insertions(+)".to_string(),
+            has_uncommitted_changes: true,
+            uncommitted_files: vec!["M crates/myth-ai/src/client.rs".to_string()],
+            diff_snippet: "+ pub struct StructuredDeliverableReport".to_string(),
+        };
+        let notes = vec![QuickNote::new(
+            Uuid::new_v4(),
+            "Aligned API schema with client",
+        )];
+
+        let ctx = AiSummarizer::build_session_context("MythManDay Core", 2.5, &git_summary, &notes);
+        assert!(ctx.contains("MythManDay Core"));
+        assert!(ctx.contains("feat: implement multi-channel billing"));
+        assert!(ctx.contains("+ pub struct StructuredDeliverableReport"));
+        assert!(ctx.contains("Aligned API schema with client"));
+    }
+
+    #[test]
+    fn test_structured_deliverable_report_deserialization() {
+        let sample_json = r#"{
+            "executive_summary": "Implemented OpenAI structured deliverable pipeline and semantic Git diff extraction.",
+            "category": "feature_development",
+            "deliverables": [
+                "Added semantic diff patch extraction in myth-git",
+                "Integrated OpenAI gpt-4o-mini structured JSON auditing in myth-ai"
+            ],
+            "technical_scope": "crates/myth-ai, crates/myth-git"
+        }"#;
+
+        let report: StructuredDeliverableReport = serde_json::from_str(sample_json).unwrap();
+        assert_eq!(report.category, WorkCategory::FeatureDevelopment);
+        assert_eq!(report.deliverables.len(), 2);
+        assert!(report.executive_summary.contains("OpenAI structured deliverable"));
+    }
+}
+

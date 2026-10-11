@@ -441,9 +441,9 @@ export component MainWindow inherits Window {
     in property <string> playing-entry-id: "";
 
     // 设置中心字段
-    in-out property <string> setting-ai-base: "https://api.deepseek.com/v1";
+    in-out property <string> setting-ai-base: "https://api.openai.com/v1";
     in-out property <string> setting-ai-key: "";
-    in-out property <string> setting-ai-model: "deepseek-chat";
+    in-out property <string> setting-ai-model: "gpt-4o-mini";
     in-out property <string> setting-hours-per-day: "8.0";
     in-out property <string> setting-afk-minutes: "10";
 
@@ -1414,7 +1414,7 @@ export component MainWindow inherits Window {
                                     DarkInput { text <=> root.setting-ai-key; placeholder: "sk-xxxxxxxxxxxx (可留空或填入本地 Ollama)"; }
 
                                     Text { text: "模型名称 (Model)"; font-size: 12px; color: #64748b; }
-                                    DarkInput { text <=> root.setting-ai-model; placeholder: "deepseek-chat"; }
+                                    DarkInput { text <=> root.setting-ai-model; placeholder: "gpt-4o-mini"; }
                                 }
 
                                 HorizontalLayout {

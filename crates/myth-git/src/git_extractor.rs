@@ -31,6 +31,9 @@ pub struct GitActivitySummary {
     pub has_uncommitted_changes: bool,
     /// 未提交改动的文件列表
     pub uncommitted_files: Vec<String>,
+    /// 精简的代码变更片段 (用于 AI 语义级交付物提炼，截断至安全长度)
+    #[serde(default)]
+    pub diff_snippet: String,
 }
 
 pub struct GitScanner;
@@ -116,6 +119,45 @@ impl GitScanner {
 
         if diff_out.status.success() {
             summary.diff_stat = String::from_utf8_lossy(&diff_out.stdout).trim().to_string();
+        }
+
+        // 4. 提取精简的代码变更内容 (优先未提交变更，若无则取区间内最近一次 commit 的 patch)，用于 AI 语义提炼
+        let patch_out = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .arg("diff")
+            .arg("HEAD")
+            .arg("--unified=1")
+            .output()?;
+
+        let mut raw_patch = if patch_out.status.success() {
+            String::from_utf8_lossy(&patch_out.stdout).trim().to_string()
+        } else {
+            String::new()
+        };
+
+        if raw_patch.is_empty() && !summary.commits.is_empty() {
+            if let Ok(log_patch) = Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .arg("log")
+                .arg("-n")
+                .arg("3")
+                .arg("-p")
+                .arg("--unified=1")
+                .arg(format!("--since={}", since_str))
+                .arg(format!("--until={}", until_str))
+                .output()
+            {
+                if log_patch.status.success() {
+                    raw_patch = String::from_utf8_lossy(&log_patch.stdout).trim().to_string();
+                }
+            }
+        }
+
+        if !raw_patch.is_empty() {
+            let max_chars = 3000;
+            summary.diff_snippet = raw_patch.chars().take(max_chars).collect();
         }
 
         Ok(summary)

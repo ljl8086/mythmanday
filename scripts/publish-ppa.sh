@@ -84,7 +84,7 @@ EOF
   # 生成 desktop 文件
   cat << 'EOF' > "${SRC_DIR}/share/applications/mythmanday.desktop"
 [Desktop Entry]
-Name=人天神话-开发者人天中台 (MythManDay)
+Name=人天神话
 GenericName=开发者人天中台
 Comment=开发者人天中台 · 多通道并发工时 · 录音与交付凭证一体化沉淀
 Exec=/usr/bin/mythmanday

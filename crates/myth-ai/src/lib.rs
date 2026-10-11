@@ -6,4 +6,4 @@
 
 pub mod client;
 
-pub use client::{AiConfig, AiError, AiSummarizer};
+pub use client::{AiConfig, AiError, AiSummarizer, StructuredDeliverableReport, WorkCategory};

@@ -426,12 +426,7 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
             let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
             let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
-            let mut git_summary = myth_git::GitActivitySummary {
-                commits: vec![],
-                diff_stat: "".to_string(),
-                has_uncommitted_changes: false,
-                uncommitted_files: vec![],
-            };
+            let mut git_summary = myth_git::GitActivitySummary::default();
             if let Some(ref git_path) = p.git_repo_path {
                 if let Ok(scanned) = GitScanner::extract_activity(git_path, start_at, end_at) {
                     git_summary = scanned;
@@ -915,10 +910,10 @@ async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, au
     let db = state.db.clone();
     let (provider, api_base, api_key, model) = {
         let guard = db.lock().unwrap();
-        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
+        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
+        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "deepseek-chat".to_string());
+        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
         (provider, api_base, api_key, model)
     };
 
@@ -1209,10 +1204,10 @@ async fn generate_settlement_report(
 
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let provider = state.db.lock().unwrap().get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-    let base = state.db.lock().unwrap().get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
+    let provider = state.db.lock().unwrap().get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
+    let base = state.db.lock().unwrap().get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let key = state.db.lock().unwrap().get_setting("ai_key").ok().flatten().unwrap_or_default();
-    let model = state.db.lock().unwrap().get_setting("ai_model").ok().flatten().unwrap_or_else(|| "deepseek-chat".to_string());
+    let model = state.db.lock().unwrap().get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
     let hours = state.db.lock().unwrap().get_setting("hours_per_day").ok().flatten().unwrap_or_else(|| "8.0".to_string());
     let afk = state.db.lock().unwrap().get_setting("afk_minutes").ok().flatten().unwrap_or_else(|| "10".to_string());
 

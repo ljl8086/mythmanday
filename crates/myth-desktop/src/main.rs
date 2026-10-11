@@ -659,12 +659,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
                     // 3. 智能嗅探 Git 活动与便签记录
-                    let mut git_summary = myth_git::GitActivitySummary {
-                        commits: vec![],
-                        diff_stat: "".to_string(),
-                        has_uncommitted_changes: false,
-                        uncommitted_files: vec![],
-                    };
+                    let mut git_summary = myth_git::GitActivitySummary::default();
                     if let Some(ref git_path) = p.git_repo_path {
                         if let Ok(scanned) = GitScanner::extract_activity(git_path, start_at, end_at) {
                             git_summary = scanned;
@@ -725,10 +720,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let app_async = app_weak_stop.clone();
                     let proj_name = p.name.clone();
 
-                    let ai_provider = db_stop.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".into());
-                    let ai_base = db_stop.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.deepseek.com/v1".into());
+                    let ai_provider = db_stop.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".into());
+                    let ai_base = db_stop.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".into());
                     let ai_key = db_stop.get_setting("ai_key").ok().flatten().unwrap_or_default();
-                    let ai_model = db_stop.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "deepseek-chat".into());
+                    let ai_model = db_stop.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".into());
 
                     let is_cli = ai_provider == "agy" || ai_provider == "codex";
                     if is_cli || !ai_key.is_empty() || ai_base.contains("localhost") || ai_base.contains("127.0.0.1") {
@@ -1348,6 +1343,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 diff_stat: "3 files changed, 45 insertions(+)".to_string(),
                                 has_uncommitted_changes: false,
                                 uncommitted_files: vec![],
+                                ..Default::default()
                             };
                             let notes = vec![];
                             if let Ok(summary) = summarizer.summarize_session(&p.name, e.billable_hours, &dummy_git, &notes).await {
