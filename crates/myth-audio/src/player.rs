@@ -28,7 +28,7 @@ impl AudioPlayer {
         }
     }
 
-    /// 播放指定的 WAV 音频文件 (优先原生 paplay -> aplay -> xdg-open)
+    /// 播放指定的 WAV 音频文件 (跨平台支持 Linux paplay/aplay/xdg-open, macOS afplay/open, Windows powershell/explorer)
     pub fn play(&self, path: &Path) -> Result<(), String> {
         self.stop();
 
@@ -36,6 +36,20 @@ impl AudioPlayer {
             return Err(format!("音频文件不存在: {}", path.display()));
         }
 
+        #[cfg(target_os = "macos")]
+        let child = Command::new("afplay")
+            .arg(path)
+            .spawn()
+            .or_else(|_| Command::new("open").arg(path).spawn())
+            .map_err(|e| format!("启动音频播放进程失败: {}", e))?;
+
+        #[cfg(target_os = "windows")]
+        let child = Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("启动音频播放进程失败: {}", e))?;
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let child = Command::new("paplay")
             .arg(path)
             .spawn()
@@ -98,10 +112,14 @@ impl AudioPlayer {
         } else {
             path
         };
-        Command::new("xdg-open")
-            .arg(target_dir)
-            .spawn()
-            .map_err(|e| format!("打开文件夹失败: {}", e))?;
+        #[cfg(target_os = "macos")]
+        let res = Command::new("open").arg(target_dir).spawn();
+        #[cfg(target_os = "windows")]
+        let res = Command::new("explorer").arg(target_dir).spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let res = Command::new("xdg-open").arg(target_dir).spawn();
+
+        res.map_err(|e| format!("打开文件夹失败: {}", e))?;
         Ok(())
     }
 }

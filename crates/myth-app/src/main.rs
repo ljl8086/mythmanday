@@ -115,9 +115,39 @@ fn get_client_name(db: &Database, client_id: Option<Uuid>) -> String {
     "商业客户".to_string()
 }
 
+fn user_home_dir() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(std::path::PathBuf::from)
+}
+
+fn system_open_path(path: &std::path::Path) -> Result<std::process::Child, std::io::Error> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer").arg(path).spawn()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(path).spawn()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(path).spawn()
+    }
+}
+
 fn dirs_or_local_data_dir() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("mythmanday")
+    #[cfg(target_os = "windows")]
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        return std::path::PathBuf::from(appdata).join("mythmanday");
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = user_home_dir() {
+        return home.join("Library").join("Application Support").join("mythmanday");
+    }
+    if let Some(home) = user_home_dir() {
+        home.join(".config").join("mythmanday")
     } else {
         std::path::PathBuf::from("./data")
     }
@@ -1243,12 +1273,12 @@ fn save_settings(
 #[tauri::command]
 fn save_and_open_excel(filename: String, base64_data: String) -> Result<String, String> {
     use std::io::Write;
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let downloads_dir = std::path::PathBuf::from(home).join("Downloads");
+    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
+    let downloads_dir = home.join("Downloads");
     let target_dir = if downloads_dir.exists() {
         downloads_dir
     } else {
-        std::path::PathBuf::from("/tmp")
+        std::env::temp_dir()
     };
 
     let target_path = target_dir.join(&filename);
@@ -1259,9 +1289,7 @@ fn save_and_open_excel(filename: String, base64_data: String) -> Result<String, 
     let path_str = target_path.to_string_lossy().to_string();
 
     // 尝试直接使用系统默认程序打开文件或者打开所在目录
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&target_path)
-        .spawn();
+    let _ = system_open_path(&target_path);
 
     Ok(path_str)
 }
@@ -1275,12 +1303,12 @@ pub struct FilePayload {
 #[tauri::command]
 fn save_multiple_excel_files(files: Vec<FilePayload>) -> Result<Vec<String>, String> {
     use std::io::Write;
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let downloads_dir = std::path::PathBuf::from(home).join("Downloads");
+    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
+    let downloads_dir = home.join("Downloads");
     let target_dir = if downloads_dir.exists() {
         downloads_dir
     } else {
-        std::path::PathBuf::from("/tmp")
+        std::env::temp_dir()
     };
 
     let mut saved_paths = Vec::new();
@@ -1293,9 +1321,7 @@ fn save_multiple_excel_files(files: Vec<FilePayload>) -> Result<Vec<String>, Str
     }
 
     // 自动打开 Downloads 目录供用户查看生成的文件
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&target_dir)
-        .spawn();
+    let _ = system_open_path(&target_dir);
 
     Ok(saved_paths)
 }
@@ -1303,10 +1329,7 @@ fn save_multiple_excel_files(files: Vec<FilePayload>) -> Result<Vec<String>, Str
 #[tauri::command]
 fn open_file_or_dir(path: String) -> Result<(), String> {
     let target_path = std::path::Path::new(&path);
-    let _ = std::process::Command::new("xdg-open")
-        .arg(target_path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let _ = system_open_path(target_path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
