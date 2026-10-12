@@ -112,7 +112,7 @@ jobs:
       - name: Build Windows Installers (NSIS .exe & WiX .msi)
         run: |
           cd crates/myth-app
-          ../../frontend/node_modules/.bin/tauri build --bundles nsis,msi
+          ../../frontend/node_modules/.bin/tauri build --bundles nsis msi
 
       - name: Upload Windows Assets to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -133,7 +133,7 @@ jobs:
           - runner: macos-latest
             target: aarch64-apple-darwin
             label: Apple-Silicon-arm64
-          - runner: macos-13
+          - runner: macos-latest
             target: x86_64-apple-darwin
             label: Intel-x64
     runs-on: ${{ matrix.runner }}
