@@ -1,29 +1,22 @@
 ---
-name: Bug report
-about: Create a report to help us improve MythManDay
-title: '[BUG] '
-labels: bug
-assignees: ''
-
+name: "🐛 问题与缺陷报告 (Bug Report)"
+about: "提交软件使用过程中发现的缺陷、崩溃或异常行为"
+title: "fix: "
+labels: ["bug"]
+assignees: ["ljl8086"]
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+### 🐞 问题现象
+<!-- 简要描述在执行什么操作时发生了什么问题 -->
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+### 🔄 复现步骤
+1. 打开应用并进入...
+2. 点击...
+3. 发生异常：
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+### 💻 运行环境
+- 操作系统：Ubuntu / Debian Linux
+- 应用版本：v0.1.0
 
-**Desktop Environment:**
- - OS: [e.g. Ubuntu 22.04 / Windows 11 / macOS 14]
- - Desktop Environment / Window Manager: [e.g. GNOME, Wayland, X11]
- - App Version: [e.g. v1.0.0]
-
-**Additional context**
-Add any other context about the problem here (e.g. logs from terminal).
+### 📋 错误日志或截图 (可选)
+<!-- 终端报错、日志或页面截图 -->

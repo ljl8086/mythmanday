@@ -1,20 +1,21 @@
 ---
-name: Feature request
-about: Suggest an idea or new settlement rule for MythManDay
-title: '[FEAT] '
-labels: enhancement
-assignees: ''
-
+name: "✨ 功能与需求 (Feature Request)"
+about: "从客户会议纪要、商务沟通或产品规划中提炼的新功能需求"
+title: "feat: "
+labels: ["enhancement"]
+assignees: ["ljl8086"]
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+### 📌 需求背景 / 客户沟通来源
+<!-- 例如：2026-10-13 现场会议纪要，客户 ABC 提出需要将工时对账单导出为 PDF 并提供签字栏 -->
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+### 🎯 目标与交付物
+<!-- 简要说明这个需求完成后，用户/客户期望得到什么结果 -->
+- [ ] 
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+### 💡 方案设计与技术决议 (可选)
+<!-- 如果已有技术思路或 Agent 开发指引，可简述在此 -->
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+### 💼 商业与工时预估 (可选)
+- 预估人天 / 工时：
+- 关联项目：
