@@ -38,7 +38,8 @@ import {
   Edit3,
   FileDown,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  RefreshCw
 } from "lucide-react";
 
 interface Project {
@@ -312,6 +313,7 @@ export function App() {
     raw_transcript: string;
   } | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExtractingGit, setIsExtractingGit] = useState(false);
   // 跟踪哪些长纪要/长文本卡片已被用户点击「展开完整内容」
   const [expandedSummaryEntryIds, setExpandedSummaryEntryIds] = useState<Record<string, boolean>>({});
 
@@ -945,6 +947,52 @@ export function App() {
       showToast("PDF 导出失败: " + e.toString());
     } finally {
       setIsExportingPdf(false);
+    }
+  };
+
+  interface ExtractGitResultDto {
+    success: boolean;
+    commits_count: number;
+    commits: string[];
+    diff_stat: string;
+    extracted_text: string;
+    message: string;
+  }
+
+  const handleExtractGitSummary = async (mode: "replace" | "append" = "replace") => {
+    if (!activeEditSummaryModal) return;
+    setIsExtractingGit(true);
+    showToast("🔍 正在从项目 Git 仓库全量扫描并抽取提交记录...");
+    try {
+      const res = await invoke<ExtractGitResultDto>("extract_entry_git_summary", {
+        entryId: activeEditSummaryModal.entry_id,
+        customRepoPath: activeProject?.git_repo_path || null,
+      });
+
+      if (!res.success) {
+        showToast("⚠️ " + res.message);
+        return;
+      }
+
+      if (res.commits_count === 0 && !res.diff_stat) {
+        showToast("ℹ️ " + res.message);
+        return;
+      }
+
+      const newSummaryText = mode === "append" && activeEditSummaryModal.summary.trim()
+        ? `${activeEditSummaryModal.summary.trim()}\n\n---\n${res.extracted_text}`
+        : res.extracted_text;
+
+      setActiveEditSummaryModal({
+        ...activeEditSummaryModal,
+        summary: newSummaryText,
+      });
+
+      showToast(`✨ ${res.message} 已自动填入纪要框`);
+    } catch (e: any) {
+      showToast("抽取 Git 提交失败: " + e.toString());
+    } finally {
+      setIsExtractingGit(false);
     }
   };
 
@@ -5140,9 +5188,35 @@ export function App() {
 
             {/* 编辑主体 */}
             <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-white">
-              <div className="text-[11px] text-slate-400 flex items-center justify-between">
-                <span>支持 Markdown 结构排版，随时增删调整业务细节：</span>
-                <span className="font-mono text-slate-400">{activeEditSummaryModal.summary.length} 字</span>
+              <div className="flex items-center justify-between pb-1">
+                <span className="text-[11px] text-slate-500 font-medium">
+                  支持 Markdown 结构排版，随时增删调整业务细节：
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-slate-400 mr-1">
+                    {activeEditSummaryModal.summary.length} 字
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isExtractingGit}
+                    onClick={() => handleExtractGitSummary("append")}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs disabled:opacity-50"
+                    title="从本地 Git 仓库扫描该工时窗口内的提交并追加到末尾"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isExtractingGit ? "animate-spin" : ""}`} />
+                    追加 Git 记录
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isExtractingGit}
+                    onClick={() => handleExtractGitSummary("replace")}
+                    className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs disabled:opacity-50"
+                    title="从本地 Git 仓库全量重新抽取提交记录并替换当前框内文本"
+                  >
+                    <GitBranch className="w-3.5 h-3.5 text-slate-600" />
+                    全量重新抽取
+                  </button>
+                </div>
               </div>
               <textarea
                 value={activeEditSummaryModal.summary}

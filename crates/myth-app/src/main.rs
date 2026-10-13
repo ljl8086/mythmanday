@@ -1869,6 +1869,92 @@ fn update_entry_summary(state: State<AppState>, entry_id: String, summary: Strin
     Err("未找到对应的工时记录".to_string())
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExtractGitResultDto {
+    pub success: bool,
+    pub commits_count: usize,
+    pub commits: Vec<String>,
+    pub diff_stat: String,
+    pub extracted_text: String,
+    pub message: String,
+}
+
+#[tauri::command]
+async fn extract_entry_git_summary(
+    state: State<'_, AppState>,
+    entry_id: String,
+    custom_repo_path: Option<String>,
+) -> Result<ExtractGitResultDto, String> {
+    let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+
+    let (entry, proj) = {
+        let guard = db.lock().unwrap();
+        let e = guard.get_time_entry(&eid).map_err(|e| e.to_string())?
+            .ok_or_else(|| "未找到对应的工时记录".to_string())?;
+        let projs = guard.list_projects().map_err(|e| e.to_string())?;
+        let p = projs.into_iter().find(|p| p.id == e.project_id)
+            .ok_or_else(|| "未找到所属项目信息".to_string())?;
+        (e, p)
+    };
+
+    let repo_path = custom_repo_path
+        .filter(|s| !s.trim().is_empty())
+        .or(proj.git_repo_path)
+        .ok_or_else(|| "当前项目未关联本地 Git 仓库路径，请先在项目设置中配置本地代码路径".to_string())?;
+
+    if !GitScanner::is_git_repo(&repo_path) {
+        return Err(format!("路径「{}」不是有效的 Git 仓库", repo_path));
+    }
+
+    // 扫描该工时记录完整时间窗口（start_time 至 end_time）
+    let git_activity = GitScanner::extract_activity(&repo_path, entry.start_time, entry.end_time)
+        .map_err(|e| format!("读取 Git 活动失败: {}", e))?;
+
+    let commits_len = git_activity.commits.len();
+    let commits_desc = git_activity.commits.clone();
+
+    // 格式化提炼文本
+    let extracted_text = if !git_activity.commits.is_empty() {
+        let commit_items = git_activity
+            .commits
+            .iter()
+            .map(|c| format!("- {}", c))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !git_activity.diff_stat.is_empty() {
+            format!(
+                "代码研发与提交 {} 次：\n{}\n\n**代码变动统计**：\n```text\n{}\n```",
+                commits_len, commit_items, git_activity.diff_stat
+            )
+        } else {
+            format!("代码研发与提交 {} 次：\n{}", commits_len, commit_items)
+        }
+    } else if git_activity.has_uncommitted_changes {
+        let files = git_activity.uncommitted_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n");
+        format!("本地未提交工作区变更（共 {} 个文件）：\n{}\n\n```text\n{}\n```", git_activity.uncommitted_files.len(), files, git_activity.diff_stat)
+    } else {
+        "在当前工时时段内未检测到新的 Git 提交记录。".to_string()
+    };
+
+    let message = if commits_len > 0 {
+        format!("成功从 Git 仓库抽取到 {} 条提交记录！", commits_len)
+    } else if git_activity.has_uncommitted_changes {
+        format!("检测到 {} 个本地工作区改动文件！", git_activity.uncommitted_files.len())
+    } else {
+        "该时间段内暂无新的 Git 提交记录。".to_string()
+    };
+
+    Ok(ExtractGitResultDto {
+        success: true,
+        commits_count: commits_len,
+        commits: commits_desc,
+        diff_stat: git_activity.diff_stat,
+        extracted_text,
+        message,
+    })
+}
+
 #[tauri::command]
 async fn generate_daily_markdown(state: State<'_, AppState>) -> Result<String, String> {
     let projs = state.db.lock().unwrap().list_projects().unwrap_or_default();
@@ -2634,6 +2720,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_manual_meeting,
             transcribe_entry_audio,
             update_entry_summary,
+            extract_entry_git_summary,
             generate_daily_markdown,
             toggle_entry_invoiced,
             batch_toggle_entries_invoiced,
