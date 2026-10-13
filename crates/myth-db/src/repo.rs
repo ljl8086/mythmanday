@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
-        let _ = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+        let _ = conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
@@ -517,7 +517,11 @@ impl Database {
     }
 
     pub fn delete_project(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute("DELETE FROM projects WHERE id = ?1", params![id.to_string()])?;
+        let id_str = id.to_string();
+        let _ = self.conn.execute("DELETE FROM active_timers WHERE project_id = ?1", params![&id_str]);
+        let _ = self.conn.execute("DELETE FROM quick_notes WHERE project_id = ?1", params![&id_str]);
+        let _ = self.conn.execute("DELETE FROM time_entries WHERE project_id = ?1", params![&id_str]);
+        self.conn.execute("DELETE FROM projects WHERE id = ?1", params![&id_str])?;
         Ok(())
     }
 

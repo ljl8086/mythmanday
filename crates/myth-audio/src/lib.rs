@@ -8,7 +8,7 @@ pub mod player;
 pub mod recorder;
 
 pub use player::AudioPlayer;
-pub use recorder::{AudioError, AudioRecorder};
+pub use recorder::{convert_wav_to_mp3, AudioError, AudioRecorder};
 
 #[cfg(test)]
 mod tests {

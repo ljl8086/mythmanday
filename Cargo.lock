@@ -4034,6 +4034,7 @@ name = "myth-ai"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "myth-audio",
  "myth-core",
  "myth-git",
  "reqwest 0.12.28",

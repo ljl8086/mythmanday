@@ -6,7 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use chrono::{Local, TimeZone, Utc};
-use myth_ai::{AiConfig, AiSummarizer};
+use myth_ai::{AiBatchParsedItem, AiConfig, AiSummarizer, AiWorkEvaluationRequest};
 use myth_audio::{AudioPlayer, AudioRecorder};
 use myth_core::billing::BillingEngine;
 use myth_core::models::{BillingType, DayCalcMode, Project, QuickNote, TimeEntry};
@@ -49,6 +49,51 @@ pub struct ProjectDto {
     pub billing_type: String,
     pub rounding_mode: String,
     pub min_granularity: f64,
+    pub git_repo_path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AiTimeSlotDto {
+    pub label: String,
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GitSmartFillDto {
+    pub success: bool,
+    pub repo_path: String,
+    pub summary_text: String,
+    pub commits_count: usize,
+    pub commits: Vec<String>,
+    pub suggested_start_time: Option<String>,
+    pub suggested_end_time: Option<String>,
+    pub diff_stat: Option<String>,
+    pub is_fallback_to_day: bool,
+    pub ai_reason: Option<String>,
+    pub time_slots: Vec<AiTimeSlotDto>,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BatchSmartEntryDto {
+    pub temp_id: String,
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub summary: String,
+    pub reason: String,
+    pub commits_count: usize,
+    pub is_selected: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BatchSmartFillResultDto {
+    pub success: bool,
+    pub total_days: usize,
+    pub total_commits: usize,
+    pub entries: Vec<BatchSmartEntryDto>,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -85,8 +130,20 @@ pub struct GlobalStatsDto {
     pub total_amount: String,
     pub running_count: usize,
     pub is_recording_audio: bool,
+    pub active_recording_project_id: Option<String>,
     pub active_recording_project_name: String,
     pub is_audio_paused: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct StopMeetingResultDto {
+    pub success: bool,
+    pub project_id: String,
+    pub topic: String,
+    pub audio_path: String,
+    pub transcript: String,
+    pub summary: String,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -226,6 +283,7 @@ fn get_projects(state: State<AppState>) -> Result<Vec<ProjectDto>, String> {
                 myth_core::models::RoundingMode::Ceil => "ceil".to_string(),
             },
             min_granularity: p.min_granularity,
+            git_repo_path: p.git_repo_path,
         });
     }
 
@@ -348,19 +406,21 @@ fn get_global_stats(state: State<AppState>) -> Result<GlobalStatsDto, String> {
     let mgr = state.timer_manager.lock().unwrap();
     let running_count = mgr.active_channel_ids().len();
     let audio_rec = state.audio_recorder.lock().unwrap();
-    let is_recording_audio = audio_rec.is_recording();
-    let is_audio_paused = audio_rec.is_paused();
     let active_rec = state.active_recording.lock().unwrap();
-    let active_recording_project_name = active_rec
+    let has_active_rec = active_rec.is_some();
+    let is_recording_audio = audio_rec.is_recording() || has_active_rec;
+    let is_audio_paused = audio_rec.is_paused();
+    let (active_recording_project_id, active_recording_project_name) = active_rec
         .as_ref()
-        .map(|(_, topic, _)| topic.clone())
-        .unwrap_or_default();
+        .map(|(pid, topic, _)| (Some(pid.to_string()), topic.clone()))
+        .unwrap_or((None, String::new()));
 
     Ok(GlobalStatsDto {
         total_days: format!("{:.2} 人天", total_days),
         total_amount: format!("¥ {:.2}", total_amount),
         running_count,
         is_recording_audio,
+        active_recording_project_id,
         active_recording_project_name,
         is_audio_paused,
     })
@@ -445,6 +505,10 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
                 } else if rec_path.exists() {
                     saved_audio = Some(rec_path.display().to_string());
                 }
+                let db_g = state.db.lock().unwrap();
+                let _ = db_g.set_setting("active_meeting_pid", "");
+                let _ = db_g.set_setting("active_meeting_topic", "");
+                let _ = db_g.set_setting("active_meeting_path", "");
             } else {
                 *rec_info = Some((rec_pid, "".to_string(), rec_path));
             }
@@ -556,7 +620,12 @@ fn start_quick_meeting(
         let wav_file = rec_dir.join(format!("meeting_{}_{}.wav", pid, timestamp_str));
         let mut recorder = state.audio_recorder.lock().unwrap();
         if let Ok(_) = recorder.start_recording(&wav_file) {
-            *state.active_recording.lock().unwrap() = Some((pid, topic.clone(), wav_file));
+            *state.active_recording.lock().unwrap() = Some((pid, topic.clone(), wav_file.clone()));
+            // 持久化活跃会议录音标记，防止应用被重启/关闭后丢失状态
+            let db = state.db.lock().unwrap();
+            let _ = db.set_setting("active_meeting_pid", &pid.to_string());
+            let _ = db.set_setting("active_meeting_topic", &topic);
+            let _ = db.set_setting("active_meeting_path", &wav_file.display().to_string());
         }
     }
 
@@ -580,6 +649,145 @@ fn toggle_audio_pause(state: State<AppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn stop_current_meeting(state: State<'_, AppState>) -> Result<StopMeetingResultDto, String> {
+    // 1. 停止当前麦克风录音并保存 WAV 文件
+    let mut saved_audio_path: Option<std::path::PathBuf> = None;
+    let (pid, topic, rec_path) = {
+        let mut rec_info = state.active_recording.lock().unwrap();
+        if let Some((pid, topic, path)) = rec_info.take() {
+            let mut recorder = state.audio_recorder.lock().unwrap();
+            if recorder.is_recording() {
+                if let Ok(p) = recorder.stop_recording() {
+                    saved_audio_path = Some(p);
+                }
+            } else if path.exists() {
+                saved_audio_path = Some(path.clone());
+            }
+            (pid, topic, path)
+        } else {
+            return Err("当前没有正在进行的会议录音".to_string());
+        }
+    };
+
+    // 清除持久化的活跃会议标记
+    {
+        let db_guard = state.db.lock().unwrap();
+        let _ = db_guard.set_setting("active_meeting_pid", "");
+        let _ = db_guard.set_setting("active_meeting_topic", "");
+        let _ = db_guard.set_setting("active_meeting_path", "");
+    }
+
+    let audio_file = saved_audio_path.unwrap_or(rec_path);
+    let audio_path_str = audio_file.display().to_string();
+
+    // 2. 获取 AI 基础配置并尝试语音转写与纪要提炼
+    let db = state.db.clone();
+    let (provider, api_base, api_key, model, proxy) = {
+        let guard = db.lock().unwrap();
+        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
+        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        (provider, api_base, api_key, model, proxy)
+    };
+
+    let summarizer = AiSummarizer::new(AiConfig {
+        provider,
+        api_base,
+        api_key,
+        model,
+        proxy,
+    });
+
+    let notes = db.lock().unwrap().list_quick_notes(&pid).unwrap_or_default();
+
+    // 转写 (内部已支持 ffmpeg 自动压缩为 MP3 发送)
+    let mut transcript = String::new();
+    let mut summary = String::new();
+
+    if audio_file.exists() {
+        // 最多等待 60 秒转写，超时或失败则不阻塞，直接生成基础纪要让用户编辑
+        let transcribe_res = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            summarizer.transcribe_audio(&audio_file)
+        ).await;
+
+        match transcribe_res {
+            Ok(Ok(txt)) => {
+                transcript = txt.clone();
+                // 结合会议主题及转写内容生成结构化会议纪要 (限时 30 秒)
+                let sum_res = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    summarizer.summarize_meeting(&topic, 0.5, &notes, Some(&audio_path_str), Some(&txt))
+                ).await;
+
+                match sum_res {
+                    Ok(Ok(sum)) => {
+                        summary = sum;
+                    }
+                    _ => {
+                        summary = format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议录音与识别。\n3. 【后续待办】待人工补充纪要要点。", topic);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("语音转写失败: {}", e);
+                summary = format!("1. 【核心议题】{}\n2. 【达成共识】现场录音已完整保存至本地（{}），暂未连接到在线转写模型。\n3. 【后续待办】待人工补充会议讨论记录。", topic, audio_path_str);
+            }
+            Err(_) => {
+                tracing::warn!("语音转写超时");
+                summary = format!("1. 【核心议题】{}\n2. 【达成共识】录音转写超时，音频已安全存盘（{}）。\n3. 【后续待办】可在工时列表中点击重新转写或手动补充纪要。", topic, audio_path_str);
+            }
+        }
+    } else {
+        summary = format!("1. 【会议议题】{}\n2. 【讨论记录】已结束会议。", topic);
+    }
+
+    // 立即自动沉淀一条会议初始记录至项目便签中，防止因前端弹窗被关或刷新导致记录丢失
+    {
+        let audio_tag = format!("\n[录音凭据: {}]", audio_path_str);
+        let note_content = format!("【会议纪要：{}】\n{}{}", topic, summary, audio_tag);
+        let note = QuickNote::new(pid, note_content.trim());
+        let _ = db.lock().unwrap().insert_quick_note(&note);
+    }
+
+    Ok(StopMeetingResultDto {
+        success: true,
+        project_id: pid.to_string(),
+        topic,
+        audio_path: audio_path_str,
+        transcript,
+        summary,
+        message: "会议录音已安全封包落盘，项目主工时通道仍在继续计时！".to_string(),
+    })
+}
+
+#[tauri::command]
+fn save_meeting_summary_to_project(
+    state: State<AppState>,
+    project_id: String,
+    topic: String,
+    summary: String,
+    audio_path: Option<String>,
+) -> Result<String, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+
+    // 存为项目便签记录，作为交付与讨论凭据
+    let audio_tag = if let Some(ref a) = audio_path {
+        format!("\n[录音凭据: {}]", a)
+    } else {
+        String::new()
+    };
+    let content = format!("【会议纪要：{}】\n{}{}", topic, summary, audio_tag);
+    let note = QuickNote::new(pid, content.trim());
+    db.insert_quick_note(&note).map_err(|e| e.to_string())?;
+
+    Ok("会议纪要已成功保存至项目备忘与交付档案中！".to_string())
+}
+
+#[tauri::command]
 fn play_audio(state: State<AppState>, audio_path: String) -> Result<(), String> {
     let p = std::path::Path::new(&audio_path);
     state.audio_player.lock().unwrap().play(p).map_err(|e| e.to_string())
@@ -589,6 +797,51 @@ fn play_audio(state: State<AppState>, audio_path: String) -> Result<(), String> 
 fn stop_audio(state: State<AppState>) -> Result<(), String> {
     state.audio_player.lock().unwrap().stop();
     Ok(())
+}
+
+#[tauri::command]
+fn get_audio_data_url(audio_path: String) -> Result<String, String> {
+    use std::io::Read;
+    let p = std::path::Path::new(&audio_path);
+    if !p.exists() {
+        return Err(format!("音频文件不存在: {}", audio_path));
+    }
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("mp3").to_lowercase();
+    let mime = match ext.as_str() {
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        _ => "audio/mpeg",
+    };
+    let mut file = std::fs::File::open(p).map_err(|e| format!("打开音频文件失败: {}", e))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| format!("读取音频文件失败: {}", e))?;
+    
+    // 转换为 base64
+    const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity((buffer.len() * 4) / 3 + 4);
+    for chunk in buffer.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        encoded.push(B64_CHARS[((triple >> 18) & 0x3f) as usize] as char);
+        encoded.push(B64_CHARS[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            encoded.push(B64_CHARS[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(B64_CHARS[(triple & 0x3f) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+    }
+
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[tauri::command]
@@ -730,6 +983,39 @@ fn update_project(
 }
 
 #[tauri::command]
+fn delete_project(state: State<AppState>, id: String) -> Result<(), String> {
+    let pid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+
+    // 1. 如果该项目正在录音，停止并清理录音
+    {
+        let mut active_rec = state.active_recording.lock().unwrap();
+        if let Some((rec_pid, _, _)) = &*active_rec {
+            if *rec_pid == pid {
+                let mut recorder = state.audio_recorder.lock().unwrap();
+                if recorder.is_recording() {
+                    let _ = recorder.stop_recording();
+                }
+                *active_rec = None;
+            }
+        }
+    }
+
+    // 2. 如果通道在运行/暂停，停止并移除通道
+    {
+        let mut mgr = state.timer_manager.lock().unwrap();
+        let _ = mgr.stop_channel(pid);
+        mgr.remove_channel(&pid);
+    }
+
+    // 3. 彻底删除项目数据与级联记录
+    let db = state.db.lock().unwrap();
+    let _ = db.delete_active_timer(&pid);
+    db.delete_project(&pid).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 fn add_project_note(state: State<AppState>, project_id: String, content: String) -> Result<(), String> {
     let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
     let note = QuickNote::new(pid, content.trim());
@@ -757,6 +1043,268 @@ fn delete_note(state: State<AppState>, note_id: String) -> Result<(), String> {
     let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
     state.db.lock().unwrap().delete_quick_note(&nid).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+async fn fetch_git_work_summary(
+    state: State<'_, AppState>,
+    project_id: String,
+    date: String,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    custom_repo_path: Option<String>,
+) -> Result<GitSmartFillDto, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    
+    let (mut proj, client_name, ai_config, hours_per_day) = {
+        let guard = db.lock().unwrap();
+        let p = guard
+            .list_projects()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .ok_or_else(|| "项目不存在".to_string())?;
+
+        let c_name = get_client_name(&guard, p.client_id);
+        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
+        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        let hours = p.hours_per_day;
+
+        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy }, hours)
+    };
+
+    // 确定仓库路径 (优先使用自定义传入路径，否则使用项目已绑定路径)
+    let repo_path = if let Some(ref custom) = custom_repo_path {
+        let p_trim = custom.trim().to_string();
+        if !p_trim.is_empty() {
+            if proj.git_repo_path.as_deref() != Some(&p_trim) {
+                proj.git_repo_path = Some(p_trim.clone());
+                let _ = db.lock().unwrap().update_project(&proj);
+            }
+            p_trim
+        } else {
+            proj.git_repo_path.clone().unwrap_or_default()
+        }
+    } else {
+        proj.git_repo_path.clone().unwrap_or_default()
+    };
+
+    if repo_path.trim().is_empty() {
+        return Ok(GitSmartFillDto {
+            success: false,
+            repo_path: "".to_string(),
+            summary_text: "".to_string(),
+            commits_count: 0,
+            commits: vec![],
+            suggested_start_time: None,
+            suggested_end_time: None,
+            diff_stat: None,
+            is_fallback_to_day: false,
+            ai_reason: None,
+            time_slots: vec![],
+            message: "该项目尚未绑定本地 Git 仓库路径。请在输入框中填入本地 Git 仓库路径。".to_string(),
+        });
+    }
+
+    if !GitScanner::is_git_repo(&repo_path) {
+        return Ok(GitSmartFillDto {
+            success: false,
+            repo_path: repo_path.clone(),
+            summary_text: "".to_string(),
+            commits_count: 0,
+            commits: vec![],
+            suggested_start_time: None,
+            suggested_end_time: None,
+            diff_stat: None,
+            is_fallback_to_day: false,
+            ai_reason: None,
+            time_slots: vec![],
+            message: format!("指定的路径不是有效的 Git 仓库：{}", repo_path),
+        });
+    }
+
+    let s_time = start_time.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("08:30");
+    let e_time = end_time.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("19:00");
+
+    let start_str = format!("{} {}:00", date.trim(), s_time.trim());
+    let end_str = format!("{} {}:00", date.trim(), e_time.trim());
+    let day_start_str = format!("{} 00:00:00", date.trim());
+    let day_end_str = format!("{} 23:59:59", date.trim());
+
+    let (since_utc, until_utc) = match (
+        chrono::NaiveDateTime::parse_from_str(&start_str, "%Y-%m-%d %H:%M:%S"),
+        chrono::NaiveDateTime::parse_from_str(&end_str, "%Y-%m-%d %H:%M:%S"),
+    ) {
+        (Ok(s), Ok(e)) => {
+            let s_local = Local.from_local_datetime(&s).unwrap();
+            let e_local = Local.from_local_datetime(&e).unwrap();
+            (s_local.with_timezone(&Utc), e_local.with_timezone(&Utc))
+        }
+        _ => {
+            return Err("开始/结束时间格式错误，需为 YYYY-MM-DD 与 HH:MM".to_string());
+        }
+    };
+
+    let (day_since_utc, day_until_utc) = match (
+        chrono::NaiveDateTime::parse_from_str(&day_start_str, "%Y-%m-%d %H:%M:%S"),
+        chrono::NaiveDateTime::parse_from_str(&day_end_str, "%Y-%m-%d %H:%M:%S"),
+    ) {
+        (Ok(s), Ok(e)) => {
+            let s_local = Local.from_local_datetime(&s).unwrap();
+            let e_local = Local.from_local_datetime(&e).unwrap();
+            (s_local.with_timezone(&Utc), e_local.with_timezone(&Utc))
+        }
+        _ => {
+            return Err("日期格式解析错误".to_string());
+        }
+    };
+
+    let work_summary = GitScanner::fetch_smart_work_summary(
+        &repo_path,
+        since_utc,
+        until_utc,
+        day_since_utc,
+        day_until_utc,
+    ).map_err(|e| e.to_string())?;
+
+    if work_summary.commits.is_empty() {
+        return Ok(GitSmartFillDto {
+            success: false,
+            repo_path,
+            summary_text: "".to_string(),
+            commits_count: 0,
+            commits: vec![],
+            suggested_start_time: None,
+            suggested_end_time: None,
+            diff_stat: None,
+            is_fallback_to_day: false,
+            ai_reason: None,
+            time_slots: vec![],
+            message: format!("在 {} 全天范围内未发现任何代码提交记录（Git Log 为空）。", date.trim()),
+        });
+    }
+
+    let commits_len = work_summary.commits.len();
+    let commits_desc: Vec<String> = work_summary.commits.iter().map(|c| format!("{} [{}] ({})", c.message, c.hash, c.time_str)).collect();
+
+    // 默认本地启发式推荐时间与候选槽
+    let local_start = work_summary.earliest_time.clone().unwrap_or_else(|| "09:30".to_string());
+    let local_end = work_summary.latest_time.clone().unwrap_or_else(|| "18:30".to_string());
+
+    let mut final_start = local_start.clone();
+    let mut final_end = local_end.clone();
+    let mut final_summary = work_summary.summary_text.clone();
+    let mut ai_reason: Option<String> = None;
+    let mut candidate_slots: Vec<AiTimeSlotDto> = Vec::new();
+
+    // 构建默认启发式候选时段
+    candidate_slots.push(AiTimeSlotDto {
+        label: "全天研发".to_string(),
+        start: "09:30".to_string(),
+        end: local_end.clone(),
+    });
+    candidate_slots.push(AiTimeSlotDto {
+        label: "下午集中".to_string(),
+        start: "13:30".to_string(),
+        end: local_end.clone(),
+    });
+    candidate_slots.push(AiTimeSlotDto {
+        label: "提交对齐".to_string(),
+        start: local_start.clone(),
+        end: local_end.clone(),
+    });
+
+    // 尝试调用 AI 模块 (agy / codex / openai)
+    let ai_eval_req = AiWorkEvaluationRequest {
+        project_name: proj.name.clone(),
+        client_name: client_name.clone(),
+        date: date.clone(),
+        commits: commits_desc.clone(),
+        diff_stat: work_summary.diff_stat.clone(),
+        earliest_commit_time: work_summary.earliest_time.clone(),
+        latest_commit_time: work_summary.latest_time.clone(),
+        preferred_start_time: Some("09:30".to_string()),
+        preferred_hours: hours_per_day,
+    };
+
+    let summarizer = AiSummarizer::new(ai_config.clone());
+    match summarizer.evaluate_work_timeslot(&ai_eval_req).await {
+        Ok(ai_res) => {
+            if !ai_res.suggested_start_time.trim().is_empty() {
+                final_start = ai_res.suggested_start_time;
+            }
+            if !ai_res.suggested_end_time.trim().is_empty() {
+                final_end = ai_res.suggested_end_time;
+            }
+            if !ai_res.deliverable_summary.trim().is_empty() {
+                // 确保条目化格式：若 AI 返回的大长句使用分号/句号连接而未换行，自动整理为序号条目
+                let raw_sum = ai_res.deliverable_summary.trim();
+                if raw_sum.contains('\n') {
+                    final_summary = raw_sum.to_string();
+                } else if raw_sum.contains('；') || raw_sum.contains(';') || raw_sum.contains('。') {
+                    let parts: Vec<&str> = raw_sum
+                        .split(|c| c == '；' || c == ';' || c == '。')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if parts.len() > 1 {
+                        final_summary = parts
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| {
+                                let clean_p = p.trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == '、' || c == '-' || c == '•').trim();
+                                format!("{}. {}", i + 1, clean_p)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                    } else {
+                        final_summary = raw_sum.to_string();
+                    }
+                } else {
+                    final_summary = raw_sum.to_string();
+                }
+            }
+            if !ai_res.reason.trim().is_empty() {
+                ai_reason = Some(format!("AI 评估 ({}): {}", ai_config.provider, ai_res.reason));
+            }
+            if !ai_res.slots.is_empty() {
+                candidate_slots = ai_res.slots.into_iter().map(|s| AiTimeSlotDto {
+                    label: s.label,
+                    start: s.start,
+                    end: s.end,
+                }).collect();
+            }
+        }
+        Err(e) => {
+            eprintln!("AI 评估推算未启用或失败，无缝回退到本地启发式分析: {}", e);
+            ai_reason = Some("本地启发式推算（AI未响应或已降级）".to_string());
+        }
+    }
+
+    let message = if work_summary.is_fallback_to_day {
+        format!("在指定时段未发现提交，已智能抓取该日期（{}）全天的 {} 条 Git 提交记录并由 AI 完成工时推算", date.trim(), commits_len)
+    } else {
+        format!("成功提取 {} 条 Git 提交记录，AI 已智能推算研发时段与交付成果", commits_len)
+    };
+
+    Ok(GitSmartFillDto {
+        success: true,
+        repo_path,
+        summary_text: final_summary,
+        commits_count: commits_len,
+        commits: commits_desc,
+        suggested_start_time: Some(final_start),
+        suggested_end_time: Some(final_end),
+        diff_stat: work_summary.diff_stat,
+        is_fallback_to_day: work_summary.is_fallback_to_day,
+        ai_reason,
+        time_slots: candidate_slots,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -828,6 +1376,334 @@ fn log_manual_entry(
 
     state.db.lock().unwrap().insert_time_entry(&entry).map_err(|e| e.to_string())?;
     Ok("工时补录成功！".to_string())
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BatchSaveItemDto {
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub summary: String,
+}
+
+#[tauri::command]
+async fn fetch_batch_git_work_summary(
+    state: State<'_, AppState>,
+    project_id: String,
+    start_date: String,
+    end_date: String,
+    custom_repo_path: Option<String>,
+) -> Result<BatchSmartFillResultDto, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+
+    let (mut proj, client_name, ai_config, hours_per_day) = {
+        let guard = db.lock().unwrap();
+        let p = guard
+            .list_projects()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .ok_or_else(|| "项目不存在".to_string())?;
+
+        let c_name = get_client_name(&guard, p.client_id);
+        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
+        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        let hours = p.hours_per_day;
+
+        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy }, hours)
+    };
+
+    let repo_path = if let Some(ref custom) = custom_repo_path {
+        let p_trim = custom.trim().to_string();
+        if !p_trim.is_empty() {
+            if proj.git_repo_path.as_deref() != Some(&p_trim) {
+                proj.git_repo_path = Some(p_trim.clone());
+                let _ = db.lock().unwrap().update_project(&proj);
+            }
+            p_trim
+        } else {
+            proj.git_repo_path.clone().unwrap_or_default()
+        }
+    } else {
+        proj.git_repo_path.clone().unwrap_or_default()
+    };
+
+    if repo_path.trim().is_empty() {
+        return Ok(BatchSmartFillResultDto {
+            success: false,
+            total_days: 0,
+            total_commits: 0,
+            entries: vec![],
+            message: "该项目尚未绑定本地 Git 仓库路径。请在输入框中填入本地 Git 仓库路径。".to_string(),
+        });
+    }
+
+    if !GitScanner::is_git_repo(&repo_path) {
+        return Ok(BatchSmartFillResultDto {
+            success: false,
+            total_days: 0,
+            total_commits: 0,
+            entries: vec![],
+            message: format!("指定的路径不是有效的 Git 仓库：{}", repo_path),
+        });
+    }
+
+    let start_str = format!("{} 00:00:00", start_date.trim());
+    let end_str = format!("{} 23:59:59", end_date.trim());
+
+    let (since_utc, until_utc) = match (
+        chrono::NaiveDateTime::parse_from_str(&start_str, "%Y-%m-%d %H:%M:%S"),
+        chrono::NaiveDateTime::parse_from_str(&end_str, "%Y-%m-%d %H:%M:%S"),
+    ) {
+        (Ok(s), Ok(e)) => {
+            let s_local = Local.from_local_datetime(&s).unwrap();
+            let e_local = Local.from_local_datetime(&e).unwrap();
+            (s_local.with_timezone(&Utc), e_local.with_timezone(&Utc))
+        }
+        _ => {
+            return Err("起止日期格式错误，需为 YYYY-MM-DD".to_string());
+        }
+    };
+
+    let grouped_commits = GitScanner::fetch_grouped_commits_by_date(&repo_path, since_utc, until_utc)
+        .map_err(|e| e.to_string())?;
+
+    if grouped_commits.is_empty() {
+        return Ok(BatchSmartFillResultDto {
+            success: false,
+            total_days: 0,
+            total_commits: 0,
+            entries: vec![],
+            message: format!("在 {} 至 {} 区间内未发现任何代码提交记录（Git Log 为空）。", start_date.trim(), end_date.trim()),
+        });
+    }
+
+    let mut total_commits_count = 0;
+    let mut candidate_entries = Vec::new();
+    let summarizer = AiSummarizer::new(ai_config.clone());
+
+    for (date_str, commits) in grouped_commits {
+        total_commits_count += commits.len();
+        let commits_len = commits.len();
+        let earliest_time = commits.first().map(|c| c.time_str.clone());
+        let latest_time = commits.last().map(|c| c.time_str.clone());
+        let commits_desc: Vec<String> = commits.iter().map(|c| format!("{} [{}] ({})", c.message, c.hash, c.time_str)).collect();
+
+        // 默认本地启发式推算
+        let local_start = earliest_time.clone().unwrap_or_else(|| "09:30".to_string());
+        let local_end = latest_time.clone().unwrap_or_else(|| "18:30".to_string());
+
+        let mut final_start = local_start.clone();
+        let mut final_end = local_end.clone();
+        let mut final_summary = format!("1. 完成代码研发与提交（共 {} 次提交）\n", commits_len);
+        for (i, c) in commits.iter().enumerate() {
+            final_summary.push_str(&format!("{}. {} [{}]\n", i + 1, c.message, c.hash));
+        }
+        let mut final_reason = format!("本地启发式提取：{} 条提交记录", commits_len);
+
+        // 调用 AI 提炼每天的高规格交付物
+        let ai_eval_req = AiWorkEvaluationRequest {
+            project_name: proj.name.clone(),
+            client_name: client_name.clone(),
+            date: date_str.clone(),
+            commits: commits_desc,
+            diff_stat: None,
+            earliest_commit_time: earliest_time,
+            latest_commit_time: latest_time,
+            preferred_start_time: Some("09:30".to_string()),
+            preferred_hours: hours_per_day,
+        };
+
+        if let Ok(ai_res) = summarizer.evaluate_work_timeslot(&ai_eval_req).await {
+            if !ai_res.suggested_start_time.trim().is_empty() {
+                final_start = ai_res.suggested_start_time;
+            }
+            if !ai_res.suggested_end_time.trim().is_empty() {
+                final_end = ai_res.suggested_end_time;
+            }
+            if !ai_res.deliverable_summary.trim().is_empty() {
+                final_summary = ai_res.deliverable_summary;
+            }
+            if !ai_res.reason.trim().is_empty() {
+                final_reason = format!("AI ({}) 推理: {}", ai_config.provider, ai_res.reason);
+            }
+        }
+
+        candidate_entries.push(BatchSmartEntryDto {
+            temp_id: Uuid::new_v4().to_string(),
+            date: date_str,
+            start_time: final_start,
+            end_time: final_end,
+            summary: final_summary.trim().to_string(),
+            reason: final_reason,
+            commits_count: commits_len,
+            is_selected: true,
+        });
+    }
+
+    let days_count = candidate_entries.len();
+    let message = format!(
+        "成功检索到 {} 天、共 {} 条 Git 提交记录，AI 已智能推算各工作日时段与交付纪要",
+        days_count, total_commits_count
+    );
+
+    Ok(BatchSmartFillResultDto {
+        success: true,
+        total_days: days_count,
+        total_commits: total_commits_count,
+        entries: candidate_entries,
+        message,
+    })
+}
+
+#[tauri::command]
+async fn parse_custom_batch_summary(
+    state: State<'_, AppState>,
+    project_id: String,
+    raw_text: String,
+) -> Result<BatchSmartFillResultDto, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+
+    let (proj, client_name, ai_config) = {
+        let guard = db.lock().unwrap();
+        let p = guard
+            .list_projects()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.id == pid)
+            .ok_or_else(|| "项目不存在".to_string())?;
+
+        let c_name = get_client_name(&guard, p.client_id);
+        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
+        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+
+        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy })
+    };
+
+    let text_trim = raw_text.trim();
+    if text_trim.is_empty() {
+        return Err("待解析的总结文本不能为空".to_string());
+    }
+
+    let summarizer = AiSummarizer::new(ai_config.clone());
+    let parsed_items = summarizer.parse_custom_agent_summary(&proj.name, &client_name, text_trim)
+        .await
+        .map_err(|e| format!("AI 智能体总结解析失败: {}", e))?;
+
+    if parsed_items.is_empty() {
+        return Ok(BatchSmartFillResultDto {
+            success: false,
+            total_days: 0,
+            total_commits: 0,
+            entries: vec![],
+            message: "未在文本中识别出任何有效的日期与工时信息。".to_string(),
+        });
+    }
+
+    let mut candidate_entries = Vec::new();
+    for item in parsed_items {
+        candidate_entries.push(BatchSmartEntryDto {
+            temp_id: Uuid::new_v4().to_string(),
+            date: item.date,
+            start_time: if item.start_time.is_empty() { "09:30".to_string() } else { item.start_time },
+            end_time: if item.end_time.is_empty() { "18:30".to_string() } else { item.end_time },
+            summary: item.summary,
+            reason: if item.reason.is_empty() { "由智能体纪要文本解析得出".to_string() } else { item.reason },
+            commits_count: 0,
+            is_selected: true,
+        });
+    }
+
+    let days_count = candidate_entries.len();
+    Ok(BatchSmartFillResultDto {
+        success: true,
+        total_days: days_count,
+        total_commits: 0,
+        entries: candidate_entries,
+        message: format!("AI 智能体总结解析成功，已自动提炼出 {} 天的结构化工时记录", days_count),
+    })
+}
+
+#[tauri::command]
+fn log_batch_manual_entries(
+    state: State<AppState>,
+    project_id: String,
+    entries: Vec<BatchSaveItemDto>,
+) -> Result<String, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+    let proj = db
+        .list_projects()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.id == pid)
+        .ok_or_else(|| "项目不存在".to_string())?;
+
+    let mut count = 0;
+    for item in entries {
+        let start_str = format!("{} {}:00", item.date.trim(), item.start_time.trim());
+        let end_str = format!("{} {}:00", item.date.trim(), item.end_time.trim());
+
+        let start_naive = match chrono::NaiveDateTime::parse_from_str(&start_str, "%Y-%m-%d %H:%M:%S") {
+            Ok(dt) => dt,
+            Err(_) => continue,
+        };
+        let end_naive = match chrono::NaiveDateTime::parse_from_str(&end_str, "%Y-%m-%d %H:%M:%S") {
+            Ok(dt) => dt,
+            Err(_) => continue,
+        };
+
+        let start_local = match Local.from_local_datetime(&start_naive) {
+            chrono::LocalResult::Single(dt) => dt,
+            chrono::LocalResult::Ambiguous(dt, _) => dt,
+            chrono::LocalResult::None => continue,
+        };
+        let end_local = match Local.from_local_datetime(&end_naive) {
+            chrono::LocalResult::Single(dt) => dt,
+            chrono::LocalResult::Ambiguous(dt, _) => dt,
+            chrono::LocalResult::None => continue,
+        };
+
+        if end_local <= start_local {
+            continue;
+        }
+
+        let diff = end_local.signed_duration_since(start_local);
+        let duration_secs = diff.num_seconds().max(0) as u64;
+
+        let billable_hours = BillingEngine::calculate_billable_hours(duration_secs, proj.rounding_minutes);
+        let billable_days = BillingEngine::calculate_billable_days(billable_hours, proj.hours_per_day, proj.day_calc_mode);
+        let (rate_snapshot, total_amount) = BillingEngine::calculate_amount(&proj, billable_hours, billable_days);
+
+        let entry = TimeEntry {
+            id: Uuid::new_v4(),
+            project_id: pid,
+            start_time: start_local.with_timezone(&Utc),
+            end_time: end_local.with_timezone(&Utc),
+            raw_duration_secs: duration_secs,
+            billable_hours,
+            billable_days,
+            rate_at_moment: rate_snapshot,
+            total_amount,
+            summary: Some(if item.summary.trim().is_empty() { "批量补录工时投入与研发交付".to_string() } else { item.summary.trim().to_string() }),
+            audio_path: None,
+            is_invoiced: false,
+            created_at: Utc::now(),
+        };
+
+        let _ = db.insert_time_entry(&entry);
+        count += 1;
+    }
+
+    Ok(format!("成功批量补录 {} 天的工时投入！", count))
 }
 
 #[tauri::command]
@@ -938,13 +1814,14 @@ fn log_manual_meeting(
 async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, audio_path: String) -> Result<String, String> {
     let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
     let db = state.db.clone();
-    let (provider, api_base, api_key, model) = {
+    let (provider, api_base, api_key, model, proxy) = {
         let guard = db.lock().unwrap();
         let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
         let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
         let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-        (provider, api_base, api_key, model)
+        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        (provider, api_base, api_key, model, proxy)
     };
 
     let summarizer = AiSummarizer::new(AiConfig {
@@ -952,25 +1829,44 @@ async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, au
         api_base,
         api_key,
         model,
+        proxy,
     });
 
     let p = std::path::Path::new(&audio_path);
     let transcript = summarizer.transcribe_audio(p).await.map_err(|e| e.to_string())?;
 
+    // AI 结构化精炼提取（基于转写文本提取核心议题、技术决议与交付待办）
+    let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &[], Some(&audio_path), Some(&transcript)).await {
+        Ok(sum) if !sum.trim().is_empty() => sum,
+        _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
+    };
+
     let mut guard = db.lock().unwrap();
     if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
         let prev = entry.summary.unwrap_or_default();
         let new_summary = if prev.is_empty() {
-            format!("【会议发言实录与摘要】\n{}", transcript)
+            format!("{}\n\n【转写全文实录】\n{}", ai_summary, transcript)
         } else {
-            format!("{}\n\n【会议转写实录】\n{}", prev, transcript)
+            format!("{}\n\n【AI 提炼纪要】\n{}\n\n【转写全文实录】\n{}", prev, ai_summary, transcript)
         };
         entry.summary = Some(new_summary.clone());
         let _ = guard.insert_time_entry(&entry);
         return Ok(new_summary);
     }
 
-    Ok(transcript)
+    Ok(ai_summary)
+}
+
+#[tauri::command]
+fn update_entry_summary(state: State<AppState>, entry_id: String, summary: String) -> Result<String, String> {
+    let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+    if let Ok(Some(mut entry)) = db.get_time_entry(&eid) {
+        entry.summary = Some(summary);
+        db.insert_time_entry(&entry).map_err(|e| e.to_string())?;
+        return Ok("会议纪要与交付说明已成功保存更新！".to_string());
+    }
+    Err("未找到对应的工时记录".to_string())
 }
 
 #[tauri::command]
@@ -1238,6 +2134,7 @@ fn get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
     let base = state.db.lock().unwrap().get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let key = state.db.lock().unwrap().get_setting("ai_key").ok().flatten().unwrap_or_default();
     let model = state.db.lock().unwrap().get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+    let proxy = state.db.lock().unwrap().get_setting("ai_proxy").ok().flatten().unwrap_or_default();
     let hours = state.db.lock().unwrap().get_setting("hours_per_day").ok().flatten().unwrap_or_else(|| "8.0".to_string());
     let afk = state.db.lock().unwrap().get_setting("afk_minutes").ok().flatten().unwrap_or_else(|| "10".to_string());
 
@@ -1246,6 +2143,7 @@ fn get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
         "ai_base": base,
         "ai_key": key,
         "ai_model": model,
+        "ai_proxy": proxy,
         "hours_per_day": hours,
         "afk_minutes": afk
     }))
@@ -1258,6 +2156,7 @@ fn save_settings(
     ai_base: String,
     ai_key: String,
     ai_model: String,
+    ai_proxy: Option<String>,
     hours_per_day: String,
     afk_minutes: String,
 ) -> Result<(), String> {
@@ -1265,6 +2164,9 @@ fn save_settings(
     let _ = state.db.lock().unwrap().set_setting("ai_base", &ai_base);
     let _ = state.db.lock().unwrap().set_setting("ai_key", &ai_key);
     let _ = state.db.lock().unwrap().set_setting("ai_model", &ai_model);
+    if let Some(ref p) = ai_proxy {
+        let _ = state.db.lock().unwrap().set_setting("ai_proxy", p.trim());
+    }
     let _ = state.db.lock().unwrap().set_setting("hours_per_day", &hours_per_day);
     let _ = state.db.lock().unwrap().set_setting("afk_minutes", &afk_minutes);
     Ok(())
@@ -1333,6 +2235,265 @@ fn open_file_or_dir(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn export_meeting_pdf(
+    filename: String,
+    title: String,
+    project_name: String,
+    date_str: String,
+    html_content: String,
+) -> Result<String, String> {
+    use std::io::Write;
+    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
+    let downloads_dir = home.join("Downloads");
+    let target_dir = if downloads_dir.exists() {
+        downloads_dir
+    } else {
+        std::env::temp_dir()
+    };
+
+    let target_pdf = target_dir.join(&filename);
+    let temp_html = std::env::temp_dir().join(format!("meeting_{}.html", uuid::Uuid::new_v4()));
+
+    // 格式化输出高端专业的企业交付级会议纪要 HTML
+    let styled_doc = format!(
+        r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{}</title>
+<style>
+  @page {{
+    size: A4 portrait;
+    margin: 22mm 18mm 20mm 18mm;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+    color: #1e293b;
+    line-height: 1.7;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    font-size: 13.5px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }}
+  .header-card {{
+    border-bottom: 2px solid #4f46e5;
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+  }}
+  .badge {{
+    display: inline-block;
+    padding: 3px 10px;
+    background: #eef2ff;
+    color: #4338ca;
+    border: 1px solid #c7d2fe;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }}
+  .doc-title {{
+    font-size: 22px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.3px;
+  }}
+  .meta-grid {{
+    display: table;
+    width: 100%;
+    margin-top: 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+  }}
+  .meta-item {{
+    display: inline-block;
+    margin-right: 24px;
+    color: #475569;
+  }}
+  .meta-item strong {{
+    color: #0f172a;
+  }}
+  .content-area {{
+    margin-top: 20px;
+  }}
+  .content-area h1 {{
+    font-size: 18px;
+    font-weight: 800;
+    color: #0f172a;
+    border-left: 4px solid #4f46e5;
+    padding-left: 10px;
+    margin: 22px 0 10px 0;
+  }}
+  .content-area h2 {{
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e293b;
+    border-left: 3px solid #6366f1;
+    padding-left: 8px;
+    margin: 18px 0 8px 0;
+  }}
+  .content-area h3 {{
+    font-size: 14px;
+    font-weight: 600;
+    color: #334155;
+    margin: 14px 0 6px 0;
+  }}
+  .content-area p {{
+    margin: 8px 0;
+    color: #334155;
+  }}
+  .content-area ul, .content-area ol {{
+    padding-left: 22px;
+    margin: 8px 0;
+  }}
+  .content-area li {{
+    margin-bottom: 6px;
+    color: #334155;
+  }}
+  .content-area blockquote {{
+    margin: 12px 0;
+    padding: 8px 14px;
+    background: #f8fafc;
+    border-left: 3px solid #cbd5e1;
+    color: #64748b;
+    font-size: 12.5px;
+  }}
+  .content-area hr {{
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 20px 0;
+  }}
+  .content-area code {{
+    background: #f1f5f9;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: #0f172a;
+  }}
+  .content-area pre {{
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 12px 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }}
+  .content-area pre code {{
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }}
+  .footer-bar {{
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #94a3b8;
+  }}
+  .sign-area {{
+    margin-top: 36px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #64748b;
+    padding: 16px;
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+  }}
+</style>
+</head>
+<body>
+  <div class="header-card">
+    <div class="badge">人天神话 · 商业技术交付档案</div>
+    <h1 class="doc-title">{}</h1>
+    <div class="meta-grid">
+      <div class="meta-item">所属项目：<strong>{}</strong></div>
+      <div class="meta-item">会议/记录日期：<strong>{}</strong></div>
+      <div class="meta-item">文档性质：<strong>决议与交付确认单</strong></div>
+    </div>
+  </div>
+
+  <div class="content-area">
+    {}
+  </div>
+
+  <div class="sign-area">
+    <div><strong>承接方确认：</strong>已核对技术方案与实施路径</div>
+    <div><strong>客户方签署/查阅：</strong>____________________</div>
+  </div>
+
+  <div class="footer-bar">
+    <div>生成系统：人天神话 (MythManDay) 数字化人天工时核算系统</div>
+    <div>本文件为双方技术沟通与商务实施备忘凭证</div>
+  </div>
+</body>
+</html>"#,
+        title, title, project_name, date_str, html_content
+    );
+
+    let mut f = std::fs::File::create(&temp_html).map_err(|e| e.to_string())?;
+    f.write_all(styled_doc.as_bytes()).map_err(|e| e.to_string())?;
+
+    // 寻找 Chromium/Google Chrome 或其它 headless 渲染引擎
+    let chrome_bin = which_browser_binary();
+
+    if let Some(bin) = chrome_bin {
+        let output = std::process::Command::new(bin)
+            .arg("--headless")
+            .arg("--disable-gpu")
+            .arg("--no-pdf-header-footer")
+            .arg(format!("--print-to-pdf={}", target_pdf.to_string_lossy()))
+            .arg(&temp_html)
+            .output()
+            .map_err(|e| format!("执行 PDF 导出命令失败: {}", e))?;
+
+        let _ = std::fs::remove_file(&temp_html);
+
+        if !output.status.success() {
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("PDF 导出失败: {}", err_msg));
+        }
+    } else {
+        let _ = std::fs::remove_file(&temp_html);
+        return Err("系统未检测到 Google Chrome 或 Chromium 浏览器环境，无法完成自动化 PDF 打印导出。".to_string());
+    }
+
+    let path_str = target_pdf.to_string_lossy().to_string();
+    let _ = system_open_path(&target_pdf);
+
+    Ok(path_str)
+}
+
+fn which_browser_binary() -> Option<std::path::PathBuf> {
+    let candidates = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/opt/google/chrome/google-chrome",
+        "/snap/bin/chromium",
+    ];
+    for c in &candidates {
+        let p = std::path::PathBuf::from(c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
     // 简易 base64 解码，支持标准 base64
     const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1389,6 +2550,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 自动恢复未完成的会议录音状态（防止退出或重启后丢失当前会议）
+    {
+        let guard = db.lock().unwrap();
+        let pid_opt = guard.get_setting("active_meeting_pid").ok().flatten();
+        let topic_opt = guard.get_setting("active_meeting_topic").ok().flatten();
+        let path_opt = guard.get_setting("active_meeting_path").ok().flatten();
+
+        if let (Some(pid_str), Some(topic), Some(path_str)) = (pid_opt, topic_opt, path_opt) {
+            if let Ok(pid) = Uuid::parse_str(&pid_str) {
+                let p = std::path::PathBuf::from(&path_str);
+                if p.exists() {
+                    *active_recording.lock().unwrap() = Some((pid, topic, p));
+                }
+            }
+        } else {
+            // 如果历史未记录 active_meeting 键，但 recordings 目录存在近期未归档的 wav 文件且对应项目仍在计时中，自动关联恢复
+            let rec_dir = db_dir.join("recordings");
+            if let Ok(entries) = std::fs::read_dir(&rec_dir) {
+                let mut wavs: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().and_then(|s| s.to_str()).map(|s| s == "wav").unwrap_or(false))
+                    .collect();
+                wavs.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+                if let Some(latest) = wavs.last() {
+                    let path = latest.path();
+                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                    // meeting_<pid>_<timestamp>
+                    let parts: Vec<&str> = file_stem.split('_').collect();
+                    if parts.len() >= 2 && parts[0] == "meeting" {
+                        if let Ok(pid) = Uuid::parse_str(parts[1]) {
+                            let mgr = timer_manager.lock().unwrap();
+                            let status = mgr.get_status(&pid);
+                            if !matches!(status, myth_core::timer::TimerStatus::Stopped) {
+                                let projs = guard.list_projects().unwrap_or_default();
+                                let p_name = projs.iter().find(|p| p.id == pid).map(|p| p.name.clone()).unwrap_or_else(|| "现场会议沟通".to_string());
+                                *active_recording.lock().unwrap() = Some((pid, p_name, path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let state = AppState {
         db,
         timer_manager,
@@ -1410,16 +2615,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             stop_timer,
             start_quick_meeting,
             toggle_audio_pause,
+            stop_current_meeting,
+            save_meeting_summary_to_project,
             play_audio,
             stop_audio,
+            get_audio_data_url,
             create_project,
             update_project,
+            delete_project,
             add_project_note,
             list_project_notes,
             delete_note,
+            fetch_git_work_summary,
+            fetch_batch_git_work_summary,
+            parse_custom_batch_summary,
+            log_batch_manual_entries,
             log_manual_entry,
             log_manual_meeting,
             transcribe_entry_audio,
+            update_entry_summary,
             generate_daily_markdown,
             toggle_entry_invoiced,
             batch_toggle_entries_invoiced,
@@ -1428,7 +2642,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             save_settings,
             save_and_open_excel,
             save_multiple_excel_files,
-            open_file_or_dir
+            open_file_or_dir,
+            export_meeting_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

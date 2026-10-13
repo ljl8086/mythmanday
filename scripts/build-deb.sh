@@ -22,7 +22,12 @@ echo "      📦 开始制作 ${PACKAGE_NAME} v${VERSION} .deb 安装包       "
 echo "=========================================================="
 
 # 1. 确保 Release 二进制程序已构建
-if [ ! -f "${TARGET_BIN}" ]; then
+FORCE_REBUILD=0
+if [ "$1" = "--rebuild" ] || [ "$1" = "-f" ] || [ "$1" = "--force" ] || [ "${REBUILD:-0}" = "1" ]; then
+  FORCE_REBUILD=1
+fi
+
+if [ ! -f "${TARGET_BIN}" ] || [ "${FORCE_REBUILD}" -eq 1 ]; then
   echo "🔨 构建前端静态产物..."
   export PATH="${HOME}/.local/share/pnpm:${HOME}/.local/bin:${HOME}/.cargo/bin:$PATH"
   export PKG_CONFIG_PATH="${HOME}/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"

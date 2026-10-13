@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import * as XLSX from "xlsx-js-style";
+import { ModernDatePicker, ModernTimePicker } from "./DateTimePicker";
 import {
   Play,
   Pause,
@@ -31,7 +32,13 @@ import {
   Filter,
   Download,
   Eye,
-  EyeOff
+  EyeOff,
+  GitBranch,
+  FolderOpen,
+  Edit3,
+  FileDown,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 
 interface Project {
@@ -51,6 +58,47 @@ interface Project {
   billing_type: string;
   rounding_mode?: string;
   min_granularity?: number;
+  git_repo_path?: string;
+}
+
+interface AiTimeSlotOption {
+  label: string;
+  start: string;
+  end: string;
+}
+
+interface GitSmartFillDto {
+  success: boolean;
+  repo_path: string;
+  summary_text: string;
+  commits_count: number;
+  commits: string[];
+  suggested_start_time?: string;
+  suggested_end_time?: string;
+  diff_stat?: string;
+  is_fallback_to_day: boolean;
+  ai_reason?: string;
+  time_slots?: AiTimeSlotOption[];
+  message: string;
+}
+
+interface BatchSmartEntry {
+  temp_id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  summary: string;
+  reason: string;
+  commits_count: number;
+  is_selected: boolean;
+}
+
+interface BatchSmartFillResult {
+  success: boolean;
+  total_days: number;
+  total_commits: number;
+  entries: BatchSmartEntry[];
+  message: string;
 }
 
 interface Entry {
@@ -84,8 +132,19 @@ interface GlobalStats {
   total_amount: string;
   running_count: number;
   is_recording_audio: boolean;
+  active_recording_project_id?: string;
   active_recording_project_name: string;
   is_audio_paused: boolean;
+}
+
+interface StopMeetingResult {
+  success: boolean;
+  project_id: string;
+  topic: string;
+  audio_path: string;
+  transcript: string;
+  summary: string;
+  message: string;
 }
 
 interface Note {
@@ -175,6 +234,8 @@ export function App() {
   const [editProjRoundingMode, setEditProjRoundingMode] = useState<"ceil" | "half_up" | "floor">("ceil");
   const [editProjMinGranularity, setEditProjMinGranularity] = useState("0.5");
   const [editProjGit, setEditProjGit] = useState("");
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   // Meeting Form (Quick Timer)
   const [meetingTopic, setMeetingTopic] = useState("");
@@ -186,6 +247,11 @@ export function App() {
   const [manualEntryStartTime, setManualEntryStartTime] = useState("09:30");
   const [manualEntryEndTime, setManualEntryEndTime] = useState("12:30");
   const [manualEntrySummary, setManualEntrySummary] = useState("");
+  const [manualEntryRepoPath, setManualEntryRepoPath] = useState("");
+  const [isSmartFilling, setIsSmartFilling] = useState(false);
+  const [showEditRepoInput, setShowEditRepoInput] = useState(false);
+  const [smartAiReason, setSmartAiReason] = useState<string | null>(null);
+  const [smartTimeSlots, setSmartTimeSlots] = useState<AiTimeSlotOption[]>([]);
 
   // Manual Log Meeting Form (with Audio upload)
   const [manualMeetingDate, setManualMeetingDate] = useState(new Date().toISOString().split("T")[0]);
@@ -195,6 +261,129 @@ export function App() {
   const [manualMeetingRate, setManualMeetingRate] = useState("350");
   const [manualMeetingPid, setManualMeetingPid] = useState<string>("");
   const [manualMeetingAudioPath, setManualMeetingAudioPath] = useState("");
+
+  // Batch Smart Fill Modal States
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchTab, setBatchTab] = useState<"git" | "text">("git");
+  const [batchStartDate, setBatchStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().split("T")[0];
+  });
+  const [batchEndDate, setBatchEndDate] = useState(new Date().toISOString().split("T")[0]);
+  const [batchRawText, setBatchRawText] = useState("");
+  const [batchRepoPath, setBatchRepoPath] = useState("");
+  const [isBatchScanning, setIsBatchScanning] = useState(false);
+  const [isBatchSaving, setIsBatchSaving] = useState(false);
+  const [batchEntries, setBatchEntries] = useState<BatchSmartEntry[]>([]);
+
+  // Meeting Summary Modal (Stop Meeting & AI Generated Minutes)
+  const [showMeetingSummaryModal, setShowMeetingSummaryModal] = useState(false);
+  const [isStoppingMeeting, setIsStoppingMeeting] = useState(false);
+  const [meetingSummaryData, setMeetingSummaryData] = useState<{
+    project_id: string;
+    topic: string;
+    audio_path: string;
+    summary: string;
+    transcript: string;
+  } | null>(null);
+
+  // Global In-App Audio Player Modal State
+  const [activePlayerAudio, setActivePlayerAudio] = useState<{
+    path: string;
+    title: string;
+    dataUrl?: string;
+    loading: boolean;
+  } | null>(null);
+
+  // Full Transcript Modal State
+  const [activeTranscriptModal, setActiveTranscriptModal] = useState<{
+    title: string;
+    transcript: string;
+  } | null>(null);
+
+  // Edit Summary Modal State (for user modification before feeding to Agent)
+  const [activeEditSummaryModal, setActiveEditSummaryModal] = useState<{
+    entry_id: string;
+    title: string;
+    project_name?: string;
+    date_str?: string;
+    summary: string;
+    raw_transcript: string;
+  } | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  // 跟踪哪些长纪要/长文本卡片已被用户点击「展开完整内容」
+  const [expandedSummaryEntryIds, setExpandedSummaryEntryIds] = useState<Record<string, boolean>>({});
+
+  const toggleSummaryExpand = (entryId: string) => {
+    setExpandedSummaryEntryIds((prev) => ({
+      ...prev,
+      [entryId]: !prev[entryId],
+    }));
+  };
+
+  // Helper to separate concise summary from verbose raw transcript
+  const splitSummaryAndTranscript = (fullText: string) => {
+    if (!fullText) return { summary: "", transcript: "" };
+    const markers = ["【会议录音全量转写实录】：", "【会议录音全量转写文稿】：", "【转写全文实录】", "【会议转写实录】"];
+    for (const marker of markers) {
+      const idx = fullText.indexOf(marker);
+      if (idx !== -1) {
+        return {
+          summary: fullText.substring(0, idx).trim().replace(/---\s*$/, "").trim(),
+          transcript: fullText.substring(idx + marker.length).trim(),
+        };
+      }
+    }
+    return { summary: fullText, transcript: "" };
+  };
+
+  // Settings Tab Form
+  const [settingAiProvider, setSettingAiProvider] = useState("agy");
+  const [settingAiBase, setSettingAiBase] = useState("https://api.openai.com/v1");
+  const [settingAiKey, setSettingAiKey] = useState("");
+  const [settingAiModel, setSettingAiModel] = useState("gpt-4o-mini");
+  const [settingAiProxy, setSettingAiProxy] = useState("");
+  const [settingHoursPerDay, setSettingHoursPerDay] = useState("8.0");
+  const [settingAfkMinutes, setSettingAfkMinutes] = useState("10");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  const loadSettings = async () => {
+    try {
+      const res = await invoke<any>("get_settings");
+      if (res) {
+        if (res.ai_provider) setSettingAiProvider(res.ai_provider);
+        if (res.ai_base) setSettingAiBase(res.ai_base);
+        if (res.ai_key !== undefined) setSettingAiKey(res.ai_key);
+        if (res.ai_model) setSettingAiModel(res.ai_model);
+        if (res.ai_proxy !== undefined) setSettingAiProxy(res.ai_proxy);
+        if (res.hours_per_day) setSettingHoursPerDay(res.hours_per_day);
+        if (res.afk_minutes) setSettingAfkMinutes(res.afk_minutes);
+      }
+    } catch (e) {
+      console.error("加载设置失败:", e);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setIsSavingSettings(true);
+    try {
+      await invoke("save_settings", {
+        aiProvider: settingAiProvider,
+        aiBase: settingAiBase,
+        aiKey: settingAiKey,
+        aiModel: settingAiModel,
+        aiProxy: settingAiProxy.trim() || null,
+        hoursPerDay: settingHoursPerDay,
+        afkMinutes: settingAfkMinutes,
+      });
+      showToast("✅ 系统设置与 AI 代理配置已保存成功！");
+    } catch (e: any) {
+      showToast("保存失败: " + e.toString());
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
 
   const renderMarkdown = (content: string) => {
     if (!content) return "";
@@ -237,6 +426,7 @@ export function App() {
 
   useEffect(() => {
     refreshData();
+    loadSettings();
     const interval = setInterval(() => {
       refreshData();
       if (selectedProjectId) {
@@ -312,6 +502,199 @@ export function App() {
   };
 
   const activeProject = projects.find((p) => p.id === selectedProjectId);
+
+  useEffect(() => {
+    if (showManualEntryModal && activeProject) {
+      setManualEntryRepoPath(activeProject.git_repo_path || "");
+      setShowEditRepoInput(!activeProject.git_repo_path);
+    }
+  }, [showManualEntryModal, activeProject?.id, activeProject?.git_repo_path]);
+
+  const handleSmartFillGit = async () => {
+    if (!activeProject) return;
+    setIsSmartFilling(true);
+    try {
+      const res = await invoke<GitSmartFillDto>("fetch_git_work_summary", {
+        projectId: activeProject.id,
+        date: manualEntryDate,
+        startTime: manualEntryStartTime || null,
+        endTime: manualEntryEndTime || null,
+        customRepoPath: manualEntryRepoPath.trim() || null,
+      });
+
+      if (!res.success) {
+        showToast("⚠️ " + res.message);
+        if (!activeProject.git_repo_path || !res.repo_path) {
+          setShowEditRepoInput(true);
+        }
+        return;
+      }
+
+      setManualEntrySummary(res.summary_text);
+      if (res.repo_path) {
+        setManualEntryRepoPath(res.repo_path);
+      }
+
+      if (res.suggested_start_time && res.suggested_end_time) {
+        setManualEntryStartTime(res.suggested_start_time);
+        setManualEntryEndTime(res.suggested_end_time);
+      }
+
+      setSmartAiReason(res.ai_reason || null);
+      setSmartTimeSlots(res.time_slots || []);
+
+      showToast("✨ " + res.message);
+      refreshData();
+    } catch (e: any) {
+      showToast("Git 提取失败: " + e.toString());
+    } finally {
+      setIsSmartFilling(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showBatchModal && activeProject) {
+      setBatchRepoPath(activeProject.git_repo_path || "");
+    }
+  }, [showBatchModal, activeProject?.id, activeProject?.git_repo_path]);
+
+  // 1. 批量时间段检索 Git 提交
+  const handleBatchScanGit = async () => {
+    if (!activeProject) return;
+    setIsBatchScanning(true);
+    try {
+      const res = await invoke<BatchSmartFillResult>("fetch_batch_git_work_summary", {
+        projectId: activeProject.id,
+        startDate: batchStartDate,
+        endDate: batchEndDate,
+        customRepoPath: batchRepoPath.trim() || null,
+      });
+
+      if (!res.success) {
+        showToast("⚠️ " + res.message);
+        return;
+      }
+
+      setBatchEntries(res.entries);
+      showToast("✨ " + res.message);
+    } catch (e: any) {
+      showToast("Git 批量检索失败: " + e.toString());
+    } finally {
+      setIsBatchScanning(false);
+    }
+  };
+
+  // 2. 批量解析第三方 AI 智能体总结/自由文本
+  const handleBatchParseText = async () => {
+    if (!activeProject) return;
+    if (!batchRawText.trim()) {
+      showToast("⚠️ 请先粘贴待解析的 AI 智能体工作总结或自由纪要文本");
+      return;
+    }
+    setIsBatchScanning(true);
+    try {
+      const res = await invoke<BatchSmartFillResult>("parse_custom_batch_summary", {
+        projectId: activeProject.id,
+        rawText: batchRawText,
+      });
+
+      if (!res.success) {
+        showToast("⚠️ " + res.message);
+        return;
+      }
+
+      setBatchEntries(res.entries);
+      showToast("✨ " + res.message);
+    } catch (e: any) {
+      showToast("AI 智能体总结解析失败: " + e.toString());
+    } finally {
+      setIsBatchScanning(false);
+    }
+  };
+
+  // 3. 提交选中的条目执行批量入库
+  const handleBatchSave = async () => {
+    if (!activeProject) return;
+    const selected = batchEntries.filter((e) => e.is_selected);
+    if (selected.length === 0) {
+      showToast("⚠️ 请至少勾选一条待补录的工时记录");
+      return;
+    }
+
+    setIsBatchSaving(true);
+    try {
+      const payload = selected.map((item) => ({
+        date: item.date,
+        start_time: item.start_time,
+        end_time: item.end_time,
+        summary: item.summary,
+      }));
+
+      const res = await invoke<string>("log_batch_manual_entries", {
+        projectId: activeProject.id,
+        entries: payload,
+      });
+
+      showToast("🎉 " + res);
+      setShowBatchModal(false);
+      setBatchEntries([]);
+      setBatchRawText("");
+      refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+    } catch (e: any) {
+      showToast("批量补录失败: " + e.toString());
+    } finally {
+      setIsBatchSaving(false);
+    }
+  };
+
+  // 结束会议录音 (项目通道继续运行，由 AI 提炼会议纪要)
+  const handleStopMeeting = async () => {
+    setIsStoppingMeeting(true);
+    showToast("⏹ 正在停止录音并由 AI 智能提炼会议纪要 (音频转码中)...");
+    try {
+      const res = await invoke<StopMeetingResult>("stop_current_meeting");
+      if (res && res.success) {
+        setMeetingSummaryData({
+          project_id: res.project_id,
+          topic: res.topic,
+          audio_path: res.audio_path,
+          summary: res.summary,
+          transcript: res.transcript,
+        });
+        setShowMeetingSummaryModal(true);
+        showToast("🎉 " + res.message);
+        refreshData();
+      }
+    } catch (e: any) {
+      showToast("结束会议录音失败: " + e.toString());
+    } finally {
+      setIsStoppingMeeting(false);
+    }
+  };
+
+  const handleSaveMeetingSummary = async () => {
+    if (!meetingSummaryData) return;
+    try {
+      const res = await invoke<string>("save_meeting_summary_to_project", {
+        projectId: meetingSummaryData.project_id,
+        topic: meetingSummaryData.topic,
+        summary: meetingSummaryData.summary,
+        audioPath: meetingSummaryData.audio_path || null,
+      });
+      showToast("✅ " + res);
+      setShowMeetingSummaryModal(false);
+      setMeetingSummaryData(null);
+      refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+    } catch (e: any) {
+      showToast("保存会议纪要失败: " + e.toString());
+    }
+  };
 
   const handleStart = async (id: string) => {
     await invoke("start_timer", { projectId: id });
@@ -394,7 +777,7 @@ export function App() {
     setEditProjCurrency(proj.currency || "CNY");
     setEditProjRoundingMode((proj.rounding_mode as any) || "ceil");
     setEditProjMinGranularity(proj.min_granularity !== undefined ? proj.min_granularity.toString() : "0.5");
-    setEditProjGit("");
+    setEditProjGit(proj.git_repo_path || "");
     setShowEditProjModal(true);
   };
 
@@ -431,6 +814,34 @@ export function App() {
     }
   };
 
+  const handleDeleteProject = async (proj: Project) => {
+    setIsDeletingProject(true);
+    try {
+      await invoke("delete_project", { id: proj.id });
+      showToast(`🗑️ 项目「${proj.name}」已成功删除`);
+      setProjectToDelete(null);
+      setShowEditProjModal(false);
+
+      const projs = await invoke<Project[]>("get_projects");
+      setProjects(projs);
+      if (selectedProjectId === proj.id) {
+        if (projs.length > 0) {
+          setSelectedProjectId(projs[0].id);
+          refreshProjectDetails(projs[0].id, selectedMonth);
+        } else {
+          setSelectedProjectId("");
+          setDayGroups([]);
+        }
+      } else {
+        await refreshData();
+      }
+    } catch (e: any) {
+      showToast("删除项目失败: " + e.toString());
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   const handleStartMeeting = async () => {
     try {
       const res = await invoke<string>("start_quick_meeting", {
@@ -458,6 +869,82 @@ export function App() {
       if (selectedProjectId) refreshProjectDetails(selectedProjectId);
     } catch (e: any) {
       showToast("转写失败: " + e.toString());
+    }
+  };
+
+  const handleOpenAudioPlayer = async (audioPath: string, title: string = "会议录音凭证") => {
+    setActivePlayerAudio({
+      path: audioPath,
+      title,
+      loading: true,
+    });
+    try {
+      const dataUrl = await invoke<string>("get_audio_data_url", { audioPath });
+      setActivePlayerAudio({
+        path: audioPath,
+        title,
+        dataUrl,
+        loading: false,
+      });
+    } catch (e: any) {
+      showToast("载入录音文件失败: " + e.toString());
+      setActivePlayerAudio((prev) => (prev ? { ...prev, loading: false } : null));
+    }
+  };
+
+  const handleSaveEntrySummary = async () => {
+    if (!activeEditSummaryModal) return;
+    try {
+      const fullTextToSave = activeEditSummaryModal.raw_transcript
+        ? `${activeEditSummaryModal.summary.trim()}\n\n---\n【会议录音全量转写实录】：\n${activeEditSummaryModal.raw_transcript.trim()}`
+        : activeEditSummaryModal.summary.trim();
+
+      const res = await invoke<string>("update_entry_summary", {
+        entryId: activeEditSummaryModal.entry_id,
+        summary: fullTextToSave,
+      });
+
+      showToast("✅ " + res);
+      setActiveEditSummaryModal(null);
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+    } catch (e: any) {
+      showToast("保存失败: " + e.toString());
+    }
+  };
+
+  const handleExportPdf = async (options: {
+    title: string;
+    projectName: string;
+    dateStr: string;
+    summaryContent: string;
+  }) => {
+    if (!options.summaryContent.trim()) {
+      showToast("⚠️ 会议纪要内容为空，无法导出 PDF！");
+      return;
+    }
+    setIsExportingPdf(true);
+    showToast("📄 正在排版并生成客户级交付 PDF 纪要...");
+    try {
+      const sanitizedProj = options.projectName.replace(/[\\/:*?"<>|]/g, "_");
+      const sanitizedTitle = options.title.replace(/[\\/:*?"<>|]/g, "_").replace(/^📅\s*/, "");
+      const filename = `${options.dateStr}_${sanitizedProj}_${sanitizedTitle}_会议纪要.pdf`;
+      const htmlBody = renderMarkdown(options.summaryContent);
+
+      const savedPath = await invoke<string>("export_meeting_pdf", {
+        filename,
+        title: options.title.replace(/^📅\s*/, ""),
+        projectName: options.projectName,
+        dateStr: options.dateStr,
+        htmlContent: htmlBody,
+      });
+
+      showToast(`🎉 PDF 纪要已导出至: ${savedPath}`);
+    } catch (e: any) {
+      showToast("PDF 导出失败: " + e.toString());
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -1068,9 +1555,18 @@ export function App() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => invoke("toggle_audio_pause")}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold"
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer"
               >
                 {globalStats.is_audio_paused ? "▶ 继续录音" : "⏸ 暂停录音"}
+              </button>
+              <button
+                onClick={handleStopMeeting}
+                disabled={isStoppingMeeting}
+                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 shadow-2xs"
+                title="单独停止本次会议录音并自动生成会议纪要（项目工时保持继续计时）"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                {isStoppingMeeting ? "正在生成纪要..." : "⏹ 结束会议并提炼纪要"}
               </button>
             </div>
           </div>
@@ -1161,6 +1657,14 @@ export function App() {
                             <Settings className="w-3 h-3 text-indigo-600" />
                             规则配置
                           </button>
+                          <button
+                            onClick={() => setProjectToDelete(activeProject)}
+                            className="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-100 border border-rose-200/80 text-rose-700 text-xs font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                            title="删除项目及其关联记录"
+                          >
+                            <Trash2 className="w-3 h-3 text-rose-600" />
+                            删除项目
+                          </button>
                           {activeProject.is_running && (
                             <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
@@ -1221,6 +1725,30 @@ export function App() {
 
                         {activeProject.is_running && (
                           <div className="flex items-center gap-2">
+                            {globalStats.is_recording_audio &&
+                            globalStats.active_recording_project_id === activeProject.id ? (
+                              <button
+                                onClick={handleStopMeeting}
+                                disabled={isStoppingMeeting}
+                                className="h-8 px-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-xs transition-all disabled:opacity-50"
+                                title="单独结束当前会议录音并提炼AI纪要（工时继续计时）"
+                              >
+                                <Square className="w-3.5 h-3.5 fill-current" />
+                                {isStoppingMeeting ? "正在提炼..." : "结束会议"}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setMeetingSelectedPid(activeProject.id);
+                                  setShowMeetingModal(true);
+                                }}
+                                className="h-8 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center gap-1 shadow-xs transition-all"
+                                title="在此项目中召开会议并启动录音"
+                              >
+                                <Mic className="w-3.5 h-3.5" />
+                                开会/录音
+                              </button>
+                            )}
                             <button
                               onClick={() => setShowNoteModal(true)}
                               className="h-8 px-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium flex items-center gap-1 shadow-2xs transition-all"
@@ -1247,6 +1775,17 @@ export function App() {
 
                         {activeProject.is_paused && (
                           <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setMeetingSelectedPid(activeProject.id);
+                                setShowMeetingModal(true);
+                              }}
+                              className="h-8 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center gap-1 shadow-xs transition-all"
+                              title="在此项目中召开会议并启动录音"
+                            >
+                              <Mic className="w-3.5 h-3.5" />
+                              开会/录音
+                            </button>
                             <button
                               onClick={() => setShowNoteModal(true)}
                               className="h-8 px-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-medium flex items-center gap-1 shadow-2xs transition-all"
@@ -1343,10 +1882,21 @@ export function App() {
                       {/* 补录工时入口 */}
                       <button
                         onClick={() => setShowManualEntryModal(true)}
-                        className="h-7 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center gap-1 shadow-2xs transition-all"
+                        className="h-7 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                        title="单日补录工时投入"
                       >
                         <PlusCircle className="w-3.5 h-3.5 text-indigo-500" />
                         补录工时
+                      </button>
+
+                      {/* 智能批量补录入口 */}
+                      <button
+                        onClick={() => setShowBatchModal(true)}
+                        className="h-7 px-2.5 rounded-lg border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                        title="按起止时间段自动检索 Git 或粘贴 AI 智能体工作总结批量智能入库"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                        智能批量补录
                       </button>
 
                       {/* 补录会议+上传录音入口 */}
@@ -1355,7 +1905,7 @@ export function App() {
                           setManualMeetingPid(activeProject.id);
                           setShowManualMeetingModal(true);
                         }}
-                        className="h-7 px-2.5 rounded-lg border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-100 text-indigo-700 text-xs font-medium flex items-center gap-1 shadow-2xs transition-all"
+                        className="h-7 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
                       >
                         <Upload className="w-3.5 h-3.5 text-indigo-600" />
                         补录会议/录音
@@ -1448,45 +1998,138 @@ export function App() {
                                     </button>
                                   </div>
 
-                                  <div
-                                    className="markdown-body text-xs text-slate-700 leading-relaxed font-normal"
-                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.summary_text) }}
-                                  />
+                                  {(() => {
+                                    const { summary: displaySummary, transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
+                                    const isExpanded = !!expandedSummaryEntryIds[entry.id];
+                                    const isLongContent = displaySummary.length > 160 || displaySummary.split("\n").length > 4;
+                                    return (
+                                      <>
+                                        <div className="relative">
+                                          <div
+                                            className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal transition-all duration-200 ${
+                                              !isExpanded && isLongContent
+                                                ? "max-h-24 overflow-hidden mask-gradient-b"
+                                                : ""
+                                            }`}
+                                            dangerouslySetInnerHTML={{ __html: renderMarkdown(displaySummary) }}
+                                          />
+                                          {isLongContent && (
+                                            <div className="pt-1.5 flex items-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => toggleSummaryExpand(entry.id)}
+                                                className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer py-0.5 px-1.5 rounded hover:bg-indigo-50/80 transition-colors"
+                                              >
+                                                {isExpanded ? (
+                                                  <>
+                                                    <ChevronUp className="w-3.5 h-3.5" />
+                                                    收起内容
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <ChevronDown className="w-3.5 h-3.5" />
+                                                    展开查看完整内容 ({displaySummary.length}字)
+                                                  </>
+                                                )}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
 
-                                  {/* 操作按钮区 */}
-                                  <div className="flex items-center justify-between pt-1">
-                                    {entry.has_audio ? (
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          onClick={() => invoke("play_audio", { audioPath: entry.audio_path })}
-                                          className="h-6.5 px-2.5 rounded bg-slate-200/80 hover:bg-slate-300 text-slate-700 text-[11px] font-medium flex items-center gap-1 transition-all"
-                                        >
-                                          <Volume2 className="w-3 h-3 text-slate-600" />
-                                          播放录音
-                                        </button>
-                                        <button
-                                          onClick={() => handleTranscribe(entry)}
-                                          className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-[11px] font-medium flex items-center gap-1 transition-all"
-                                        >
-                                          <Sparkles className="w-3 h-3 text-indigo-600" />
-                                          AI转写纪要
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div />
-                                    )}
+                                        {/* 操作按钮区 */}
+                                        <div className="flex items-center justify-between pt-1">
+                                          <div className="flex items-center gap-2">
+                                            {entry.has_audio && (
+                                              <button
+                                                onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
+                                                className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="点击打开内置播放器，支持进度拖拽、快进后退与完整路径复制"
+                                              >
+                                                <Volume2 className="w-3.5 h-3.5 text-indigo-600" />
+                                                播放录音
+                                              </button>
+                                            )}
+                                            {rawTranscript && (
+                                              <button
+                                                onClick={() => setActiveTranscriptModal({
+                                                  title: `📅 ${entry.date_str} 会议全量转写实录`,
+                                                  transcript: rawTranscript,
+                                                })}
+                                                className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="在独立窗口中查看完整数万字逐字转写文稿"
+                                              >
+                                                <FileText className="w-3 h-3 text-slate-500" />
+                                                查看转写实录 ({rawTranscript.length}字)
+                                              </button>
+                                            )}
+                                            {entry.has_audio && (
+                                              <button
+                                                onClick={() => handleTranscribe(entry)}
+                                                className="h-6.5 px-2.5 rounded bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="使用当前配置的 AI 重新识别音频并提炼纪要"
+                                              >
+                                                <Sparkles className="w-3 h-3 text-amber-600" />
+                                                重新提炼
+                                              </button>
+                                            )}
+                                          </div>
 
-                                    <button
-                                      onClick={() => {
-                                        setSelectedEntry(entry);
-                                        setShowDetailModal(true);
-                                      }}
-                                      className="h-6.5 px-2.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs"
-                                    >
-                                      <FileText className="w-3 h-3 text-slate-400" />
-                                      查看文稿详情
-                                    </button>
-                                  </div>
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(displaySummary);
+                                                showToast("📋 会议纪要已复制到剪贴板！可直接发送给 AI 智能体");
+                                              }}
+                                              className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                              title="一键复制精炼会议纪要，方便丢给 Agent 进行开发拆解"
+                                            >
+                                              <Copy className="w-3 h-3 text-slate-500" />
+                                              复制纪要
+                                            </button>
+                                            <button
+                                              onClick={() => setActiveEditSummaryModal({
+                                                entry_id: entry.id,
+                                                title: `📅 ${entry.date_str} 会议纪要与交付说明`,
+                                                project_name: entry.project_name || activeProject?.name || "项目交付",
+                                                date_str: entry.date_str,
+                                                summary: displaySummary,
+                                                raw_transcript: rawTranscript,
+                                              })}
+                                              className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                              title="修改与微调 AI 提取的要点，保存后交付 Agent 实施开发"
+                                            >
+                                              <Edit3 className="w-3 h-3 text-indigo-600" />
+                                              编辑纪要
+                                            </button>
+                                            <button
+                                              disabled={isExportingPdf}
+                                              onClick={() => handleExportPdf({
+                                                title: `【${entry.project_name || activeProject?.name || "项目"}】会议纪要与技术决议`,
+                                                projectName: entry.project_name || activeProject?.name || "技术项目",
+                                                dateStr: entry.date_str,
+                                                summaryContent: displaySummary,
+                                              })}
+                                              className="h-6.5 px-2.5 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                                              title="导出为精美商务 PDF 文档，可直接交付客户确认"
+                                            >
+                                              <FileDown className="w-3 h-3 text-emerald-600" />
+                                              导出PDF
+                                            </button>
+                                            <button
+                                              onClick={() => {
+                                                setSelectedEntry(entry);
+                                                setShowDetailModal(true);
+                                              }}
+                                              className="h-6.5 px-2.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+                                            >
+                                              <FileText className="w-3 h-3 text-slate-400" />
+                                              查看详情
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               ))}
                             </div>
@@ -1657,21 +2300,111 @@ export function App() {
                                         {entry.is_invoiced ? "已结算" : "待结算"}
                                       </button>
                                     </div>
-                                    <div
-                                      className="markdown-body text-xs text-slate-700 leading-relaxed font-normal"
-                                      dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.summary_text) }}
-                                    />
-                                    {entry.has_audio && (
-                                      <div className="pt-1">
-                                        <button
-                                          onClick={() => invoke("play_audio", { audioPath: entry.audio_path })}
-                                          className="h-6 px-2 rounded bg-slate-200/80 hover:bg-slate-300 text-slate-700 text-[11px] font-medium flex items-center gap-1"
-                                        >
-                                          <Volume2 className="w-3 h-3 text-slate-600" />
-                                          播放录音
-                                        </button>
-                                      </div>
-                                    )}
+                                    {(() => {
+                                      const { summary: displaySummary, transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
+                                      const isExpanded = !!expandedSummaryEntryIds[entry.id];
+                                      const isLongContent = displaySummary.length > 160 || displaySummary.split("\n").length > 4;
+                                      return (
+                                        <>
+                                          <div className="relative">
+                                            <div
+                                              className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal transition-all duration-200 ${
+                                                !isExpanded && isLongContent
+                                                  ? "max-h-24 overflow-hidden mask-gradient-b"
+                                                  : ""
+                                              }`}
+                                              dangerouslySetInnerHTML={{ __html: renderMarkdown(displaySummary) }}
+                                            />
+                                            {isLongContent && (
+                                              <div className="pt-1.5 flex items-center">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => toggleSummaryExpand(entry.id)}
+                                                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer py-0.5 px-1.5 rounded hover:bg-indigo-50/80 transition-colors"
+                                                >
+                                                  {isExpanded ? (
+                                                    <>
+                                                      <ChevronUp className="w-3.5 h-3.5" />
+                                                      收起内容
+                                                    </>
+                                                  ) : (
+                                                    <>
+                                                      <ChevronDown className="w-3.5 h-3.5" />
+                                                      展开查看完整内容 ({displaySummary.length}字)
+                                                    </>
+                                                  )}
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-2 pt-1">
+                                            {entry.has_audio && (
+                                              <button
+                                                onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
+                                                className="h-6 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="点击打开内置播放器，支持进度拖拽、快进后退与完整路径复制"
+                                              >
+                                                <Volume2 className="w-3 h-3 text-indigo-600" />
+                                                播放录音
+                                              </button>
+                                            )}
+                                            {rawTranscript && (
+                                              <button
+                                                onClick={() => setActiveTranscriptModal({
+                                                  title: `📅 ${entry.date_str} 会议全量转写实录`,
+                                                  transcript: rawTranscript,
+                                                })}
+                                                className="h-6 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="在独立窗口中查看完整数万字逐字转写文稿"
+                                              >
+                                                <FileText className="w-3 h-3 text-slate-500" />
+                                                查看转写实录 ({rawTranscript.length}字)
+                                              </button>
+                                            )}
+                                            <button
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(displaySummary);
+                                                showToast("📋 会议纪要已复制到剪贴板！可直接发送给 AI 智能体");
+                                              }}
+                                              className="h-6 px-2 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                              title="一键复制精炼会议纪要"
+                                            >
+                                              <Copy className="w-3 h-3 text-slate-500" />
+                                              复制纪要
+                                            </button>
+                                            <button
+                                              onClick={() => setActiveEditSummaryModal({
+                                                entry_id: entry.id,
+                                                title: `📅 ${entry.date_str} 会议纪要与交付说明`,
+                                                project_name: entry.project_name || activeProject?.name || "项目交付",
+                                                date_str: entry.date_str,
+                                                summary: displaySummary,
+                                                raw_transcript: rawTranscript,
+                                              })}
+                                              className="h-6 px-2 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                              title="编辑修改会议纪要"
+                                            >
+                                              <Edit3 className="w-3 h-3 text-indigo-600" />
+                                              编辑纪要
+                                            </button>
+                                            <button
+                                              disabled={isExportingPdf}
+                                              onClick={() => handleExportPdf({
+                                                title: `【${entry.project_name || activeProject?.name || "项目"}】会议纪要与技术决议`,
+                                                projectName: entry.project_name || activeProject?.name || "技术项目",
+                                                dateStr: entry.date_str,
+                                                summaryContent: displaySummary,
+                                              })}
+                                              className="h-6 px-2 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                                              title="导出为精美商务 PDF 文档，可直接交付客户确认"
+                                            >
+                                              <FileDown className="w-3 h-3 text-emerald-600" />
+                                              导出PDF
+                                            </button>
+                                          </div>
+                                        </>
+                                      );
+                                    })()}
                                   </div>
                                 ))}
                               </div>
@@ -1960,12 +2693,146 @@ export function App() {
         {activeTab === "settings" && (
           <div className="flex-1 p-6 overflow-y-auto">
             <div className="max-w-xl bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm space-y-5">
-              <h3 className="text-lg font-extrabold text-slate-900">⚙️ AI 引擎与工时规则配置</h3>
-              <p className="text-xs text-slate-500">
-                支持开箱即用免 Key 的本地 agy / codex CLI，以及兼容 OpenAI / DeepSeek / Ollama 的自定义 API
-              </p>
-              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium leading-relaxed">
-                ✨ 当前默认开启 <strong>本地已登录的 agy CLI 模式</strong>。无需填写 API Key，MythManDay 自动完成语音转写与交付纪要提炼！
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-600" />
+                  AI 引擎与代理服务器配置
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  支持开箱即用免 Key 的本地 agy / codex CLI，以及兼容 OpenAI / DeepSeek / Ollama 的自定义 HTTP 端点。
+                </p>
+              </div>
+
+              {/* 核心 AI 调用模式切换 */}
+              <div className="space-y-4 pt-1">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1.5">AI 调用模式 / Provider</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { id: "agy", label: "agy CLI (推荐)", desc: "本地登录 免Key" },
+                      { id: "openai", label: "OpenAI / HTTP", desc: "兼容端点 / 自定义API" },
+                      { id: "codex", label: "codex CLI", desc: "本地 Codex 智能体" },
+                    ].map((mode) => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => setSettingAiProvider(mode.id)}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          settingAiProvider === mode.id
+                            ? "bg-indigo-50/70 border-indigo-500 ring-2 ring-indigo-500/20 text-indigo-900"
+                            : "bg-white border-slate-200 hover:border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        <div className="text-xs font-bold">{mode.label}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{mode.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 代理服务器配置 (解决网络受限/境外AI端点直连失败) */}
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/70 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                      🌐 网络代理服务器 (Proxy)
+                      <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-amber-200/60 text-amber-800">可选</span>
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={settingAiProxy}
+                    onChange={(e) => setSettingAiProxy(e.target.value)}
+                    placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                    className="w-full h-9 px-3 rounded-lg border border-amber-300/80 text-xs text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 font-mono"
+                  />
+                  <p className="text-[11px] text-amber-800/80 leading-relaxed">
+                    💡 当国内网络无法直接访问 OpenAI 或远程大模型服务时，填写此处的 HTTP/SOCKS5 代理。系统将自动对 HTTP 请求与 agy / codex 子进程注入代理环境。若留空则直连或继承系统环境变量。
+                  </p>
+                </div>
+
+                {/* OpenAI / HTTP 兼容配置选项 */}
+                {settingAiProvider === "openai" && (
+                  <div className="space-y-3 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">API 端点 (Base URL)</label>
+                      <input
+                        type="text"
+                        value={settingAiBase}
+                        onChange={(e) => setSettingAiBase(e.target.value)}
+                        placeholder="https://api.openai.com/v1 或 https://api.deepseek.com/v1"
+                        className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">API Key</label>
+                      <input
+                        type="password"
+                        value={settingAiKey}
+                        onChange={(e) => setSettingAiKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">模型名称 (Model)</label>
+                      <input
+                        type="text"
+                        value={settingAiModel}
+                        onChange={(e) => setSettingAiModel(e.target.value)}
+                        placeholder="gpt-4o-mini 或 deepseek-chat"
+                        className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {settingAiProvider === "agy" && (
+                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200/80 text-emerald-800 text-xs leading-relaxed space-y-1">
+                    <div className="font-bold flex items-center gap-1">
+                      <span>✨ 本地 agy 驱动模式</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-700">
+                      MythManDay 将通过调用本地已授权的 <code className="px-1 py-0.5 rounded bg-emerald-100/70 font-mono text-[10px]">agy -p</code> 执行智能工时推算与音频交付总结。
+                    </p>
+                  </div>
+                )}
+
+                {/* 工时基准与规则配置 */}
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">标准每日工时 (小时/人天)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={settingHoursPerDay}
+                      onChange={(e) => setSettingHoursPerDay(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">无操作挂起判定 (AFK 分钟)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      value={settingAfkMinutes}
+                      onChange={(e) => setSettingAfkMinutes(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleSaveSettings}
+                    disabled={isSavingSettings}
+                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {isSavingSettings ? "正在保存..." : "💾 保存全部设置"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2399,18 +3266,85 @@ export function App() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
               <button
-                onClick={() => setShowEditProjModal(false)}
+                type="button"
+                onClick={() => {
+                  const target = projects.find((p) => p.id === editProjId);
+                  if (target) {
+                    setShowEditProjModal(false);
+                    setProjectToDelete(target);
+                  }
+                }}
+                className="px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                删除此项目
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowEditProjModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleUpdateProject}
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm transition-all cursor-pointer"
+                >
+                  保存规则配置
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 删除项目二次确认 ---------------- */}
+      {projectToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200/90 shadow-2xl p-6 space-y-4 animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-extrabold text-slate-900 tracking-tight">删除项目确认</h3>
+                <p className="text-xs text-slate-500 truncate">
+                  {projectToDelete.name} ({projectToDelete.client})
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/60 border border-rose-200/60 rounded-xl p-3.5 text-xs text-rose-800 space-y-1.5 leading-relaxed">
+              <p className="font-semibold flex items-center gap-1">
+                <span>⚠️</span> 危险操作警告：
+              </p>
+              <p>
+                即将永久删除项目「<span className="font-bold text-slate-900">{projectToDelete.name}</span>」！
+              </p>
+              <p className="text-[11px] text-rose-700">
+                此操作将同时清空该项目所有的单日工时记录、结算凭证、便签纪要与关联数据，且<strong>无法撤销恢复</strong>。
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setProjectToDelete(null)}
+                disabled={isDeletingProject}
                 className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
               >
                 取消
               </button>
               <button
-                onClick={handleUpdateProject}
-                className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm transition-all cursor-pointer"
+                type="button"
+                onClick={() => handleDeleteProject(projectToDelete)}
+                disabled={isDeletingProject}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
               >
-                保存规则配置
+                <Trash2 className="w-3.5 h-3.5" />
+                {isDeletingProject ? "正在删除..." : "确认永久删除"}
               </button>
             </div>
           </div>
@@ -2485,10 +3419,11 @@ export function App() {
                   已留存当日会议录音/工时语音凭证
                 </span>
                 <button
-                  onClick={() => invoke("play_audio", { audioPath: selectedEntry.audio_path })}
-                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1"
+                  onClick={() => handleOpenAudioPlayer(selectedEntry.audio_path, `${selectedEntry.date_str} 会议录音凭证`)}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  ▶ 播放录音
+                  <Volume2 className="w-3.5 h-3.5" />
+                  播放录音
                 </button>
               </div>
             )}
@@ -2535,19 +3470,40 @@ export function App() {
 
             {/* 底部按钮栏 */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-              <button
-                onClick={() => {
-                  const cleanText = (selectedEntry.summary_text || "")
-                    .replace(/\[削峰回填\]\s*/g, "")
-                    .replace(/\[超额顺延\]\s*/g, "");
-                  navigator.clipboard.writeText(cleanText);
-                  showToast("交付清单已整理并复制到剪贴板！");
-                }}
-                className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-200/60 flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                复制交付清单
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const { summary: cleanSummary } = splitSummaryAndTranscript(selectedEntry.summary_text || "");
+                    const cleanText = cleanSummary
+                      .replace(/\[削峰回填\]\s*/g, "")
+                      .replace(/\[超额顺延\]\s*/g, "");
+                    navigator.clipboard.writeText(cleanText);
+                    showToast("交付清单已整理并复制到剪贴板！");
+                  }}
+                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-200/60 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  复制交付清单
+                </button>
+
+                {(() => {
+                  const { transcript: rawTranscript } = splitSummaryAndTranscript(selectedEntry.summary_text || "");
+                  if (!rawTranscript) return null;
+                  return (
+                    <button
+                      onClick={() => setActiveTranscriptModal({
+                        title: `📅 ${selectedEntry.date_str} 会议全量转写实录`,
+                        transcript: rawTranscript,
+                      })}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="打开独立窗口查看数万字逐字发言文稿"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-slate-500" />
+                      查看全量实录 ({rawTranscript.length}字)
+                    </button>
+                  );
+                })()}
+              </div>
               
               <button
                 onClick={() => setShowDetailModal(false)}
@@ -2585,45 +3541,155 @@ export function App() {
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">工作日期</label>
-                <input
-                  type="date"
-                  value={manualEntryDate}
-                  onChange={(e) => setManualEntryDate(e.target.value)}
-                  className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              {/* Git 仓库信息展示与快捷配置 */}
+              {activeProject.git_repo_path && !showEditRepoInput ? (
+                <div className="flex items-center justify-between text-[11px] text-slate-600 bg-slate-50 border border-slate-200/90 rounded-lg px-2.5 py-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-bold text-slate-700 shrink-0">Git 仓库:</span>
+                    <span className="truncate font-mono text-[10px] text-slate-500" title={activeProject.git_repo_path}>
+                      {activeProject.git_repo_path}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowEditRepoInput(true)}
+                    className="text-indigo-600 hover:text-indigo-800 text-[11px] font-semibold ml-2 shrink-0 cursor-pointer"
+                  >
+                    更换
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1 bg-indigo-50/40 border border-indigo-100 rounded-xl p-2.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-slate-700 flex items-center gap-1">
+                      <span>📁</span> 本地 Git 仓库路径
+                    </span>
+                    {activeProject.git_repo_path && (
+                      <button
+                        type="button"
+                        onClick={() => setShowEditRepoInput(false)}
+                        className="text-slate-400 hover:text-slate-600 text-[10px] cursor-pointer"
+                      >
+                        收起
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={manualEntryRepoPath}
+                    onChange={(e) => setManualEntryRepoPath(e.target.value)}
+                    placeholder="/home/beatle/dev/research"
+                    className="w-full h-8 px-2.5 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    填入项目本地代码路径后，系统将自动嗅探对应日期的 Git Commit 提交记录
+                  </p>
+                </div>
+              )}
+
+              <ModernDatePicker
+                label="工作日期"
+                value={manualEntryDate}
+                onChange={setManualEntryDate}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <ModernTimePicker
+                  label="开始时间"
+                  value={manualEntryStartTime}
+                  onChange={setManualEntryStartTime}
+                />
+                <ModernTimePicker
+                  label="结束时间"
+                  value={manualEntryEndTime}
+                  onChange={setManualEntryEndTime}
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">开始时间</label>
-                  <input
-                    type="time"
-                    value={manualEntryStartTime}
-                    onChange={(e) => setManualEntryStartTime(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
+              {/* AI 推荐时段快速切换 */}
+              {smartTimeSlots.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 -mt-1">
+                  <span className="text-[11px] text-slate-400 font-medium">推荐时段:</span>
+                  {smartTimeSlots.map((slot, idx) => {
+                    const isSelected = manualEntryStartTime === slot.start && manualEntryEndTime === slot.end;
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setManualEntryStartTime(slot.start);
+                          setManualEntryEndTime(slot.end);
+                        }}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all cursor-pointer border ${
+                          isSelected
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                            : "bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80"
+                        }`}
+                      >
+                        {slot.label} ({slot.start}~{slot.end})
+                      </button>
+                    );
+                  })}
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">结束时间</label>
-                  <input
-                    type="time"
-                    value={manualEntryEndTime}
-                    onChange={(e) => setManualEntryEndTime(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
+              )}
+
+              {/* AI 评估依据提示 */}
+              {smartAiReason && (
+                <div className="p-2 rounded-lg bg-indigo-50/60 border border-indigo-100/80 flex items-start gap-1.5 text-[11px] text-indigo-900 leading-snug">
+                  <span className="shrink-0 text-indigo-500">💡</span>
+                  <div className="flex-1">
+                    <span className="font-semibold text-indigo-700">AI 推算依据：</span>
+                    {smartAiReason}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">工作内容 / 交付说明</label>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-slate-700">工作内容 / 交付说明</label>
+                    {manualEntrySummary && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const parts = manualEntrySummary
+                            .split(/[；;。\n]+/)
+                            .map((s) => s.trim())
+                            .filter((s) => s.length > 0);
+                          if (parts.length > 1) {
+                            const formatted = parts
+                              .map((p, i) => {
+                                const clean = p.replace(/^(\d+[\.、\s\-•]+|\-|\•)/, "").trim();
+                                return `${i + 1}. ${clean}`;
+                              })
+                              .join("\n");
+                            setManualEntrySummary(formatted);
+                          }
+                        }}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer font-medium"
+                        title="将当前长句按标点智能分行格式化为条目列表"
+                      >
+                        ⚡ 转换为条目式
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSmartFillGit}
+                    disabled={isSmartFilling}
+                    className="px-2.5 py-1 rounded-md bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
+                    title="自动根据选择的工作日期和时间段，从 Git 版本库拉取提交记录并由 AI 结构化提炼为条目清单"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 text-indigo-600 ${isSmartFilling ? "animate-spin" : ""}`} />
+                    {isSmartFilling ? "正在拉取版本库..." : "✨ 智能从版本库填充"}
+                  </button>
+                </div>
                 <textarea
                   value={manualEntrySummary}
                   onChange={(e) => setManualEntrySummary(e.target.value)}
-                  placeholder="例如：补充完成多租户认证模块的逻辑测试与排查"
-                  rows={3}
-                  className="w-full p-2.5 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  placeholder="1. 完成核心业务模块开发与重构&#10;2. 支持数据导入导出及阶段约束&#10;3. 修复潜在核算偏差问题 [0d0e0667]"
+                  rows={5}
+                  className="w-full p-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 leading-relaxed font-sans font-mono"
                 />
               </div>
             </div>
@@ -2691,35 +3757,23 @@ export function App() {
                 </select>
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">会议日期</label>
-                <input
-                  type="date"
-                  value={manualMeetingDate}
-                  onChange={(e) => setManualMeetingDate(e.target.value)}
-                  className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
+              <ModernDatePicker
+                label="会议日期"
+                value={manualMeetingDate}
+                onChange={setManualMeetingDate}
+              />
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">开始时间</label>
-                  <input
-                    type="time"
-                    value={manualMeetingStartTime}
-                    onChange={(e) => setManualMeetingStartTime(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">结束时间</label>
-                  <input
-                    type="time"
-                    value={manualMeetingEndTime}
-                    onChange={(e) => setManualMeetingEndTime(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 focus:outline-none"
-                  />
-                </div>
+                <ModernTimePicker
+                  label="开始时间"
+                  value={manualMeetingStartTime}
+                  onChange={setManualMeetingStartTime}
+                />
+                <ModernTimePicker
+                  label="结束时间"
+                  value={manualMeetingEndTime}
+                  onChange={setManualMeetingEndTime}
+                />
               </div>
 
               <div>
@@ -3106,6 +4160,504 @@ export function App() {
         </div>
       )}
 
+      {/* ---------------- 模态框: 智能批量补录 (Git时间段抓取 / AI智能体报告解析) ---------------- */}
+      {showBatchModal && activeProject && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-4xl bg-white rounded-2xl border border-slate-200/90 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* 模态框顶部 Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 text-lg font-bold shadow-2xs">
+                  ✨
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                    智能批量补录工时
+                    <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-100 text-indigo-700">
+                      {activeProject.name}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    按起止时间段自动检索 Git 提交或粘贴 AI 智能体/周报总结，支持人工在线精细化复核与批量入库
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowBatchModal(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors text-base font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 模态框中间内容区 */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Tab 切换：按 Git 时间段抓取 vs 粘贴 AI 智能体工作总结 */}
+              <div className="flex border-b border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setBatchTab("git")}
+                  className={`pb-2.5 px-4 text-xs font-bold border-b-2 flex items-center gap-1.5 transition-all cursor-pointer ${
+                    batchTab === "git"
+                      ? "border-indigo-600 text-indigo-600"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                  模式 1：按 Git 版本库起止时间段检索
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchTab("text")}
+                  className={`pb-2.5 px-4 text-xs font-bold border-b-2 flex items-center gap-1.5 transition-all cursor-pointer ${
+                    batchTab === "text"
+                      ? "border-indigo-600 text-indigo-600"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  模式 2：粘贴 AI 智能体/周期工作总结
+                </button>
+              </div>
+
+              {/* 模式 1：Git 时间段抓取面板 */}
+              {batchTab === "git" && (
+                <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">开始日期</label>
+                      <ModernDatePicker
+                        value={batchStartDate}
+                        onChange={setBatchStartDate}
+                        className="w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">结束日期</label>
+                      <ModernDatePicker
+                        value={batchEndDate}
+                        onChange={setBatchEndDate}
+                        className="w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">本地 Git 仓库路径</label>
+                      <input
+                        type="text"
+                        value={batchRepoPath}
+                        onChange={(e) => setBatchRepoPath(e.target.value)}
+                        placeholder="如: /home/beatle/dev/my-repo"
+                        className="w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <p className="text-[11px] text-slate-500">
+                      💡 提示：系统将扫描该区间所有 Git Commit，自动按自然日归集，并利用高层次工程模型提炼高价值交付清单与上下班工时。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleBatchScanGit}
+                      disabled={isBatchScanning}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isBatchScanning ? "animate-spin" : ""}`} />
+                      {isBatchScanning ? "正在扫描并由 AI 评估..." : "开始检索并提取"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 模式 2：粘贴 AI 智能体工作总结自由文本 */}
+              {batchTab === "text" && (
+                <div className="bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 space-y-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                      粘贴 AI 智能体输出的周期总结、周报、任务清单或自由日志文本
+                    </label>
+                    <textarea
+                      value={batchRawText}
+                      onChange={(e) => setBatchRawText(e.target.value)}
+                      placeholder="例如粘贴：&#10;2026-04-10: 完成年度研发费用规划核心业务模块重构与多维度核算，耗时 09:30-18:30&#10;2026-04-11: 研发预算编制约束机制及Excel校验比例导入引擎开发..."
+                      rows={4}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-slate-500">
+                      🤖 智能体解析引擎将自动识别并抽取所有日期、工作时段，并将长句解析为高大上规范条目。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleBatchParseText}
+                      disabled={isBatchScanning}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isBatchScanning ? "animate-spin" : ""}`} />
+                      {isBatchScanning ? "正在智能解析..." : "AI 解析为工时列表"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 候选待确认条目列表 (支持多选、单项自由编辑) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-800">
+                      待补录候选列表 ({batchEntries.length} 天)
+                    </span>
+                    {batchEntries.length > 0 && (
+                      <span className="text-[11px] text-indigo-600 font-semibold bg-indigo-50 px-2 py-0.5 rounded">
+                        已选 {batchEntries.filter((e) => e.is_selected).length} 项
+                      </span>
+                    )}
+                  </div>
+                  {batchEntries.length > 0 && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBatchEntries((prev) =>
+                            prev.map((e) => ({ ...e, is_selected: true }))
+                          )
+                        }
+                        className="text-indigo-600 hover:underline font-bold cursor-pointer"
+                      >
+                        全选
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBatchEntries((prev) =>
+                            prev.map((e) => ({ ...e, is_selected: false }))
+                          )
+                        }
+                        className="text-slate-500 hover:text-slate-700 cursor-pointer"
+                      >
+                        取消全选
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {batchEntries.length === 0 ? (
+                  <div className="p-8 border border-dashed border-slate-200 rounded-xl text-center text-slate-400 text-xs">
+                    暂无候选条目，请在上方输入检索范围或粘贴总结文本后点击提取
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                    {batchEntries.map((entry, idx) => (
+                      <div
+                        key={entry.temp_id || idx}
+                        className={`p-3.5 rounded-xl border transition-all ${
+                          entry.is_selected
+                            ? "bg-white border-indigo-200 shadow-2xs ring-1 ring-indigo-500/10"
+                            : "bg-slate-50/60 border-slate-200/70 opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-2.5">
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={entry.is_selected}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setBatchEntries((prev) =>
+                                  prev.map((it, i) =>
+                                    i === idx ? { ...it, is_selected: checked } : it
+                                  )
+                                );
+                              }}
+                              className="w-4 h-4 rounded text-indigo-600 cursor-pointer"
+                            />
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-900 font-mono">
+                                {entry.date}
+                              </span>
+                              {entry.commits_count > 0 && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] bg-slate-100 text-slate-600 font-medium">
+                                  {entry.commits_count} 次代码提交
+                                </span>
+                              )}
+                              {entry.reason && (
+                                <span className="text-[10px] text-indigo-600 font-medium bg-indigo-50 px-1.5 py-0.2 rounded truncate max-w-xs">
+                                  💡 {entry.reason}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-slate-500">时段:</span>
+                              <ModernTimePicker
+                                value={entry.start_time}
+                                onChange={(val) =>
+                                  setBatchEntries((prev) =>
+                                    prev.map((it, i) =>
+                                      i === idx ? { ...it, start_time: val } : it
+                                    )
+                                  )
+                                }
+                                className="w-20 h-7 text-xs font-mono rounded border border-slate-200 px-1.5"
+                              />
+                              <span className="text-slate-400 text-xs">~</span>
+                              <ModernTimePicker
+                                value={entry.end_time}
+                                onChange={(val) =>
+                                  setBatchEntries((prev) =>
+                                    prev.map((it, i) =>
+                                      i === idx ? { ...it, end_time: val } : it
+                                    )
+                                  )
+                                }
+                                className="w-20 h-7 text-xs font-mono rounded border border-slate-200 px-1.5"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBatchEntries((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
+                              title="移除此行"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 工作内容条目编辑器 */}
+                        <div>
+                          <textarea
+                            value={entry.summary}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setBatchEntries((prev) =>
+                                prev.map((it, i) =>
+                                  i === idx ? { ...it, summary: val } : it
+                                )
+                              );
+                            }}
+                            rows={3}
+                            placeholder="工作成果交付条目..."
+                            className="w-full p-2 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 模态框底部操作 Footer */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+              <div className="text-xs text-slate-500">
+                当前选中待入库:{" "}
+                <strong className="text-indigo-600 font-bold">
+                  {batchEntries.filter((e) => e.is_selected).length}
+                </strong>{" "}
+                / {batchEntries.length} 条记录
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBatchModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    isBatchSaving ||
+                    batchEntries.filter((e) => e.is_selected).length === 0
+                  }
+                  onClick={handleBatchSave}
+                  className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {isBatchSaving
+                    ? "正在批量入库中..."
+                    : `确认批量入库 (${batchEntries.filter((e) => e.is_selected).length} 条)`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 会议纪要确认与编辑 (单独结束会议产生) ---------------- */}
+      {showMeetingSummaryModal && meetingSummaryData && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl bg-white rounded-2xl border border-slate-200/90 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* 模态框顶部 Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 text-lg font-bold shadow-2xs">
+                  🎙️
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                    会议纪要提炼与编辑
+                    <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-100 text-indigo-700">
+                      {meetingSummaryData.topic}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    本次会议录音已安全归档落盘，项目主工时保持继续计时中。您可以对 AI 生成的纪要进行修改与补充后保存。
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMeetingSummaryModal(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors text-base font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 模态框中间编辑区 */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* 录音与凭证信息提示 */}
+              <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl text-xs text-indigo-900 flex items-center justify-between">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-base">📁</span>
+                  <span className="font-semibold text-slate-700">高保真录音已存盘:</span>
+                  <span className="font-mono text-slate-500 truncate max-w-sm" title={meetingSummaryData.audio_path}>
+                    {meetingSummaryData.audio_path}
+                  </span>
+                </div>
+                {meetingSummaryData.audio_path && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAudioPlayer(meetingSummaryData.audio_path, `【${meetingSummaryData.topic}】会议录音`)}
+                    className="px-2.5 py-1 bg-white hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-md font-bold text-[11px] shrink-0 cursor-pointer shadow-2xs flex items-center gap-1"
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-indigo-600" />
+                    试听录音
+                  </button>
+                )}
+              </div>
+
+              {/* 会议主题输入修改 */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  会议主题 / 议题
+                </label>
+                <input
+                  type="text"
+                  value={meetingSummaryData.topic}
+                  onChange={(e) =>
+                    setMeetingSummaryData((prev) =>
+                      prev ? { ...prev, topic: e.target.value } : prev
+                    )
+                  }
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                />
+              </div>
+
+              {/* 结构化会议纪要多行编辑 */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <span>✨</span> AI 生成的会议纪要 (可直接编辑修改)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (meetingSummaryData.summary) {
+                          navigator.clipboard.writeText(meetingSummaryData.summary);
+                          showToast("会议纪要已复制到剪贴板！");
+                        }
+                      }}
+                      className="text-[11px] text-indigo-600 hover:underline font-semibold cursor-pointer flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      复制纪要
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isExportingPdf}
+                      onClick={() => {
+                        const proj = projects.find((p) => p.id === meetingSummaryData.project_id);
+                        handleExportPdf({
+                          title: `【${meetingSummaryData.topic}】会议纪要与技术决议`,
+                          projectName: proj ? proj.name : "项目沟通",
+                          dateStr: new Date().toISOString().split("T")[0],
+                          summaryContent: meetingSummaryData.summary,
+                        });
+                      }}
+                      className="text-[11px] text-emerald-600 hover:underline font-semibold cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <FileDown className="w-3 h-3 text-emerald-600" />
+                      导出PDF
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  value={meetingSummaryData.summary}
+                  onChange={(e) =>
+                    setMeetingSummaryData((prev) =>
+                      prev ? { ...prev, summary: e.target.value } : prev
+                    )
+                  }
+                  rows={8}
+                  placeholder="编辑会议纪要内容..."
+                  className="w-full p-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                />
+              </div>
+
+              {/* 语音转写原始文稿折叠展示 */}
+              {meetingSummaryData.transcript && (
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <details className="text-xs">
+                    <summary className="p-3 bg-slate-50 font-bold text-slate-700 cursor-pointer select-none flex items-center justify-between">
+                      <span>📝 查看语音转写完整实录文本 (展开)</span>
+                      <span className="text-[11px] text-slate-400 font-normal">点击展开/收起</span>
+                    </summary>
+                    <div className="p-3.5 bg-white border-t border-slate-100 max-h-48 overflow-y-auto font-mono text-[11px] text-slate-600 leading-relaxed whitespace-pre-wrap">
+                      {meetingSummaryData.transcript}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* 模态框底部操作 Footer */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+              <span className="text-xs text-slate-500">
+                保存后将自动沉淀为该项目的交付备忘与讨论凭据
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMeetingSummaryModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  暂存/关闭
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveMeetingSummary}
+                  className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  确认并存入项目档案
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---------------- 模态框 8: 专业 Excel 结算对账单导出配置 ---------------- */}
       {showExportSettingsModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
@@ -3362,6 +4914,268 @@ export function App() {
                 >
                   <Download className="w-3.5 h-3.5" />
                   {isExportingExcel ? "正在生成..." : "确认导出"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 专业内置音频播放器 (支持拖动进度条、播放/暂停、复制路径、定位目录) ---------------- */}
+      {activePlayerAudio && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200/90 shadow-2xl p-6 space-y-4">
+            {/* 顶栏 */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 text-lg">
+                  🔊
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                    {activePlayerAudio.title}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    内置音频播放器 · 支持滚动条精准拖动与定位
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActivePlayerAudio(null)}
+                className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 音频播放控件或加载状态 */}
+            <div className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-4 space-y-3">
+              {activePlayerAudio.loading ? (
+                <div className="flex items-center justify-center py-4 text-xs font-semibold text-slate-500 gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  正在加载音频数据流...
+                </div>
+              ) : activePlayerAudio.dataUrl ? (
+                <audio
+                  controls
+                  autoPlay
+                  src={activePlayerAudio.dataUrl}
+                  className="w-full h-11 focus:outline-none rounded-lg"
+                />
+              ) : (
+                <div className="text-xs text-rose-500 text-center py-2 font-medium">
+                  音频文件未就绪或无法解析播放
+                </div>
+              )}
+            </div>
+
+            {/* 路径详情与复制/定位功能 */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-700">录音文件绝对路径</span>
+                <span className="text-[10px] text-slate-400 font-mono">本地文件凭证</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex-1 px-3 py-2 bg-slate-100 rounded-lg text-[11px] font-mono text-slate-700 truncate border border-slate-200/80 select-all"
+                  title={activePlayerAudio.path}
+                >
+                  {activePlayerAudio.path}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(activePlayerAudio.path);
+                    showToast("📋 录音完整路径已复制到剪贴板！");
+                  }}
+                  className="h-8 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer shrink-0"
+                  title="一键复制文件完整路径"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  复制路径
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    invoke("open_file_or_dir", { path: activePlayerAudio.path });
+                    showToast("📂 已在系统文件管理器中定位该录音！");
+                  }}
+                  className="h-8 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer shrink-0"
+                  title="在系统文件管理器中打开"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-slate-600" />
+                  打开目录
+                </button>
+              </div>
+            </div>
+
+            {/* 底部按钮 */}
+            <div className="flex items-center justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setActivePlayerAudio(null)}
+                className="px-4 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors cursor-pointer"
+              >
+                关闭播放器
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 独立会议逐字全量转写文稿查看器 ---------------- */}
+      {activeTranscriptModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-3xl bg-white rounded-2xl border border-slate-200/90 shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 text-sm font-bold">
+                  📝
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                    {activeTranscriptModal.title}
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    原始录音逐字转写全量文稿（共 {activeTranscriptModal.transcript.length} 字）
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(activeTranscriptModal.transcript);
+                    showToast("📋 转写原文已复制到剪贴板！");
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  复制全文
+                </button>
+                <button
+                  onClick={() => setActiveTranscriptModal(null)}
+                  className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-5 font-mono text-xs text-slate-700 leading-relaxed bg-slate-50/30 whitespace-pre-wrap select-text">
+              {activeTranscriptModal.transcript}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0 text-xs text-slate-400">
+              <span>可复制后粘贴至专业文档或留存归档</span>
+              <button
+                onClick={() => setActiveTranscriptModal(null)}
+                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg transition-colors cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 会议纪要在线编辑与修改 (为丢给 Agent 开发做准备) ---------------- */}
+      {activeEditSummaryModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-3xl bg-white rounded-2xl border border-slate-200/90 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 text-sm font-bold">
+                  ✍️
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                    {activeEditSummaryModal.title}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    人工校对与完善要点 · 保存后一键复制丢给 Agent 进行工程开发
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(activeEditSummaryModal.summary);
+                    showToast("📋 编辑中文本已复制！可直接发送给 AI 智能体");
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                  title="一键复制当前文本"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  复制纪要
+                </button>
+                <button
+                  type="button"
+                  disabled={isExportingPdf}
+                  onClick={() => handleExportPdf({
+                    title: activeEditSummaryModal.title,
+                    projectName: activeEditSummaryModal.project_name || "项目交付",
+                    dateStr: activeEditSummaryModal.date_str || new Date().toISOString().split("T")[0],
+                    summaryContent: activeEditSummaryModal.summary,
+                  })}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs disabled:opacity-50"
+                  title="将当前修改后的会议纪要导出为高端商务交付 PDF"
+                >
+                  <FileDown className="w-3.5 h-3.5 text-emerald-600" />
+                  导出PDF
+                </button>
+                <button
+                  onClick={() => setActiveEditSummaryModal(null)}
+                  className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* 编辑主体 */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-white">
+              <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                <span>支持 Markdown 结构排版，随时增删调整业务细节：</span>
+                <span className="font-mono text-slate-400">{activeEditSummaryModal.summary.length} 字</span>
+              </div>
+              <textarea
+                value={activeEditSummaryModal.summary}
+                onChange={(e) => setActiveEditSummaryModal({
+                  ...activeEditSummaryModal,
+                  summary: e.target.value,
+                })}
+                rows={16}
+                className="w-full p-3.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-mono text-xs text-slate-800 leading-relaxed resize-none bg-slate-50/30"
+                placeholder="在此编辑修改会议纪要要点..."
+              />
+            </div>
+
+            {/* Footer */}
+            <div className="p-3.5 border-t border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0 text-xs">
+              <span className="text-slate-400 text-[11px]">
+                保存将自动同步更新工时流水与交付档案（完整转写实录不受影响）
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveEditSummaryModal(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-lg transition-colors cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEntrySummary}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  保存修改
                 </button>
               </div>
             </div>

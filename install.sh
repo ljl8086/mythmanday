@@ -24,8 +24,13 @@ echo "           🚀 正在安装 ${APP_TITLE} v${VERSION}           "
 echo "=========================================================="
 
 # 1. 检查或编译 Release 二进制文件
-if [ ! -f "${TARGET_BIN}" ]; then
-  echo "📦 未检测到已编译的 Release 二进制程序，正在执行编译..."
+FORCE_REBUILD=0
+if [ "$1" = "--rebuild" ] || [ "$1" = "-f" ] || [ "$1" = "--force" ] || [ "${REBUILD:-0}" = "1" ]; then
+  FORCE_REBUILD=1
+fi
+
+if [ ! -f "${TARGET_BIN}" ] || [ "${FORCE_REBUILD}" -eq 1 ]; then
+  echo "📦 正在执行前端构建与 Rust Release 编译..."
   export PATH="${HOME}/.local/share/pnpm:${HOME}/.local/bin:${HOME}/.cargo/bin:$PATH"
   export PKG_CONFIG_PATH="${HOME}/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
   export LIBRARY_PATH="${HOME}/.local/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"

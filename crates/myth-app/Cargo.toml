@@ -25,5 +25,9 @@ tracing-subscriber = { workspace = true }
 tauri = { version = "2.2.0", features = ["tray-icon"] }
 tauri-plugin-shell = "2.2.0"
 
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.2.0", features = [] }

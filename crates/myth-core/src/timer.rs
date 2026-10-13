@@ -176,6 +176,11 @@ impl MultiChannelManager {
         }
     }
 
+    /// 移除指定项目通道
+    pub fn remove_channel(&mut self, project_id: &Uuid) {
+        self.channels.remove(project_id);
+    }
+
     /// 全局 AFK 保护：批量挂起所有正在运行的通道
     pub fn pause_all(&mut self) {
         for timer in self.channels.values_mut() {

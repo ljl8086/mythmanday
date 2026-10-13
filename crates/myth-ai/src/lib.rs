@@ -6,4 +6,7 @@
 
 pub mod client;
 
-pub use client::{AiConfig, AiError, AiSummarizer, StructuredDeliverableReport, WorkCategory};
+pub use client::{
+    AiBatchParsedItem, AiConfig, AiError, AiSummarizer, AiTimeSlotOption,
+    AiWorkEvaluationRequest, AiWorkEvaluationResult, StructuredDeliverableReport, WorkCategory,
+};

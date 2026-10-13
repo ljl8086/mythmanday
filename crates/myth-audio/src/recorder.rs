@@ -311,3 +311,40 @@ impl AudioRecorder {
         Ok(out)
     }
 }
+
+/// 尝试使用本地 ffmpeg 将高保真 WAV 音频转码为高度压缩的 MP3 文件 (64k-128kbps)，大幅减轻发送给 AI 的体积并防超时
+pub fn convert_wav_to_mp3(wav_path: &Path) -> Result<PathBuf, String> {
+    if !wav_path.exists() {
+        return Err(format!("WAV 文件不存在: {}", wav_path.display()));
+    }
+
+    let mp3_path = wav_path.with_extension("mp3");
+
+    // 检查是否具备 ffmpeg
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-y") // 覆盖已有文件
+        .arg("-i")
+        .arg(wav_path)
+        .arg("-vn") // 禁用视频流
+        .arg("-ar")
+        .arg("16000") // 语音识别最佳采样率 16kHz
+        .arg("-ac")
+        .arg("1") // 单声道
+        .arg("-b:a")
+        .arg("64k") // 64kbps 高度压缩且人声清晰
+        .arg(&mp3_path)
+        .output()
+        .map_err(|e| format!("启动 ffmpeg 压缩失败: {}", e))?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg 压缩转码异常: {}", err_msg));
+    }
+
+    if mp3_path.exists() {
+        Ok(mp3_path)
+    } else {
+        Err("转码后未生成 MP3 文件".to_string())
+    }
+}
+
