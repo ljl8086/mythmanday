@@ -15,7 +15,9 @@ serde_json.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "socks", "stream"] }
+futures-util = "0.3"
+
 
 [dev-dependencies]
 chrono.workspace = true

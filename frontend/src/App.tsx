@@ -380,6 +380,66 @@ export function App() {
   const [settingAfkMinutes, setSettingAfkMinutes] = useState("10");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
+  // ASR Engine Settings
+  const [settingAsrMode, setSettingAsrMode] = useState("local");
+  const [settingAsrApiBase, setSettingAsrApiBase] = useState("");
+  const [settingAsrApiKey, setSettingAsrApiKey] = useState("");
+  const [settingAsrModel, setSettingAsrModel] = useState("whisper-1");
+  const [settingAsrLocalModel, setSettingAsrLocalModel] = useState("ggml-base.bin");
+
+  // ASR Runtime Status & Download
+  const [asrStatus, setAsrStatus] = useState<any>(null);
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+
+  const loadAsrStatus = async () => {
+    try {
+      const status = await invoke<any>("get_asr_status");
+      setAsrStatus(status);
+      if (status?.active_mode) setSettingAsrMode(status.active_mode);
+      if (status?.active_model) setSettingAsrLocalModel(status.active_model);
+    } catch (e) {
+      console.error("加载 ASR 引擎状态失败:", e);
+    }
+  };
+
+  const handleDownloadModel = async (modelName: string) => {
+    try {
+      setDownloadingModel(modelName);
+      setDownloadProgress(0);
+      showToast(`🚀 开始下载 Whisper 模型 [${modelName}]，请稍候...`);
+      await invoke("download_whisper_model", { modelName });
+      showToast(`🎉 模型 [${modelName}] 下载成功！`);
+      setDownloadingModel(null);
+      await loadAsrStatus();
+    } catch (err: any) {
+      showToast(`❌ 模型下载失败: ${err}`);
+      setDownloadingModel(null);
+    }
+  };
+
+  useEffect(() => {
+    let unlisten: any;
+    listen<any>("whisper_download_progress", (event) => {
+      const payload = event.payload;
+      if (payload.status === "downloading") {
+        setDownloadingModel(payload.model);
+        setDownloadProgress(payload.percentage || 0);
+      } else if (payload.status === "completed") {
+        setDownloadingModel(null);
+        setDownloadProgress(100);
+        loadAsrStatus();
+      } else if (payload.status === "failed") {
+        setDownloadingModel(null);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const loadSettings = async () => {
     try {
       const res = await invoke<any>("get_settings");
@@ -391,7 +451,13 @@ export function App() {
         if (res.ai_proxy !== undefined) setSettingAiProxy(res.ai_proxy);
         if (res.hours_per_day) setSettingHoursPerDay(res.hours_per_day);
         if (res.afk_minutes) setSettingAfkMinutes(res.afk_minutes);
+        if (res.asr_mode) setSettingAsrMode(res.asr_mode);
+        if (res.asr_api_base !== undefined) setSettingAsrApiBase(res.asr_api_base);
+        if (res.asr_api_key !== undefined) setSettingAsrApiKey(res.asr_api_key);
+        if (res.asr_model) setSettingAsrModel(res.asr_model);
+        if (res.asr_local_model) setSettingAsrLocalModel(res.asr_local_model);
       }
+      await loadAsrStatus();
     } catch (e) {
       console.error("加载设置失败:", e);
     }
@@ -408,8 +474,14 @@ export function App() {
         aiProxy: settingAiProxy.trim() || null,
         hoursPerDay: settingHoursPerDay,
         afkMinutes: settingAfkMinutes,
+        asrMode: settingAsrMode,
+        asrApiBase: settingAsrApiBase.trim() || null,
+        asrApiKey: settingAsrApiKey.trim() || null,
+        asrModel: settingAsrModel.trim() || null,
+        asrLocalModel: settingAsrLocalModel.trim() || null,
       });
-      showToast("✅ 系统设置与 AI 代理配置已保存成功！");
+      showToast("✅ 系统设置与录音转写引擎配置已保存成功！");
+      await loadAsrStatus();
     } catch (e: any) {
       showToast("保存失败: " + e.toString());
     } finally {
@@ -3033,25 +3105,281 @@ export function App() {
         {/* 选项卡视图：系统与AI引擎配置 */}
         {activeTab === "settings" && (
           <div className="flex-1 p-6 overflow-y-auto">
-            <div className="max-w-xl bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm space-y-5">
+            <div className="max-w-2xl bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm space-y-6">
               <div>
                 <h3 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
                   <Settings className="w-5 h-5 text-indigo-600" />
-                  AI 引擎与代理服务器配置
+                  系统配置与 AI / 语音转写引擎
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  支持开箱即用免 Key 的本地 agy / codex CLI，以及兼容 OpenAI / DeepSeek / Ollama 的自定义 HTTP 端点。
+                  录音转写与智能总结独立解耦：支持本地秒级离线 Whisper 或云端极速 API，告别漫长等待。
                 </p>
               </div>
 
-              {/* 核心 AI 调用模式切换 */}
-              <div className="space-y-4 pt-1">
+              {/* 核心区块一：🎙️ 录音转写引擎 (ASR) */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/40 via-white to-sky-50/30 border border-indigo-100/80 space-y-4">
+                <div className="flex items-center justify-between border-b border-indigo-100/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🎙️</span>
+                    <div>
+                      <h4 className="text-xs font-extrabold text-slate-800">录音转写引擎 (ASR)</h4>
+                      <p className="text-[11px] text-slate-500">将会议录音即时转写为文字文稿（解决传统转写缓慢或超时）</p>
+                    </div>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    settingAsrMode === "local" ? "bg-emerald-100 text-emerald-800" :
+                    settingAsrMode === "cloud" ? "bg-sky-100 text-sky-800" : "bg-purple-100 text-purple-800"
+                  }`}>
+                    {settingAsrMode === "local" ? "本地离线推理" : settingAsrMode === "cloud" ? "云端高速 API" : "智能体 CLI"}
+                  </span>
+                </div>
+
+                {/* ASR 模式单选卡片 */}
+                <div className="grid grid-cols-3 gap-2.5">
+                  {[
+                    { id: "local", title: "本地离线 Whisper", sub: "纯C++秒级推理 / 零Token费 / 隐私私密", tag: "强烈推荐" },
+                    { id: "cloud", title: "云端极速 API", sub: "Groq 毫秒响应 / 硅基流动 / OpenAI", tag: "极速秒成" },
+                    { id: "agent", title: "智能体 CLI 模式", sub: "调用本地 agy / codex 智能体读取", tag: "兼容兜底" },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setSettingAsrMode(m.id)}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer relative ${
+                        settingAsrMode === m.id
+                          ? "bg-indigo-50/80 border-indigo-500 ring-2 ring-indigo-500/20 text-indigo-950 shadow-sm"
+                          : "bg-white border-slate-200/90 hover:border-slate-300 text-slate-700"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">{m.title}</span>
+                        {m.tag && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-100/80 text-indigo-700 font-semibold scale-90">
+                            {m.tag}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1 leading-snug">{m.sub}</div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* 本地模式：运行时状态与模型管理 */}
+                {settingAsrMode === "local" && (
+                  <div className="space-y-3 pt-1">
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200/70">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm">{asrStatus?.whisper_bin_installed ? "🟢" : "🟠"}</span>
+                        <div>
+                          <span className="font-bold text-slate-700">whisper-cli 运行时：</span>
+                          <span className="text-slate-500 font-mono text-[11px] ml-1">
+                            {asrStatus?.whisper_bin_installed ? "已就绪" : "未检测到程序 (将自动扫描系统路径)"}
+                          </span>
+                        </div>
+                      </div>
+                      {asrStatus?.whisper_bin_path && (
+                        <span className="text-[10px] text-slate-400 font-mono truncate max-w-[200px]" title={asrStatus.whisper_bin_path}>
+                          {asrStatus.whisper_bin_path}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 模型管理卡片列表 */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                          <span>📦 本地 Whisper 模型库</span>
+                          <span className="text-[10px] text-slate-400 font-normal">（自动保存在 ~/.config/mythmanday/models/）</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => loadAsrStatus()}
+                          className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium"
+                        >
+                          🔄 刷新状态
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {(asrStatus?.available_models || [
+                          { name: "ggml-tiny.bin", size_label: "75 MB", desc: "极速轻量，适合短语音快速识别", is_downloaded: false },
+                          { name: "ggml-base.bin", size_label: "141 MB", desc: "均衡推荐，中文识别精准稳定", is_downloaded: true },
+                          { name: "ggml-small.bin", size_label: "466 MB", desc: "高精细度，适合专业术语多场景", is_downloaded: false },
+                        ]).map((model: any) => {
+                          const isCurrent = settingAsrLocalModel === model.name;
+                          const isDownloading = downloadingModel === model.name;
+                          return (
+                            <div
+                              key={model.name}
+                              className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                                isCurrent
+                                  ? "bg-emerald-50/50 border-emerald-300 ring-1 ring-emerald-400/30"
+                                  : "bg-white border-slate-200/80"
+                              }`}
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-mono font-bold text-slate-800">{model.name}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                                    {model.size_label}
+                                  </span>
+                                  {isCurrent && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">
+                                      当前使用
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-slate-500">{model.desc}</div>
+                                {isDownloading && (
+                                  <div className="w-56 mt-1.5">
+                                    <div className="flex justify-between text-[10px] text-indigo-600 font-medium mb-0.5">
+                                      <span>正在极速下载...</span>
+                                      <span>{downloadProgress}%</span>
+                                    </div>
+                                    <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                      <div
+                                        className="h-full bg-indigo-600 rounded-full transition-all duration-300"
+                                        style={{ width: `${downloadProgress}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {model.is_downloaded ? (
+                                  !isCurrent && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setSettingAsrLocalModel(model.name)}
+                                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium cursor-pointer"
+                                    >
+                                      设为默认
+                                    </button>
+                                  )
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadModel(model.name)}
+                                    disabled={isDownloading}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold border border-indigo-200 cursor-pointer disabled:opacity-50"
+                                  >
+                                    {isDownloading ? "下载中..." : "⬇️ 一键下载"}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 云端模式：API 配置与一键预设 */}
+                {settingAsrMode === "cloud" && (
+                  <div className="space-y-3 p-3.5 rounded-xl bg-sky-50/40 border border-sky-200/70">
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold text-slate-700">快速填入推荐服务商</label>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettingAsrApiBase("https://api.groq.com/openai/v1");
+                            setSettingAsrModel("whisper-large-v3");
+                            showToast("已自动填入 Groq 预设参数，请填入您的 Groq API Key");
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-sky-300 text-sky-900 text-[11px] font-bold hover:bg-sky-50 cursor-pointer shadow-xs"
+                        >
+                          ⚡ Groq 毫秒响应 (超快推荐)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettingAsrApiBase("https://api.siliconflow.cn/v1");
+                            setSettingAsrModel("FunAudioLLM/SenseVoiceSmall");
+                            showToast("已自动填入硅基流动预设参数");
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-sky-300 text-sky-900 text-[11px] font-bold hover:bg-sky-50 cursor-pointer shadow-xs"
+                        >
+                          🇨🇳 硅基流动 SiliconFlow
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettingAsrApiBase("https://api.openai.com/v1");
+                            setSettingAsrModel("whisper-1");
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 text-[11px] font-medium hover:bg-slate-50 cursor-pointer"
+                        >
+                          🌐 OpenAI 官方
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 block mb-1">ASR API 端点 (Base URL)</label>
+                        <input
+                          type="text"
+                          value={settingAsrApiBase}
+                          onChange={(e) => setSettingAsrApiBase(e.target.value)}
+                          placeholder="例如 https://api.groq.com/openai/v1 (留空则沿用下方通用API)"
+                          className="w-full h-8 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 block mb-1">ASR API Key</label>
+                        <input
+                          type="password"
+                          value={settingAsrApiKey}
+                          onChange={(e) => setSettingAsrApiKey(e.target.value)}
+                          placeholder="gsk-... 或 sk-... (留空则沿用下方通用Key)"
+                          className="w-full h-8 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 block mb-1">ASR 模型名称 (Model)</label>
+                        <input
+                          type="text"
+                          value={settingAsrModel}
+                          onChange={(e) => setSettingAsrModel(e.target.value)}
+                          placeholder="whisper-large-v3 或 whisper-1"
+                          className="w-full h-8 px-3 rounded-lg border border-slate-200 text-xs text-slate-800 bg-white focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 智能体模式提示 */}
+                {settingAsrMode === "agent" && (
+                  <div className="p-3 rounded-xl bg-purple-50/50 border border-purple-200 text-purple-900 text-xs leading-relaxed">
+                    💡 将通过调用本地已授权的 <code className="px-1 py-0.5 rounded bg-purple-100 font-mono text-[10px]">agy -p</code> 读取录音文件。适合免配置场景，但识别耗时较长。
+                  </div>
+                )}
+              </div>
+
+              {/* 核心区块二：🤖 通用大语言模型 (LLM) - 纪要提炼与日报归纳 */}
+              <div className="space-y-4 pt-1 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                      <span>🤖</span>
+                      通用大语言模型 (LLM)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">负责会议纪要提炼总结、工作日报自动归纳与工时商业对账</p>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1.5">AI 调用模式 / Provider</label>
+                  <label className="text-xs font-bold text-slate-700 block mb-1.5">LLM 提供商 / Provider</label>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { id: "agy", label: "agy CLI (推荐)", desc: "本地登录 免Key" },
-                      { id: "openai", label: "OpenAI / HTTP", desc: "兼容端点 / 自定义API" },
+                      { id: "openai", label: "OpenAI / HTTP", desc: "DeepSeek / 自定义API" },
                       { id: "codex", label: "codex CLI", desc: "本地 Codex 智能体" },
                     ].map((mode) => (
                       <button
@@ -3071,7 +3399,7 @@ export function App() {
                   </div>
                 </div>
 
-                {/* 代理服务器配置 (解决网络受限/境外AI端点直连失败) */}
+                {/* 代理服务器配置 */}
                 <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/70 space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
@@ -3087,11 +3415,11 @@ export function App() {
                     className="w-full h-9 px-3 rounded-lg border border-amber-300/80 text-xs text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 font-mono"
                   />
                   <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                    💡 当国内网络无法直接访问 OpenAI 或远程大模型服务时，填写此处的 HTTP/SOCKS5 代理。系统将自动对 HTTP 请求与 agy / codex 子进程注入代理环境。若留空则直连或继承系统环境变量。
+                    💡 当国内网络无法直接访问 OpenAI 或远程模型时填写。系统将自动对 HTTP 请求与 agy / codex 子进程注入代理环境。
                   </p>
                 </div>
 
-                {/* OpenAI / HTTP 兼容配置选项 */}
+                {/* OpenAI / DeepSeek / HTTP 兼容配置选项 */}
                 {settingAiProvider === "openai" && (
                   <div className="space-y-3 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
                     <div>
@@ -3135,7 +3463,7 @@ export function App() {
                       <span>✨ 本地 agy 驱动模式</span>
                     </div>
                     <p className="text-[11px] text-emerald-700">
-                      MythManDay 将通过调用本地已授权的 <code className="px-1 py-0.5 rounded bg-emerald-100/70 font-mono text-[10px]">agy -p</code> 执行智能工时推算与音频交付总结。
+                      MythManDay 将通过调用本地已授权的 <code className="px-1 py-0.5 rounded bg-emerald-100/70 font-mono text-[10px]">agy -p</code> 执行智能工时推算与总结。
                     </p>
                   </div>
                 )}

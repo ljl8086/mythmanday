@@ -734,6 +734,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 api_key: ai_key,
                                 model: ai_model,
                                 proxy: None,
+                                asr: Default::default(),
                             });
                             let ai_summary_res = if is_meeting {
                                 summarizer.summarize_meeting(&proj_name, billable_hours, &notes, saved_audio_file.as_deref(), None).await
@@ -1146,6 +1147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     api_key,
                     model,
                     proxy: None,
+                    asr: Default::default(),
                 });
 
                 match summarizer.transcribe_audio(&audio_path).await {
@@ -1286,6 +1288,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     api_key: key,
                     model,
                     proxy: None,
+                    asr: Default::default(),
                 });
                 match summarizer.test_connection().await {
                     Ok(resp) => {
@@ -1328,6 +1331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 api_key,
                 model,
                 proxy: None,
+                asr: Default::default(),
             };
 
             let app_clone = ui.as_weak();

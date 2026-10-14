@@ -6,7 +6,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use chrono::{Local, TimeZone, Utc};
-use myth_ai::{AiConfig, AiSummarizer, AiWorkEvaluationRequest};
+use myth_ai::{
+    download_whisper_model_file, get_asr_runtime_status, AiConfig, AiSummarizer,
+    AiWorkEvaluationRequest, AsrRuntimeStatus,
+};
 use myth_audio::{AudioPlayer, AudioRecorder};
 use myth_core::billing::BillingEngine;
 use myth_core::models::{
@@ -20,6 +23,41 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
+
+/// 从数据库统一加载 AI 与 ASR 完整多模配置
+fn load_ai_config(guard: &Database) -> AiConfig {
+    let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
+    let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+    let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+    let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+
+    let asr_mode = guard.get_setting("asr_mode").ok().flatten().unwrap_or_else(|| "local".to_string());
+    let asr_api_base = guard.get_setting("asr_api_base").ok().flatten().filter(|s| !s.trim().is_empty());
+    let asr_api_key = guard.get_setting("asr_api_key").ok().flatten().filter(|s| !s.trim().is_empty());
+    let asr_model = guard.get_setting("asr_model").ok().flatten().filter(|s| !s.trim().is_empty());
+    let asr_local_model = guard.get_setting("asr_local_model").ok().flatten().filter(|s| !s.trim().is_empty());
+    let asr_local_bin_path = guard.get_setting("asr_local_bin_path").ok().flatten().filter(|s| !s.trim().is_empty());
+
+    AiConfig {
+        provider,
+        api_base,
+        api_key,
+        model,
+        proxy,
+        asr: myth_ai::AsrConfig {
+            mode: asr_mode,
+            api_base: asr_api_base,
+            api_key: asr_api_key,
+            model: asr_model.or_else(|| Some("whisper-1".to_string())),
+            local_model: asr_local_model.or_else(|| Some("ggml-base.bin".to_string())),
+            local_bin_path: asr_local_bin_path,
+            language: Some("zh".to_string()),
+            prompt: None,
+        },
+    }
+}
+
 
 /// 活跃录音上下文 (项目ID, 会议ID, 会议主题, 音频文件路径, 该片段录音开始时刻)
 pub type ActiveRecordingState = Option<(Uuid, Uuid, String, std::path::PathBuf, chrono::DateTime<Utc>)>;
@@ -922,19 +960,14 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let (provider, api_base, api_key, model, proxy) = {
+        let ai_config = {
             let guard = db_for_async.lock().unwrap();
-            let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-            let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-            let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-            let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
-            (provider, api_base, api_key, model, proxy)
+            load_ai_config(&guard)
         };
 
-        let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
+        let summarizer = AiSummarizer::new(ai_config);
         if audio_file_clone.exists() {
-            let res = tokio::time::timeout(std::time::Duration::from_secs(90), summarizer.transcribe_audio(&audio_file_clone)).await;
+            let res = tokio::time::timeout(std::time::Duration::from_secs(300), summarizer.transcribe_audio(&audio_file_clone)).await;
             match res {
                 Ok(Ok(transcript_text)) if !transcript_text.trim().is_empty() => {
                     let guard = db_for_async.lock().unwrap();
@@ -985,19 +1018,14 @@ async fn retry_transcribe_audio_clip(app: AppHandle, state: State<'_, AppState>,
     let audio_file = std::path::PathBuf::from(&audio_path);
 
     tokio::spawn(async move {
-        let (provider, api_base, api_key, model, proxy) = {
+        let ai_config = {
             let guard = db_for_async.lock().unwrap();
-            let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-            let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-            let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-            let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
-            (provider, api_base, api_key, model, proxy)
+            load_ai_config(&guard)
         };
 
-        let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
+        let summarizer = AiSummarizer::new(ai_config);
         if audio_file.exists() {
-            let res = tokio::time::timeout(std::time::Duration::from_secs(90), summarizer.transcribe_audio(&audio_file)).await;
+            let res = tokio::time::timeout(std::time::Duration::from_secs(300), summarizer.transcribe_audio(&audio_file)).await;
             match res {
                 Ok(Ok(transcript_text)) if !transcript_text.trim().is_empty() => {
                     let guard = db_for_async.lock().unwrap();
@@ -1084,17 +1112,12 @@ async fn finish_meeting(
     let topic_clone = topic.clone();
 
     tokio::spawn(async move {
-        let (provider, api_base, api_key, model, proxy) = {
+        let ai_config = {
             let guard = db_for_async.lock().unwrap();
-            let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-            let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-            let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-            let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
-            (provider, api_base, api_key, model, proxy)
+            load_ai_config(&guard)
         };
 
-        let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
+        let summarizer = AiSummarizer::new(ai_config);
 
         // 1. 等待名下所有音频片段转录完成 (最长等待 120 秒，避免并行 race condition)
         let wait_start = std::time::Instant::now();
@@ -1479,14 +1502,10 @@ async fn fetch_git_work_summary(
             .ok_or_else(|| "项目不存在".to_string())?;
 
         let c_name = get_client_name(&guard, p.client_id);
-        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        let ai_config = load_ai_config(&guard);
         let hours = p.hours_per_day;
 
-        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy }, hours)
+        (p, c_name, ai_config, hours)
     };
 
     // 确定仓库路径 (优先使用自定义传入路径，否则使用项目已绑定路径)
@@ -1819,14 +1838,10 @@ async fn fetch_batch_git_work_summary(
             .ok_or_else(|| "项目不存在".to_string())?;
 
         let c_name = get_client_name(&guard, p.client_id);
-        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        let ai_config = load_ai_config(&guard);
         let hours = p.hours_per_day;
 
-        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy }, hours)
+        (p, c_name, ai_config, hours)
     };
 
     let repo_path = if let Some(ref custom) = custom_repo_path {
@@ -1991,13 +2006,9 @@ async fn parse_custom_batch_summary(
             .ok_or_else(|| "项目不存在".to_string())?;
 
         let c_name = get_client_name(&guard, p.client_id);
-        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
-        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+        let ai_config = load_ai_config(&guard);
 
-        (p, c_name, AiConfig { provider, api_base, api_key, model, proxy })
+        (p, c_name, ai_config)
     };
 
     let text_trim = raw_text.trim();
@@ -2226,23 +2237,12 @@ fn log_manual_meeting(
 async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, audio_path: String) -> Result<String, String> {
     let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
     let db = state.db.clone();
-    let (provider, api_base, api_key, model, proxy) = {
+    let ai_config = {
         let guard = db.lock().unwrap();
-        let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
-        let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
-        let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
-        (provider, api_base, api_key, model, proxy)
+        load_ai_config(&guard)
     };
 
-    let summarizer = AiSummarizer::new(AiConfig {
-        provider,
-        api_base,
-        api_key,
-        model,
-        proxy,
-    });
+    let summarizer = AiSummarizer::new(ai_config);
 
     let p = std::path::Path::new(&audio_path);
     let transcript = summarizer.transcribe_audio(p).await.map_err(|e| e.to_string())?;
@@ -2630,13 +2630,20 @@ async fn generate_settlement_report(
 
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let provider = state.db.lock().unwrap().get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
-    let base = state.db.lock().unwrap().get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-    let key = state.db.lock().unwrap().get_setting("ai_key").ok().flatten().unwrap_or_default();
-    let model = state.db.lock().unwrap().get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let proxy = state.db.lock().unwrap().get_setting("ai_proxy").ok().flatten().unwrap_or_default();
-    let hours = state.db.lock().unwrap().get_setting("hours_per_day").ok().flatten().unwrap_or_else(|| "8.0".to_string());
-    let afk = state.db.lock().unwrap().get_setting("afk_minutes").ok().flatten().unwrap_or_else(|| "10".to_string());
+    let guard = state.db.lock().map_err(|e| e.to_string())?;
+    let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".to_string());
+    let base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+    let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+    let proxy = guard.get_setting("ai_proxy").ok().flatten().unwrap_or_default();
+    let hours = guard.get_setting("hours_per_day").ok().flatten().unwrap_or_else(|| "8.0".to_string());
+    let afk = guard.get_setting("afk_minutes").ok().flatten().unwrap_or_else(|| "10".to_string());
+
+    let asr_mode = guard.get_setting("asr_mode").ok().flatten().unwrap_or_else(|| "local".to_string());
+    let asr_api_base = guard.get_setting("asr_api_base").ok().flatten().unwrap_or_default();
+    let asr_api_key = guard.get_setting("asr_api_key").ok().flatten().unwrap_or_default();
+    let asr_model = guard.get_setting("asr_model").ok().flatten().unwrap_or_else(|| "whisper-1".to_string());
+    let asr_local_model = guard.get_setting("asr_local_model").ok().flatten().unwrap_or_else(|| "ggml-base.bin".to_string());
 
     Ok(serde_json::json!({
         "ai_provider": provider,
@@ -2645,7 +2652,12 @@ fn get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
         "ai_model": model,
         "ai_proxy": proxy,
         "hours_per_day": hours,
-        "afk_minutes": afk
+        "afk_minutes": afk,
+        "asr_mode": asr_mode,
+        "asr_api_base": asr_api_base,
+        "asr_api_key": asr_api_key,
+        "asr_model": asr_model,
+        "asr_local_model": asr_local_model
     }))
 }
 
@@ -2659,17 +2671,90 @@ fn save_settings(
     ai_proxy: Option<String>,
     hours_per_day: String,
     afk_minutes: String,
+    asr_mode: Option<String>,
+    asr_api_base: Option<String>,
+    asr_api_key: Option<String>,
+    asr_model: Option<String>,
+    asr_local_model: Option<String>,
 ) -> Result<(), String> {
-    let _ = state.db.lock().unwrap().set_setting("ai_provider", &ai_provider);
-    let _ = state.db.lock().unwrap().set_setting("ai_base", &ai_base);
-    let _ = state.db.lock().unwrap().set_setting("ai_key", &ai_key);
-    let _ = state.db.lock().unwrap().set_setting("ai_model", &ai_model);
+    let guard = state.db.lock().map_err(|e| e.to_string())?;
+    let _ = guard.set_setting("ai_provider", &ai_provider);
+    let _ = guard.set_setting("ai_base", &ai_base);
+    let _ = guard.set_setting("ai_key", &ai_key);
+    let _ = guard.set_setting("ai_model", &ai_model);
     if let Some(ref p) = ai_proxy {
-        let _ = state.db.lock().unwrap().set_setting("ai_proxy", p.trim());
+        let _ = guard.set_setting("ai_proxy", p.trim());
     }
-    let _ = state.db.lock().unwrap().set_setting("hours_per_day", &hours_per_day);
-    let _ = state.db.lock().unwrap().set_setting("afk_minutes", &afk_minutes);
+    let _ = guard.set_setting("hours_per_day", &hours_per_day);
+    let _ = guard.set_setting("afk_minutes", &afk_minutes);
+
+    if let Some(ref m) = asr_mode {
+        let _ = guard.set_setting("asr_mode", m.trim());
+    }
+    if let Some(ref b) = asr_api_base {
+        let _ = guard.set_setting("asr_api_base", b.trim());
+    }
+    if let Some(ref k) = asr_api_key {
+        let _ = guard.set_setting("asr_api_key", k.trim());
+    }
+    if let Some(ref am) = asr_model {
+        let _ = guard.set_setting("asr_model", am.trim());
+    }
+    if let Some(ref lm) = asr_local_model {
+        let _ = guard.set_setting("asr_local_model", lm.trim());
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn get_asr_status(state: State<AppState>) -> Result<AsrRuntimeStatus, String> {
+    let guard = state.db.lock().map_err(|e| e.to_string())?;
+    let ai_cfg = load_ai_config(&guard);
+    Ok(get_asr_runtime_status(&ai_cfg))
+}
+
+#[tauri::command]
+async fn download_whisper_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_name: String,
+) -> Result<String, String> {
+    let proxy = {
+        let guard = state.db.lock().map_err(|e| e.to_string())?;
+        guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty())
+    };
+
+    let app_clone = app.clone();
+    let m_name = model_name.clone();
+    let res = download_whisper_model_file(&model_name, proxy.as_deref(), move |pct, downloaded, total| {
+        let _ = app_clone.emit("whisper_download_progress", serde_json::json!({
+            "model": m_name,
+            "percentage": (pct * 10.0).round() / 10.0,
+            "downloaded": downloaded,
+            "total": total,
+            "status": "downloading"
+        }));
+    }).await;
+
+    match res {
+        Ok(path) => {
+            let _ = app.emit("whisper_download_progress", serde_json::json!({
+                "model": model_name,
+                "percentage": 100.0,
+                "status": "completed"
+            }));
+            Ok(path.to_string_lossy().to_string())
+        }
+        Err(e) => {
+            let _ = app.emit("whisper_download_progress", serde_json::json!({
+                "model": model_name,
+                "percentage": 0.0,
+                "status": "failed",
+                "error": e
+            }));
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -3120,6 +3205,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             generate_settlement_report,
             get_settings,
             save_settings,
+            get_asr_status,
+            download_whisper_model,
             save_and_open_excel,
             save_multiple_excel_files,
             open_file_or_dir,
