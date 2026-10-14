@@ -934,21 +934,98 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
 
         let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
         if audio_file_clone.exists() {
-            if let Ok(Ok(transcript_text)) = tokio::time::timeout(std::time::Duration::from_secs(90), summarizer.transcribe_audio(&audio_file_clone)).await {
-                let guard = db_for_async.lock().unwrap();
-                if let Ok(mut clips) = guard.list_audio_clips_for_meeting(&meeting_id) {
-                    if let Some(target) = clips.iter_mut().find(|c| c.id == clip_id) {
+            let res = tokio::time::timeout(std::time::Duration::from_secs(90), summarizer.transcribe_audio(&audio_file_clone)).await;
+            match res {
+                Ok(Ok(transcript_text)) if !transcript_text.trim().is_empty() => {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&clip_id) {
                         target.transcript = Some(transcript_text);
                         target.status = "transcribed".to_string();
-                        let _ = guard.insert_audio_clip(target);
+                        let _ = guard.insert_audio_clip(&target);
                     }
                 }
+                _ => {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&clip_id) {
+                        target.status = "failed".to_string();
+                        let _ = guard.insert_audio_clip(&target);
+                    }
+                }
+            }
+        } else {
+            let guard = db_for_async.lock().unwrap();
+            if let Ok(Some(mut target)) = guard.get_audio_clip(&clip_id) {
+                target.status = "failed".to_string();
+                let _ = guard.insert_audio_clip(&target);
             }
         }
         let _ = app_handle.emit("meeting_clip_ready", meeting_id.to_string());
     });
 
     Ok(format!("录音片段 {} 已保存，正在后台转写原始文本...", clip_order))
+}
+
+/// 对转写失败或需要重新识别的单条录音片段进行重新转写
+#[tauri::command]
+async fn retry_transcribe_audio_clip(app: AppHandle, state: State<'_, AppState>, clip_id: String) -> Result<String, String> {
+    let cid = Uuid::parse_str(&clip_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    let (meeting_id, audio_path, clip_order) = {
+        let guard = db.lock().unwrap();
+        let mut clip = guard.get_audio_clip(&cid).map_err(|e| e.to_string())?.ok_or_else(|| "未找到指定录音片段".to_string())?;
+        clip.status = "pending".to_string();
+        let _ = guard.insert_audio_clip(&clip);
+        (clip.meeting_id, clip.audio_path.clone(), clip.clip_order)
+    };
+
+    let _ = app.emit("meeting_clip_ready", meeting_id.to_string());
+
+    let db_for_async = db.clone();
+    let app_handle = app.clone();
+    let audio_file = std::path::PathBuf::from(&audio_path);
+
+    tokio::spawn(async move {
+        let (provider, api_base, api_key, model, proxy) = {
+            let guard = db_for_async.lock().unwrap();
+            let provider = guard.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "agy".to_string());
+            let api_base = guard.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            let api_key = guard.get_setting("ai_key").ok().flatten().unwrap_or_default();
+            let model = guard.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".to_string());
+            let proxy = guard.get_setting("ai_proxy").ok().flatten().filter(|s| !s.trim().is_empty());
+            (provider, api_base, api_key, model, proxy)
+        };
+
+        let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
+        if audio_file.exists() {
+            let res = tokio::time::timeout(std::time::Duration::from_secs(90), summarizer.transcribe_audio(&audio_file)).await;
+            match res {
+                Ok(Ok(transcript_text)) if !transcript_text.trim().is_empty() => {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&cid) {
+                        target.transcript = Some(transcript_text);
+                        target.status = "transcribed".to_string();
+                        let _ = guard.insert_audio_clip(&target);
+                    }
+                }
+                _ => {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&cid) {
+                        target.status = "failed".to_string();
+                        let _ = guard.insert_audio_clip(&target);
+                    }
+                }
+            }
+        } else {
+            let guard = db_for_async.lock().unwrap();
+            if let Ok(Some(mut target)) = guard.get_audio_clip(&cid) {
+                target.status = "failed".to_string();
+                let _ = guard.insert_audio_clip(&target);
+            }
+        }
+        let _ = app_handle.emit("meeting_clip_ready", meeting_id.to_string());
+    });
+
+    Ok(format!("已启动片段 {} 的重试转写任务", clip_order))
 }
 
 /// 结束整场会议（核心业务：汇聚名下所有录音片段文字实录统一生成会议纪要；提供双选项【继续工时 / 停止今日工时】）
@@ -3015,6 +3092,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             toggle_audio_pause,
             start_recording_for_meeting,
             stop_recording_clip,
+            retry_transcribe_audio_clip,
             finish_meeting,
             stop_current_meeting,
             save_meeting_summary_to_project,

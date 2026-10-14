@@ -758,6 +758,32 @@ impl Database {
         Ok(clips)
     }
 
+    pub fn get_audio_clip(&self, id: &Uuid) -> Result<Option<MeetingAudioClip>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, meeting_id, clip_order, audio_path, duration_secs, transcript, status, created_at
+               FROM meeting_audio_clips WHERE id = ?1"#,
+        )?;
+        let mut rows = stmt.query(params![id.to_string()])?;
+        if let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let dur: i64 = row.get(4)?;
+            let c_str: String = row.get(7)?;
+            Ok(Some(MeetingAudioClip {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                clip_order: row.get(2)?,
+                audio_path: row.get(3)?,
+                duration_secs: dur.max(0) as u64,
+                transcript: row.get(5)?,
+                status: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     // --- 便签 CRUD ---
     pub fn insert_quick_note(&self, note: &QuickNote) -> Result<()> {
         self.conn.execute(

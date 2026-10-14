@@ -40,7 +40,10 @@ import {
   FileDown,
   ChevronDown,
   ChevronUp,
-  RefreshCw
+  RefreshCw,
+  RotateCw,
+  AlertCircle,
+  Loader2
 } from "lucide-react";
 
 interface Project {
@@ -341,6 +344,8 @@ export function App() {
   const [isExtractingGit, setIsExtractingGit] = useState(false);
   // 跟踪哪些长纪要/长文本卡片已被用户点击「展开完整内容」
   const [expandedSummaryEntryIds, setExpandedSummaryEntryIds] = useState<Record<string, boolean>>({});
+  // 跟踪正在重新转写的录音片段 ID
+  const [retryingClipIds, setRetryingClipIds] = useState<Set<string>>(new Set());
 
   const toggleSummaryExpand = (entryId: string) => {
     setExpandedSummaryEntryIds((prev) => ({
@@ -487,6 +492,7 @@ export function App() {
 
     let unlistenClipFn: (() => void) | undefined;
     listen<any>("meeting_clip_ready", () => {
+      setRetryingClipIds(new Set());
       refreshData();
       if (selectedProjectId) {
         refreshProjectDetails(selectedProjectId, selectedMonth);
@@ -731,6 +737,25 @@ export function App() {
       if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
     } catch (e: any) {
       showToast("启动新录音片段失败: " + e.toString());
+    }
+  };
+
+  // 重新触发指定录音片段的语音转写
+  const handleRetryTranscribeClip = async (clipId: string) => {
+    setRetryingClipIds((prev) => new Set(prev).add(clipId));
+    showToast("🎙️ 正在启动录音片段重新转写识别...");
+    try {
+      const msg = await invoke<string>("retry_transcribe_audio_clip", { clipId });
+      showToast("✨ " + msg);
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+    } catch (e: any) {
+      showToast("重新转写启动失败: " + e.toString());
+      setRetryingClipIds((prev) => {
+        const next = new Set(prev);
+        next.delete(clipId);
+        return next;
+      });
     }
   };
 
@@ -2246,30 +2271,87 @@ export function App() {
                                                     {m.clips && m.clips.length > 0 && (
                                                       <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                                                         <span className="text-[10px] text-slate-400">录音片段:</span>
-                                                        {m.clips.map((clip) => (
-                                                          <div key={clip.id} className="inline-flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded text-[10px]">
-                                                            <button
-                                                              onClick={() => handleOpenAudioPlayer(clip.audio_path, `片段 ${clip.clip_order}`)}
-                                                              className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-0.5 cursor-pointer"
-                                                              title="播放该片段"
+                                                        {m.clips.map((clip) => {
+                                                          const isRetrying = retryingClipIds.has(clip.id);
+                                                          const isPending = isRetrying || clip.status === "pending";
+                                                          const isFailed = !isPending && (clip.status === "failed" || (!clip.transcript && clip.status !== "transcribed"));
+                                                          const isTranscribed = !isPending && (clip.status === "transcribed" || !!clip.transcript);
+
+                                                          return (
+                                                            <div
+                                                              key={clip.id}
+                                                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] border transition-all ${
+                                                                isFailed
+                                                                  ? "bg-rose-50/80 border-rose-200 text-rose-700 shadow-2xs"
+                                                                  : isPending
+                                                                  ? "bg-amber-50/80 border-amber-200 text-amber-700 animate-pulse"
+                                                                  : "bg-white border-slate-200 text-slate-700"
+                                                              }`}
                                                             >
-                                                              <Volume2 className="w-2.5 h-2.5" />
-                                                              片段 {clip.clip_order} ({clip.duration_text})
-                                                            </button>
-                                                            {clip.transcript && (
+                                                              {/* 播放录音片段按钮 */}
                                                               <button
-                                                                onClick={() => setActiveTranscriptModal({
-                                                                  title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写稿`,
-                                                                  transcript: clip.transcript!,
-                                                                })}
-                                                                className="text-slate-400 hover:text-slate-600 cursor-pointer ml-1"
-                                                                title="查看文本"
+                                                                onClick={() => handleOpenAudioPlayer(clip.audio_path, `片段 ${clip.clip_order}`)}
+                                                                className="font-semibold flex items-center gap-0.5 hover:underline cursor-pointer"
+                                                                title="播放该录音片段"
                                                               >
-                                                                <FileText className="w-2.5 h-2.5" />
+                                                                <Volume2 className="w-2.5 h-2.5" />
+                                                                <span>片段 {clip.clip_order} ({clip.duration_text})</span>
                                                               </button>
-                                                            )}
-                                                          </div>
-                                                        ))}
+
+                                                              {/* 转写就绪状态：文稿查看与轻量重新转写 */}
+                                                              {isTranscribed && (
+                                                                <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-0.5">
+                                                                  {clip.transcript && (
+                                                                    <button
+                                                                      onClick={() => setActiveTranscriptModal({
+                                                                        title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写稿`,
+                                                                        transcript: clip.transcript!,
+                                                                      })}
+                                                                      className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5 font-medium"
+                                                                      title="查看该片段转写文稿"
+                                                                    >
+                                                                      <FileText className="w-2.5 h-2.5" />
+                                                                      <span>文稿</span>
+                                                                    </button>
+                                                                  )}
+                                                                  <button
+                                                                    onClick={() => handleRetryTranscribeClip(clip.id)}
+                                                                    className="text-slate-400 hover:text-indigo-600 cursor-pointer p-0.5"
+                                                                    title="重新转写此片段"
+                                                                  >
+                                                                    <RotateCw className="w-2.5 h-2.5" />
+                                                                  </button>
+                                                                </div>
+                                                              )}
+
+                                                              {/* 转写中状态 */}
+                                                              {isPending && (
+                                                                <span className="flex items-center gap-1 text-amber-600 font-medium border-l border-amber-200 pl-1.5 ml-0.5">
+                                                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                  <span>转写中...</span>
+                                                                </span>
+                                                              )}
+
+                                                              {/* 转写失败状态：醒目标识 + 再次转写按钮 */}
+                                                              {isFailed && (
+                                                                <div className="flex items-center gap-1 border-l border-rose-200 pl-1.5 ml-0.5">
+                                                                  <span className="flex items-center gap-0.5 text-rose-600 font-semibold">
+                                                                    <AlertCircle className="w-2.5 h-2.5" />
+                                                                    <span>转写失败</span>
+                                                                  </span>
+                                                                  <button
+                                                                    onClick={() => handleRetryTranscribeClip(clip.id)}
+                                                                    className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] flex items-center gap-0.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
+                                                                    title="重试转写此录音片段"
+                                                                  >
+                                                                    <RotateCw className="w-2.5 h-2.5" />
+                                                                    <span>再次转写</span>
+                                                                  </button>
+                                                                </div>
+                                                              )}
+                                                            </div>
+                                                          );
+                                                        })}
                                                       </div>
                                                     )}
                                                   </div>
