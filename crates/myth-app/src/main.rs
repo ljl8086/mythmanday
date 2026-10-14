@@ -2270,6 +2270,104 @@ async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, au
 }
 
 #[tauri::command]
+async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String) -> Result<String, String> {
+    let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    let ai_config = {
+        let guard = db.lock().unwrap();
+        load_ai_config(&guard)
+    };
+    let summarizer = AiSummarizer::new(ai_config);
+
+    // 1. 查找此 entry 下的结构化会议记录
+    let (meetings, project_id, entry_audio_path) = {
+        let guard = db.lock().unwrap();
+        let ms = guard.list_meetings_for_entry(&eid).unwrap_or_default();
+        let entry_opt = guard.get_time_entry(&eid).ok().flatten();
+        let pid = entry_opt.as_ref().map(|e| e.project_id).unwrap_or_default();
+        let a_path = entry_opt.as_ref().and_then(|e| e.audio_path.clone()).unwrap_or_default();
+        (ms, pid, a_path)
+    };
+
+    let notes = db.lock().unwrap().list_quick_notes(&project_id).unwrap_or_default();
+
+    if !meetings.is_empty() {
+        let mut final_meeting_summary = String::new();
+        let mut all_combined_transcripts = String::new();
+        let mut last_topic = "会议纪要".to_string();
+
+        for mut m in meetings {
+            last_topic = m.topic.clone();
+            let clips = db.lock().unwrap().list_audio_clips_for_meeting(&m.id).unwrap_or_default();
+            let mut combined_transcript = String::new();
+            for c in &clips {
+                if let Some(ref txt) = c.transcript {
+                    if !txt.trim().is_empty() {
+                        combined_transcript.push_str(&format!("【录音片段 {}】：\n{}\n\n", c.clip_order, txt.trim()));
+                    }
+                }
+            }
+
+            let topic_for_sum = m.topic.clone();
+            let summary = match summarizer.summarize_meeting(&topic_for_sum, 0.5, &notes, None, Some(&combined_transcript)).await {
+                Ok(sum) if !sum.trim().is_empty() => sum,
+                _ => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_for_sum),
+            };
+
+            m.meeting_summary = Some(summary.clone());
+            m.status = "completed".to_string();
+            let _ = db.lock().unwrap().insert_meeting(&m);
+
+            final_meeting_summary = summary;
+            if !combined_transcript.trim().is_empty() {
+                all_combined_transcripts.push_str(&combined_transcript);
+            }
+        }
+
+        let entry_summary = if all_combined_transcripts.trim().is_empty() {
+            format!("【会议纪要：{}】\n{}", last_topic, final_meeting_summary)
+        } else {
+            format!("【会议纪要：{}】\n{}\n\n---\n【现场录音实录】：\n{}", last_topic, final_meeting_summary, all_combined_transcripts.trim())
+        };
+
+        let mut guard = db.lock().unwrap();
+        if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
+            entry.summary = Some(entry_summary.clone());
+            let _ = guard.insert_time_entry(&entry);
+        }
+
+        return Ok(entry_summary);
+    } else {
+        let p = std::path::Path::new(&entry_audio_path);
+        let transcript = if p.exists() {
+            summarizer.transcribe_audio(p).await.unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &notes, Some(&entry_audio_path), Some(&transcript)).await {
+            Ok(sum) if !sum.trim().is_empty() => sum,
+            _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
+        };
+
+        let new_summary = if transcript.is_empty() {
+            ai_summary
+        } else {
+            format!("{}\n\n【转写全文实录】\n{}", ai_summary, transcript)
+        };
+
+        let mut guard = db.lock().unwrap();
+        if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
+            entry.summary = Some(new_summary.clone());
+            let _ = guard.insert_time_entry(&entry);
+            return Ok(new_summary);
+        }
+
+        Ok(new_summary)
+    }
+}
+
+#[tauri::command]
 fn update_entry_summary(state: State<AppState>, entry_id: String, summary: String) -> Result<String, String> {
     let eid = Uuid::parse_str(&entry_id).map_err(|e| e.to_string())?;
     let db = state.db.lock().unwrap();
@@ -3202,6 +3300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_manual_entry,
             log_manual_meeting,
             transcribe_entry_audio,
+            resummarize_meeting_entry,
             update_entry_summary,
             extract_entry_git_summary,
             generate_daily_markdown,

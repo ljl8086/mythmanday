@@ -43,6 +43,7 @@ import {
   RefreshCw,
   RotateCw,
   AlertCircle,
+  AlertTriangle,
   Loader2
 } from "lucide-react";
 
@@ -346,6 +347,22 @@ export function App() {
   const [expandedSummaryEntryIds, setExpandedSummaryEntryIds] = useState<Record<string, boolean>>({});
   // 跟踪正在重新转写的录音片段 ID
   const [retryingClipIds, setRetryingClipIds] = useState<Set<string>>(new Set());
+
+  // 重新转写弹窗确认状态（重新转写会覆盖已有记录）
+  const [confirmRetryClipModal, setConfirmRetryClipModal] = useState<{
+    clipId: string;
+    clipOrder: number;
+    durationText: string;
+    topic?: string;
+    hasTranscript: boolean;
+  } | null>(null);
+
+  // AI 重新提炼纪要弹窗确认状态
+  const [confirmResummarizeModal, setConfirmResummarizeModal] = useState<{
+    entry: Entry;
+    topic?: string;
+  } | null>(null);
+  const [isResummarizing, setIsResummarizing] = useState(false);
 
   const toggleSummaryExpand = (entryId: string) => {
     setExpandedSummaryEntryIds((prev) => ({
@@ -1058,17 +1075,22 @@ export function App() {
     }
   };
 
-  const handleTranscribe = async (entry: Entry) => {
-    showToast("🤖 AI 正在离线/在线识别音频并总结纪要...");
+
+  const handleResummarizeEntry = async (entry: Entry) => {
+    setIsResummarizing(true);
+    showToast("🤖 AI 正在综合录音文稿与便签，重新提炼会议纪要...");
     try {
-      await invoke<string>("transcribe_entry_audio", {
+      await invoke<string>("resummarize_meeting_entry", {
         entryId: entry.id,
-        audioPath: entry.audio_path,
       });
-      showToast("AI 会议纪要提炼完成！");
-      if (selectedProjectId) refreshProjectDetails(selectedProjectId);
+      showToast("✨ AI 会议纪要已成功重新提炼并更新！");
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
     } catch (e: any) {
-      showToast("转写失败: " + e.toString());
+      showToast("提炼失败: " + e.toString());
+    } finally {
+      setIsResummarizing(false);
+      setConfirmResummarizeModal(null);
     }
   };
 
@@ -2294,6 +2316,7 @@ export function App() {
                                     const { summary: displaySummary, transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
                                     const isExpanded = !!expandedSummaryEntryIds[entry.id];
                                     const isLongContent = displaySummary.length > 160 || displaySummary.split("\n").length > 4;
+                                    const hasMeetingClips = (entry.meetings || []).some((m) => (m.clips || []).length > 0);
                                     return (
                                       <>
                                         <div className="relative">
@@ -2386,7 +2409,7 @@ export function App() {
                                                                 <span>片段 {clip.clip_order} ({clip.duration_text})</span>
                                                               </button>
 
-                                                              {/* 转写就绪状态：文稿查看与轻量重新转写 */}
+                                                              {/* 转写就绪状态：文稿查看与带确认的重新转写 */}
                                                               {isTranscribed && (
                                                                 <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-0.5">
                                                                   {clip.transcript && (
@@ -2403,11 +2426,18 @@ export function App() {
                                                                     </button>
                                                                   )}
                                                                   <button
-                                                                    onClick={() => handleRetryTranscribeClip(clip.id)}
-                                                                    className="text-slate-400 hover:text-indigo-600 cursor-pointer p-0.5"
-                                                                    title="重新转写此片段"
+                                                                    onClick={() => setConfirmRetryClipModal({
+                                                                      clipId: clip.id,
+                                                                      clipOrder: clip.clip_order,
+                                                                      durationText: clip.duration_text,
+                                                                      topic: m.topic,
+                                                                      hasTranscript: !!clip.transcript,
+                                                                    })}
+                                                                    className="text-slate-400 hover:text-indigo-600 hover:bg-slate-100 px-1 py-0.5 rounded cursor-pointer flex items-center gap-0.5 font-medium transition-colors"
+                                                                    title="重新转写此片段（将弹窗确认并覆盖现有文稿）"
                                                                   >
                                                                     <RotateCw className="w-2.5 h-2.5" />
+                                                                    <span>重新转写</span>
                                                                   </button>
                                                                 </div>
                                                               )}
@@ -2420,7 +2450,7 @@ export function App() {
                                                                 </span>
                                                               )}
 
-                                                              {/* 转写失败状态：醒目标识 + 再次转写按钮 */}
+                                                              {/* 转写失败状态：醒目标识 + 重新转写按钮 */}
                                                               {isFailed && (
                                                                 <div className="flex items-center gap-1 border-l border-rose-200 pl-1.5 ml-0.5">
                                                                   <span className="flex items-center gap-0.5 text-rose-600 font-semibold">
@@ -2428,12 +2458,18 @@ export function App() {
                                                                     <span>转写失败</span>
                                                                   </span>
                                                                   <button
-                                                                    onClick={() => handleRetryTranscribeClip(clip.id)}
+                                                                    onClick={() => setConfirmRetryClipModal({
+                                                                      clipId: clip.id,
+                                                                      clipOrder: clip.clip_order,
+                                                                      durationText: clip.duration_text,
+                                                                      topic: m.topic,
+                                                                      hasTranscript: !!clip.transcript,
+                                                                    })}
                                                                     className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] flex items-center gap-0.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
-                                                                    title="重试转写此录音片段"
+                                                                    title="重新转写此录音片段"
                                                                   >
                                                                     <RotateCw className="w-2.5 h-2.5" />
-                                                                    <span>再次转写</span>
+                                                                    <span>重新转写</span>
                                                                   </button>
                                                                 </div>
                                                               )}
@@ -2463,7 +2499,7 @@ export function App() {
                                                 结束会议并提炼纪要
                                               </button>
                                             )}
-                                            {entry.has_audio && (
+                                            {entry.has_audio && !hasMeetingClips && (
                                               <button
                                                 onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
                                                 className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
@@ -2486,14 +2522,17 @@ export function App() {
                                                 查看转写实录 ({rawTranscript.length}字)
                                               </button>
                                             )}
-                                            {entry.has_audio && !isLiveRecording && (
+                                            {(hasMeetingClips || entry.has_audio || !!rawTranscript) && !isLiveRecording && (
                                               <button
-                                                onClick={() => handleTranscribe(entry)}
-                                                className="h-6.5 px-2.5 rounded bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                                                title="使用当前配置的 AI 重新识别音频并提炼纪要"
+                                                onClick={() => setConfirmResummarizeModal({
+                                                  entry,
+                                                  topic: (entry.meetings && entry.meetings[0]?.topic) || undefined,
+                                                })}
+                                                className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="基于录音片段的所有文稿实录与便签，使用 AI 重新总结生成结构化会议纪要（核心议题、达成共识与后续待办）"
                                               >
-                                                <Sparkles className="w-3 h-3 text-amber-600" />
-                                                重新提炼
+                                                <Sparkles className="w-3 h-3 text-indigo-600" />
+                                                <span>{displaySummary ? "AI 重新提炼纪要" : "AI 提炼纪要"}</span>
                                               </button>
                                             )}
                                           </div>
@@ -5889,6 +5928,145 @@ export function App() {
                   保存修改
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 录音片段重新转写确认 ---------------- */}
+      {confirmRetryClipModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-4 border-b border-slate-100 flex items-center gap-3 bg-amber-50/60">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                <RotateCw className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">重新转写录音片段确认</h3>
+                <p className="text-[11px] text-slate-500">语音识别（ASR）覆盖确认</p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-3.5 text-xs">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1.5">
+                <div className="flex items-center justify-between text-slate-600">
+                  <span className="text-slate-400">所属会议：</span>
+                  <span className="font-semibold text-slate-800">{confirmRetryClipModal.topic || "会议"}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
+                  <span className="text-slate-400">录音片段：</span>
+                  <span className="font-semibold text-slate-800">
+                    片段 {confirmRetryClipModal.clipOrder} ({confirmRetryClipModal.durationText})
+                  </span>
+                </div>
+              </div>
+
+              {confirmRetryClipModal.hasTranscript ? (
+                <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 text-amber-800 text-[11px] leading-relaxed flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">注意：</span>该录音片段已有转写文稿。重新转写将启动语音识别引擎重新识别录音，<strong>现有的文稿内容将被覆盖</strong>。
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-600 text-[11px] leading-relaxed">
+                  将使用当前配置的语音识别引擎对该录音片段进行转写识别。
+                </p>
+              )}
+
+              <p className="text-slate-500 text-[11px]">确定要开始重新转写吗？</p>
+            </div>
+
+            <div className="p-3.5 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => setConfirmRetryClipModal(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const clipId = confirmRetryClipModal.clipId;
+                  setConfirmRetryClipModal(null);
+                  handleRetryTranscribeClip(clipId);
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                确认重新转写
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: AI 提炼会议纪要确认 ---------------- */}
+      {confirmResummarizeModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-4 border-b border-slate-100 flex items-center gap-3 bg-indigo-50/60">
+              <div className="w-9 h-9 rounded-xl bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">AI 提炼会议纪要确认</h3>
+                <p className="text-[11px] text-slate-500">重新提炼核心议题、达成共识与后续待办</p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-3.5 text-xs">
+              <p className="text-slate-600 leading-relaxed">
+                AI 将综合当前会议名下<strong>所有录音片段的文字实录与项目便签</strong>，运用大模型重新梳理并生成规范的结构化会议纪要。
+              </p>
+
+              <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 text-amber-800 text-[11px] leading-relaxed flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">提示：</span>重新提炼会用新生成的纪要更新当前条目。如果您此前在纪要中进行了<strong>手动个性化补充或修改</strong>，建议先复制备份。
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1 text-slate-600 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">会议日期：</span>
+                  <span className="font-semibold text-slate-800">{confirmResummarizeModal.entry.date_str}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">所属项目：</span>
+                  <span className="font-semibold text-slate-800">{confirmResummarizeModal.entry.project_name || activeProject?.name || "当前项目"}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3.5 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/50">
+              <button
+                type="button"
+                disabled={isResummarizing}
+                onClick={() => setConfirmResummarizeModal(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-lg text-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isResummarizing}
+                onClick={() => handleResummarizeEntry(confirmResummarizeModal.entry)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isResummarizing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    正在提炼中...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    确认重新提炼
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
