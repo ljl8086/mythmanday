@@ -140,7 +140,7 @@ impl Project {
     }
 }
 
-/// 工时流水明细条目
+/// 工时流水明细条目 (按天聚合主记录，一日一条)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeEntry {
     pub id: Uuid,
@@ -157,13 +157,110 @@ pub struct TimeEntry {
     pub rate_at_moment: f64,
     /// 本次条目结算金额
     pub total_amount: f64,
-    /// AI 自动提炼或手动备注的工作成果描述
+    /// AI 自动提炼或手动备注的工作成果描述（汇总研发交付与会议纪要）
     pub summary: Option<String>,
-    /// 现场会议录音文件本地存储路径（若有录音凭证）
+    /// 现场会议录音文件本地存储路径（历史兼容或单录音凭证）
     pub audio_path: Option<String>,
     /// 是否已出账/已开具对账单
     pub is_invoiced: bool,
     pub created_at: DateTime<Utc>,
+}
+
+/// 每日工时内的打卡时段切片（支持单日内多次启停、恢复计时）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkSpan {
+    pub id: Uuid,
+    pub entry_id: Uuid,
+    pub span_order: u32,
+    pub start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+    pub duration_secs: u64,
+    /// 类型: timer(工时打卡) / meeting(会议时段) / manual(手动补录)
+    pub span_type: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl WorkSpan {
+    pub fn new(entry_id: Uuid, span_order: u32, start_at: DateTime<Utc>, end_at: DateTime<Utc>, duration_secs: u64, span_type: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            entry_id,
+            span_order,
+            start_at,
+            end_at,
+            duration_secs,
+            span_type: span_type.into(),
+            created_at: Utc::now(),
+        }
+    }
+}
+
+/// 结构化会议记录实体（工时记录的子项，一天可有多场会议）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Meeting {
+    pub id: Uuid,
+    pub entry_id: Uuid,
+    pub project_id: Uuid,
+    pub topic: String,
+    pub start_at: DateTime<Utc>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub duration_secs: u64,
+    /// 状态: in_progress / summarizing / completed
+    pub status: String,
+    /// 该场会议的结构化 AI 提炼纪要
+    pub meeting_summary: Option<String>,
+    /// 会议便签速记
+    pub quick_notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Meeting {
+    pub fn new(entry_id: Uuid, project_id: Uuid, topic: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            entry_id,
+            project_id,
+            topic: topic.into(),
+            start_at: now,
+            end_at: None,
+            duration_secs: 0,
+            status: "in_progress".to_string(),
+            meeting_summary: None,
+            quick_notes: None,
+            created_at: now,
+        }
+    }
+}
+
+/// 会议附属录音片段实体（1 场会议可有多段录音，只记录音频和转写原始文字）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingAudioClip {
+    pub id: Uuid,
+    pub meeting_id: Uuid,
+    pub clip_order: u32,
+    pub audio_path: String,
+    pub duration_secs: u64,
+    /// 纯语音转写原始实录（不含总结纪要）
+    pub transcript: Option<String>,
+    /// 转写状态: pending / transcribed / failed
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl MeetingAudioClip {
+    pub fn new(meeting_id: Uuid, clip_order: u32, audio_path: impl Into<String>, duration_secs: u64) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            meeting_id,
+            clip_order,
+            audio_path: audio_path.into(),
+            duration_secs,
+            transcript: None,
+            status: "pending".to_string(),
+            created_at: Utc::now(),
+        }
+    }
 }
 
 /// 闪念便签 / 零代码提交事件记录

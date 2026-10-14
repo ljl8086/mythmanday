@@ -6,7 +6,10 @@
 
 use crate::schema::CREATE_TABLES_SQL;
 use chrono::{DateTime, Utc};
-use myth_core::models::{BillingType, Client, DayCalcMode, Project, QuickNote, TimeEntry};
+use myth_core::models::{
+    BillingType, Client, DayCalcMode, Meeting, MeetingAudioClip, Project, QuickNote, TimeEntry,
+    WorkSpan,
+};
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use uuid::Uuid;
@@ -441,6 +444,278 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// 查询某项目在指定日期 (YYYY-MM-DD) 的主工时记录（实现一日一记录）
+    pub fn get_entry_for_project_and_date(&self, project_id: &Uuid, date_str: &str) -> Result<Option<TimeEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, project_id, start_time, end_time, raw_duration_secs,
+                      billable_hours, billable_days, rate_at_moment, total_amount,
+                      summary, audio_path, is_invoiced, created_at
+               FROM time_entries 
+               WHERE project_id = ?1 AND strftime('%Y-%m-%d', start_time) = ?2
+               ORDER BY start_time ASC LIMIT 1"#,
+        )?;
+
+        let mut rows = stmt.query(params![project_id.to_string(), date_str])?;
+        if let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let proj_id_str: String = row.get(1)?;
+            let start_str: String = row.get(2)?;
+            let end_str: String = row.get(3)?;
+            let raw_secs: i64 = row.get(4)?;
+            let is_invoiced_int: i32 = row.get(11)?;
+            let created_at_str: String = row.get(12)?;
+
+            Ok(Some(TimeEntry {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&proj_id_str).unwrap_or_default(),
+                start_time: DateTime::parse_from_rfc3339(&start_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_time: DateTime::parse_from_rfc3339(&end_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                raw_duration_secs: raw_secs.max(0) as u64,
+                billable_hours: row.get(5)?,
+                billable_days: row.get(6)?,
+                rate_at_moment: row.get(7)?,
+                total_amount: row.get(8)?,
+                summary: row.get(9)?,
+                audio_path: row.get(10)?,
+                is_invoiced: is_invoiced_int == 1,
+                created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // --- 工作时段切片 WorkSpan CRUD ---
+    pub fn insert_work_span(&self, span: &WorkSpan) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT OR REPLACE INTO work_spans (
+                id, entry_id, span_order, start_at, end_at, duration_secs, span_type, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            params![
+                span.id.to_string(),
+                span.entry_id.to_string(),
+                span.span_order,
+                span.start_at.to_rfc3339(),
+                span.end_at.to_rfc3339(),
+                span.duration_secs as i64,
+                span.span_type,
+                span.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_work_spans_for_entry(&self, entry_id: &Uuid) -> Result<Vec<WorkSpan>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, entry_id, span_order, start_at, end_at, duration_secs, span_type, created_at
+               FROM work_spans WHERE entry_id = ?1 ORDER BY span_order ASC"#,
+        )?;
+        let rows = stmt.query_map(params![entry_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let e_id_str: String = row.get(1)?;
+            let s_str: String = row.get(3)?;
+            let e_str: String = row.get(4)?;
+            let dur: i64 = row.get(5)?;
+            let c_str: String = row.get(7)?;
+            Ok(WorkSpan {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
+                span_order: row.get(2)?,
+                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                end_at: DateTime::parse_from_rfc3339(&e_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                duration_secs: dur.max(0) as u64,
+                span_type: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut spans = Vec::new();
+        for r in rows {
+            spans.push(r?);
+        }
+        Ok(spans)
+    }
+
+    // --- 会议 Meeting CRUD ---
+    pub fn insert_meeting(&self, meeting: &Meeting) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT OR REPLACE INTO meetings (
+                id, entry_id, project_id, topic, start_at, end_at, duration_secs,
+                status, meeting_summary, quick_notes, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+            params![
+                meeting.id.to_string(),
+                meeting.entry_id.to_string(),
+                meeting.project_id.to_string(),
+                meeting.topic,
+                meeting.start_at.to_rfc3339(),
+                meeting.end_at.map(|d| d.to_rfc3339()),
+                meeting.duration_secs as i64,
+                meeting.status,
+                meeting.meeting_summary,
+                meeting.quick_notes,
+                meeting.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_meeting(&self, id: &Uuid) -> Result<Option<Meeting>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, entry_id, project_id, topic, start_at, end_at, duration_secs,
+                      status, meeting_summary, quick_notes, created_at
+               FROM meetings WHERE id = ?1"#,
+        )?;
+        let mut rows = stmt.query(params![id.to_string()])?;
+        if let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let e_id_str: String = row.get(1)?;
+            let p_id_str: String = row.get(2)?;
+            let s_str: String = row.get(4)?;
+            let e_str: Option<String> = row.get(5)?;
+            let dur: i64 = row.get(6)?;
+            let c_str: String = row.get(10)?;
+            Ok(Some(Meeting {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
+                topic: row.get(3)?,
+                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                duration_secs: dur.max(0) as u64,
+                status: row.get(7)?,
+                meeting_summary: row.get(8)?,
+                quick_notes: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_meetings_for_entry(&self, entry_id: &Uuid) -> Result<Vec<Meeting>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, entry_id, project_id, topic, start_at, end_at, duration_secs,
+                      status, meeting_summary, quick_notes, created_at
+               FROM meetings WHERE entry_id = ?1 ORDER BY start_at ASC"#,
+        )?;
+        let rows = stmt.query_map(params![entry_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let e_id_str: String = row.get(1)?;
+            let p_id_str: String = row.get(2)?;
+            let s_str: String = row.get(4)?;
+            let e_str: Option<String> = row.get(5)?;
+            let dur: i64 = row.get(6)?;
+            let c_str: String = row.get(10)?;
+            Ok(Meeting {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
+                topic: row.get(3)?,
+                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                duration_secs: dur.max(0) as u64,
+                status: row.get(7)?,
+                meeting_summary: row.get(8)?,
+                quick_notes: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn list_meetings_for_project(&self, project_id: &Uuid) -> Result<Vec<Meeting>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, entry_id, project_id, topic, start_at, end_at, duration_secs,
+                      status, meeting_summary, quick_notes, created_at
+               FROM meetings WHERE project_id = ?1 ORDER BY start_at DESC"#,
+        )?;
+        let rows = stmt.query_map(params![project_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let e_id_str: String = row.get(1)?;
+            let p_id_str: String = row.get(2)?;
+            let s_str: String = row.get(4)?;
+            let e_str: Option<String> = row.get(5)?;
+            let dur: i64 = row.get(6)?;
+            let c_str: String = row.get(10)?;
+            Ok(Meeting {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
+                project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
+                topic: row.get(3)?,
+                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                duration_secs: dur.max(0) as u64,
+                status: row.get(7)?,
+                meeting_summary: row.get(8)?,
+                quick_notes: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    // --- 录音片段 MeetingAudioClip CRUD ---
+    pub fn insert_audio_clip(&self, clip: &MeetingAudioClip) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT OR REPLACE INTO meeting_audio_clips (
+                id, meeting_id, clip_order, audio_path, duration_secs, transcript, status, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            params![
+                clip.id.to_string(),
+                clip.meeting_id.to_string(),
+                clip.clip_order,
+                clip.audio_path,
+                clip.duration_secs as i64,
+                clip.transcript,
+                clip.status,
+                clip.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_audio_clips_for_meeting(&self, meeting_id: &Uuid) -> Result<Vec<MeetingAudioClip>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, meeting_id, clip_order, audio_path, duration_secs, transcript, status, created_at
+               FROM meeting_audio_clips WHERE meeting_id = ?1 ORDER BY clip_order ASC"#,
+        )?;
+        let rows = stmt.query_map(params![meeting_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let dur: i64 = row.get(4)?;
+            let c_str: String = row.get(7)?;
+            Ok(MeetingAudioClip {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                clip_order: row.get(2)?,
+                audio_path: row.get(3)?,
+                duration_secs: dur.max(0) as u64,
+                transcript: row.get(5)?,
+                status: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut clips = Vec::new();
+        for r in rows {
+            clips.push(r?);
+        }
+        Ok(clips)
     }
 
     // --- 便签 CRUD ---

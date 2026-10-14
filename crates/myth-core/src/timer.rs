@@ -42,15 +42,20 @@ impl ChannelTimer {
         }
     }
 
-    /// 启动计时通道
+    /// 启动计时通道（全新启动）
     pub fn start(&mut self) {
+        self.start_with_base(0);
+    }
+
+    /// 恢复/启动计时通道（带基底累计秒数，例如恢复今日已结工时）
+    pub fn start_with_base(&mut self, base_accumulated_secs: u64) {
         let now = Utc::now();
         match self.status {
             TimerStatus::Stopped => {
                 self.session_start_at = Some(now);
                 self.status = TimerStatus::Running {
                     current_started_at: now,
-                    accumulated_secs: 0,
+                    accumulated_secs: base_accumulated_secs,
                 };
             }
             TimerStatus::Paused { accumulated_secs } => {
@@ -153,11 +158,16 @@ impl MultiChannelManager {
 
     /// 启动指定项目的计时通道
     pub fn start_channel(&mut self, project_id: Uuid) {
+        self.start_channel_with_base(project_id, 0);
+    }
+
+    /// 恢复/启动指定项目的计时通道（带基底累计秒数）
+    pub fn start_channel_with_base(&mut self, project_id: Uuid, base_secs: u64) {
         let timer = self
             .channels
             .entry(project_id)
             .or_insert_with(|| ChannelTimer::new(project_id));
-        timer.start();
+        timer.start_with_base(base_secs);
     }
 
     /// 暂停指定项目

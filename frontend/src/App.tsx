@@ -103,6 +103,28 @@ interface BatchSmartFillResult {
   message: string;
 }
 
+interface AudioClip {
+  id: string;
+  clip_order: number;
+  audio_path: string;
+  duration_secs: number;
+  duration_text: string;
+  transcript?: string;
+  status: string;
+}
+
+interface MeetingDetail {
+  id: string;
+  topic: string;
+  start_time: string;
+  end_time?: string;
+  duration_text: string;
+  status: string;
+  summary?: string;
+  quick_notes?: string;
+  clips: AudioClip[];
+}
+
 interface Entry {
   id: string;
   project_id: string;
@@ -118,6 +140,7 @@ interface Entry {
   raw_secs: number;
   is_invoiced: boolean;
   status?: "normal" | "recording" | "summarizing" | string;
+  meetings?: MeetingDetail[];
 }
 
 interface DayGroup {
@@ -675,12 +698,40 @@ export function App() {
     }
   };
 
-  // 结束会议录音 (项目通道继续运行，录音秒级封包落盘，AI 后台异步提炼纪要)
-  const handleStopMeeting = async () => {
-    setIsStoppingMeeting(true);
-    showToast("⏹ 正在停止录音并封包归档...");
+  // 仅停止当前录音片段（录音附属于会议，单次停止只转写原始文本，绝不生成纪要、不关会议）
+  const handleStopClip = async () => {
     try {
-      const res = await invoke<StopMeetingResult>("stop_current_meeting");
+      showToast("⏹ 正在停止并封包当前录音片段...");
+      const res = await invoke<string>("stop_recording_clip");
+      showToast("🎙️ " + res);
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+    } catch (e: any) {
+      showToast("停止录音片段失败: " + e.toString());
+    }
+  };
+
+  // 为当前会议开启新的录音片段
+  const handleStartClipForMeeting = async (meetingId: string) => {
+    try {
+      const res = await invoke<string>("start_recording_for_meeting", { meetingId });
+      showToast("🎙️ " + res);
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+    } catch (e: any) {
+      showToast("启动新录音片段失败: " + e.toString());
+    }
+  };
+
+  // 结束会议（方案2双选项：参数 stopProjectTimer 决定是否同步停止主工时）
+  const handleFinishMeeting = async (stopProjectTimer: boolean = false, meetingId?: string) => {
+    setIsStoppingMeeting(true);
+    showToast(stopProjectTimer ? "⏹ 正在结束会议并封包今日工时..." : "⏹ 正在结束会议（工时继续保持计时）...");
+    try {
+      const res = await invoke<StopMeetingResult>("finish_meeting", {
+        meetingId: meetingId || null,
+        stopProjectTimer,
+      });
       if (res && res.success) {
         showToast("🎉 " + res.message);
         refreshData();
@@ -689,10 +740,15 @@ export function App() {
         }
       }
     } catch (e: any) {
-      showToast("结束会议录音失败: " + e.toString());
+      showToast("结束会议失败: " + e.toString());
     } finally {
       setIsStoppingMeeting(false);
     }
+  };
+
+  // 兼容老调用
+  const handleStopMeeting = async () => {
+    await handleFinishMeeting(false);
   };
 
   const handleSaveMeetingSummary = async () => {
@@ -1626,13 +1682,30 @@ export function App() {
                 {globalStats.is_audio_paused ? "▶ 继续录音" : "⏸ 暂停录音"}
               </button>
               <button
-                onClick={handleStopMeeting}
-                disabled={isStoppingMeeting}
-                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 shadow-2xs"
-                title="单独停止本次会议录音并自动生成会议纪要（项目工时保持继续计时）"
+                onClick={handleStopClip}
+                className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                title="单独停止当前录音片段并转写文本（会议保持进行，后续可追加录音）"
               >
                 <Square className="w-3 h-3 fill-current" />
-                {isStoppingMeeting ? "正在生成纪要..." : "⏹ 结束会议并提炼纪要"}
+                停止当前录音片段
+              </button>
+              <button
+                onClick={() => handleFinishMeeting(false)}
+                disabled={isStoppingMeeting}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 shadow-2xs"
+                title="结束整场会议并提炼综合纪要（主工时通道继续保持计时）"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                {isStoppingMeeting ? "正在提炼..." : "结束会议(保持工时)"}
+              </button>
+              <button
+                onClick={() => handleFinishMeeting(true)}
+                disabled={isStoppingMeeting}
+                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-50 shadow-2xs"
+                title="结束整场会议并同时停止今日工时"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                {isStoppingMeeting ? "正在提炼..." : "结束会议并结工时"}
               </button>
             </div>
           </div>
@@ -1763,17 +1836,18 @@ export function App() {
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleStart(activeProject.id)}
-                              className="h-8 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-xs active:scale-95 transition-all"
+                              className="h-8 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
+                              title={activeProject.today_duration !== "00:00:00" ? "恢复并继续今日已结工时（时长将累加）" : "启动工时计时"}
                             >
                               <Play className="w-3.5 h-3.5 fill-current" />
-                              开始工时
+                              {activeProject.today_duration !== "00:00:00" ? "恢复/继续工时" : "开始工时"}
                             </button>
                             <button
                               onClick={() => {
                                 setMeetingSelectedPid(activeProject.id);
                                 setShowMeetingModal(true);
                               }}
-                              className="h-8 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-xs active:scale-95 transition-all"
+                              className="h-8 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
                             >
                               <Mic className="w-3.5 h-3.5" />
                               发起会议
@@ -2126,6 +2200,70 @@ export function App() {
                                                   </>
                                                 )}
                                               </button>
+                                            </div>
+                                          )}
+                                          {/* 若该日包含会议，分层结构化展示会议与录音片段列表 */}
+                                          {entry.meetings && entry.meetings.length > 0 && (
+                                            <div className="mt-2.5 pt-2 border-t border-slate-100 space-y-2">
+                                              <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
+                                                <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                                                <span>今日会议清单 ({entry.meetings.length} 场)</span>
+                                              </div>
+                                              <div className="space-y-1.5">
+                                                {entry.meetings.map((m) => (
+                                                  <div key={m.id} className="p-2.5 bg-slate-50/80 hover:bg-slate-50 rounded-lg border border-slate-200/80 text-xs">
+                                                    <div className="flex items-center justify-between font-semibold text-slate-800">
+                                                      <div className="flex items-center gap-1.5">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                                        <span>{m.topic}</span>
+                                                        <span className="text-[10px] text-slate-400 font-mono">({m.start_time}{m.end_time ? ` - ${m.end_time}` : ""} · {m.duration_text})</span>
+                                                      </div>
+                                                      <div className="flex items-center gap-1">
+                                                        {m.status === "in_progress" && (
+                                                          <button
+                                                            onClick={() => handleStartClipForMeeting(m.id)}
+                                                            className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-[10px] font-bold cursor-pointer"
+                                                            title="为此会议录制一段新的录音"
+                                                          >
+                                                            + 追加录音
+                                                          </button>
+                                                        )}
+                                                      </div>
+                                                    </div>
+
+                                                    {/* 会议录音片段列表 */}
+                                                    {m.clips && m.clips.length > 0 && (
+                                                      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                                                        <span className="text-[10px] text-slate-400">录音片段:</span>
+                                                        {m.clips.map((clip) => (
+                                                          <div key={clip.id} className="inline-flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded text-[10px]">
+                                                            <button
+                                                              onClick={() => handleOpenAudioPlayer(clip.audio_path, `片段 ${clip.clip_order}`)}
+                                                              className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-0.5 cursor-pointer"
+                                                              title="播放该片段"
+                                                            >
+                                                              <Volume2 className="w-2.5 h-2.5" />
+                                                              片段 {clip.clip_order} ({clip.duration_text})
+                                                            </button>
+                                                            {clip.transcript && (
+                                                              <button
+                                                                onClick={() => setActiveTranscriptModal({
+                                                                  title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写稿`,
+                                                                  transcript: clip.transcript!,
+                                                                })}
+                                                                className="text-slate-400 hover:text-slate-600 cursor-pointer ml-1"
+                                                                title="查看文本"
+                                                              >
+                                                                <FileText className="w-2.5 h-2.5" />
+                                                              </button>
+                                                            )}
+                                                          </div>
+                                                        ))}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                ))}
+                                              </div>
                                             </div>
                                           )}
                                         </div>

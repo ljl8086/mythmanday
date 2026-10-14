@@ -9,5 +9,8 @@ pub mod models;
 pub mod timer;
 
 pub use billing::BillingEngine;
-pub use models::{BillingType, Client, DayCalcMode, Project, QuickNote, RoundingMode, TimeEntry};
+pub use models::{
+    BillingType, Client, DayCalcMode, Meeting, MeetingAudioClip, Project, QuickNote, RoundingMode,
+    TimeEntry, WorkSpan,
+};
 pub use timer::{ChannelTimer, MultiChannelManager, TimerStatus};
