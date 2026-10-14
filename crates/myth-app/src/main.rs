@@ -439,7 +439,7 @@ fn get_daily_groups(
             duration_text: format_duration(e.raw_duration_secs),
             days_text: format!("{:.2} 天", e.billable_days),
             amount_text: format!("{} {:.2}", currency, e.total_amount),
-            summary_text: e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string()),
+            summary_text: e.summary.unwrap_or_default(),
             time_range: format!("{}-{}", start_local.format("%H:%M"), end_local.format("%H:%M")),
             date_str: date_str.clone(),
             has_audio,
@@ -688,7 +688,7 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
             } else if !user_notes.is_empty() {
                 format!("阶段性研发与联调：{}", user_notes.join("；"))
             } else {
-                "完成阶段性功能需求研发与验证".to_string()
+                String::new()
             };
 
             let db = state.db.clone();
@@ -704,13 +704,12 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
                     existing.rate_at_moment = rate;
                     existing.total_amount = amount;
                     
-                    // 合并已有 summary（若已有会议纪要，保留并追加研发描述）
+                    // 若已有用户填写的 summary，保持已有内容；若为空，才填充自动抓取的描述
                     let combined_sum = match existing.summary.as_ref() {
-                        Some(prev) if !prev.contains(&summary_desc) => format!("{}\n\n{}", prev, summary_desc),
-                        Some(prev) => prev.clone(),
-                        None => summary_desc.clone(),
+                        Some(prev) if !prev.trim().is_empty() => prev.clone(),
+                        _ => summary_desc.clone(),
                     };
-                    existing.summary = Some(combined_sum.clone());
+                    existing.summary = if combined_sum.trim().is_empty() { None } else { Some(combined_sum.clone()) };
                     let _ = guard.insert_time_entry(&existing);
 
                     // 记录打卡时段 WorkSpan
@@ -732,7 +731,7 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
                         billable_days,
                         rate_at_moment: rate,
                         total_amount: amount,
-                        summary: Some(summary_desc.clone()),
+                        summary: if summary_desc.trim().is_empty() { None } else { Some(summary_desc.clone()) },
                         audio_path: None,
                         is_invoiced: false,
                         created_at: Utc::now(),

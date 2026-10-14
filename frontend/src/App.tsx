@@ -44,7 +44,8 @@ import {
   RotateCw,
   AlertCircle,
   AlertTriangle,
-  Loader2
+  Loader2,
+  Code2
 } from "lucide-react";
 
 interface Project {
@@ -385,6 +386,94 @@ export function App() {
       }
     }
     return { summary: fullText, transcript: "" };
+  };
+
+  interface ParsedWorkContent {
+    userNotes: string;
+    commits: Array<{ message: string; hash?: string }>;
+    rawText: string;
+  }
+
+  const formatSeconds = (secs: number): string => {
+    if (secs <= 0) return "0秒";
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = Math.round(secs % 60);
+    if (h > 0) {
+      return `${h}小时${m > 0 ? `${m}分` : ""}`;
+    }
+    if (m > 0) {
+      return `${m}分${s > 0 ? `${s}秒` : ""}`;
+    }
+    return `${s}秒`;
+  };
+
+  const parseWorkContent = (text: string, hasMeetings: boolean): ParsedWorkContent => {
+    if (!text) return { userNotes: "", commits: [], rawText: "" };
+    
+    // 清洗掉历史遗留的录音绝对路径文本
+    const cleaned = text
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("[录音凭据:") && !line.trim().includes(".wav]"))
+      .join("\n")
+      .trim();
+
+    const lines = cleaned.split("\n");
+    const commitLines: Array<{ message: string; hash?: string }> = [];
+    const noteLines: string[] = [];
+
+    let inCommitSection = false;
+    let inLegacyMeetingSection = false;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (!inCommitSection && !inLegacyMeetingSection) noteLines.push(rawLine);
+        continue;
+      }
+
+      if (line.includes("代码研发与提交") && line.includes("次")) {
+        inCommitSection = true;
+        inLegacyMeetingSection = false;
+        continue;
+      }
+
+      // 提取符合 Commit Hash 格式的提交行
+      const commitHashMatch = line.match(/^(?:[-*•]\s*)?(.*?)\s*\[([0-9a-fA-F]{6,12})\]$/) ||
+                              line.match(/^(?:[-*•]\s*)?\[([0-9a-fA-F]{6,12})\]\s*(.*)$/);
+
+      if (commitHashMatch) {
+        const isFormatA = commitHashMatch[1].length > 6 && !commitHashMatch[2].includes(" ");
+        const hash = isFormatA ? commitHashMatch[2] : commitHashMatch[1];
+        const message = isFormatA ? commitHashMatch[1] : commitHashMatch[2];
+        commitLines.push({ hash, message: message.replace(/^[-*•]\s*/, "").trim() });
+      } else if (inCommitSection && (line.startsWith("- ") || line.startsWith("* "))) {
+        commitLines.push({ message: line.replace(/^[-*]\s*/, "").trim() });
+      } else {
+        inCommitSection = false;
+        // 如果当前工时已包含独立结构化会议，过滤掉在 summary 中冗余重复的旧会议纪要文本块
+        if (hasMeetings && (line.startsWith("【会议纪要：") || line.startsWith("# 会议纪要：") || line.startsWith("【会议纪要】"))) {
+          inLegacyMeetingSection = true;
+          continue;
+        }
+        if (inLegacyMeetingSection) {
+          if (line.startsWith("---") || line.startsWith("【") || line.startsWith("# ")) {
+            inLegacyMeetingSection = false;
+            if (!line.includes("会议纪要")) {
+              noteLines.push(rawLine);
+            }
+          }
+          continue;
+        }
+        noteLines.push(rawLine);
+      }
+    }
+
+    return {
+      userNotes: noteLines.join("\n").trim(),
+      commits: commitLines,
+      rawText: cleaned,
+    };
   };
 
   // Settings Tab Form
@@ -1211,6 +1300,46 @@ export function App() {
       showToast(`✨ ${res.message} 已自动填入纪要框`);
     } catch (e: any) {
       showToast("抽取 Git 提交失败: " + e.toString());
+    } finally {
+      setIsExtractingGit(false);
+    }
+  };
+
+  const handleTriggerGitExtract = async (entry: Entry) => {
+    setIsExtractingGit(true);
+    showToast("🔍 正在从项目关联的 Git 仓库抽取提交记录...");
+    try {
+      const res = await invoke<ExtractGitResultDto>("extract_entry_git_summary", {
+        entryId: entry.id,
+        customRepoPath: activeProject?.git_repo_path || null,
+      });
+
+      if (!res.success) {
+        showToast("⚠️ " + res.message);
+        return;
+      }
+
+      if (res.commits_count === 0 && !res.diff_stat) {
+        showToast("ℹ️ " + res.message);
+        return;
+      }
+
+      const existingText = entry.summary_text.trim();
+      const combinedText = existingText
+        ? `${existingText}\n\n${res.extracted_text}`
+        : res.extracted_text;
+
+      setActiveEditSummaryModal({
+        entry_id: entry.id,
+        title: `📅 ${entry.date_str} 工作内容与交付说明`,
+        project_name: entry.project_name || activeProject?.name || "项目交付",
+        date_str: entry.date_str,
+        summary: combinedText,
+        raw_transcript: "",
+      });
+      showToast(`✨ 成功抽取到 ${res.commits_count} 条 Git 提交，已打开编辑框！`);
+    } catch (e: any) {
+      showToast("从 Git 提取失败: " + e.toString());
     } finally {
       setIsExtractingGit(false);
     }
@@ -2245,88 +2374,180 @@ export function App() {
                               {group.entries.map((entry) => {
                                 const isLiveRecording = entry.status === "recording";
                                 const isSummarizing = entry.status === "summarizing";
+                                const hasMeetings = (entry.meetings || []).length > 0;
+                                const parsed = parseWorkContent(entry.summary_text, hasMeetings);
+                                const isExpanded = !!expandedSummaryEntryIds[entry.id];
+                                const isLongContent = parsed.userNotes.length > 200 || parsed.userNotes.split("\n").length > 5;
+                                const hasMeetingClips = (entry.meetings || []).some((m) => (m.clips || []).length > 0);
+                                const { transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
+
+                                // 计算会议总秒数与研发投入占比（时间区间重叠并集核算，不重复计费）
+                                const meetingTotalSecs = (entry.meetings || []).reduce(
+                                  (acc, m) => acc + (m.clips || []).reduce((cAcc, c) => cAcc + (c.duration_secs || 0), 0),
+                                  0
+                                );
+                                const totalSecs = Math.max(entry.raw_secs || 0, meetingTotalSecs || 1);
+                                const meetingPercent = meetingTotalSecs > 0 ? Math.min(100, Math.max(4, Math.round((meetingTotalSecs / totalSecs) * 100))) : 0;
+                                const focusPercent = 100 - meetingPercent;
+                                const focusSecs = Math.max(0, totalSecs - meetingTotalSecs);
 
                                 return (
                                 <div
                                   key={entry.id}
-                                  className={`p-3.5 rounded-lg border shadow-2xs space-y-2 transition-all ${
+                                  className={`rounded-xl border shadow-xs transition-all overflow-hidden ${
                                     isLiveRecording
-                                      ? "bg-rose-50/70 border-rose-200/80 ring-1 ring-rose-300/60"
+                                      ? "bg-rose-50/30 border-rose-200/90 ring-1 ring-rose-300/50"
                                       : isSummarizing
-                                      ? "bg-amber-50/70 border-amber-200/80 ring-1 ring-amber-300/60"
-                                      : "bg-slate-50/70 border-slate-200/60 hover:bg-slate-50/90"
+                                      ? "bg-amber-50/30 border-amber-200/90 ring-1 ring-amber-300/50"
+                                      : "bg-white border-slate-200/80 hover:border-slate-300 hover:shadow-sm"
                                   }`}
                                 >
-                                  <div className="flex items-center justify-between text-xs">
-                                    <div className="flex items-center gap-3 text-slate-600">
-                                      <span className="font-semibold text-slate-900 flex items-center gap-1">
-                                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                                        {entry.time_range}
-                                      </span>
-                                      <span>投入: {entry.duration_text}</span>
-                                      <span>折算: {entry.days_text}</span>
-                                      {!hideAmount && (
-                                        <span className="text-emerald-600 font-semibold">{entry.amount_text}</span>
-                                      )}
+                                  {/* 维度一：物理工时与时间轴（物理时间唯一核算） */}
+                                  <div className="bg-slate-50/70 border-b border-slate-100 px-4 py-2.5 space-y-2">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <div className="flex items-center gap-3 text-slate-600">
+                                        <span className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                                          <Clock className="w-3.5 h-3.5 text-indigo-500" />
+                                          {entry.time_range}
+                                        </span>
+                                        <span className="text-slate-500">投入: <strong className="text-slate-800 font-semibold">{entry.duration_text}</strong></span>
+                                        <span className="text-slate-500">折算: <strong className="text-slate-800 font-semibold">{entry.days_text}</strong></span>
+                                        {!hideAmount && (
+                                          <span className="text-emerald-600 font-semibold">{entry.amount_text}</span>
+                                        )}
+                                      </div>
+
+                                      {/* 状态徽章与结算切换 */}
+                                      <div className="flex items-center gap-2">
+                                        {isLiveRecording && (
+                                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-300">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                                            <span>会议录音中</span>
+                                          </div>
+                                        )}
+                                        {isSummarizing && (
+                                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                            <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
+                                            <span>AI提炼中</span>
+                                          </div>
+                                        )}
+
+                                        {!isLiveRecording && (
+                                          <button
+                                            onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
+                                            title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
+                                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border transition-all active:scale-95 cursor-pointer ${
+                                              entry.is_invoiced
+                                                ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                                                : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
+                                            }`}
+                                          >
+                                            {entry.is_invoiced ? (
+                                              <>
+                                                <CheckCheck className="w-3 h-3 text-emerald-600" />
+                                                已结算
+                                              </>
+                                            ) : (
+                                              <>
+                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                                待结算
+                                              </>
+                                            )}
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
 
-                                    {/* 状态与结算徽章区 */}
-                                    <div className="flex items-center gap-2">
-                                      {isLiveRecording && (
-                                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-300">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
-                                          <span>会议录音中</span>
-                                        </div>
-                                      )}
-                                      {isSummarizing && (
-                                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                          <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
-                                          <span>AI提炼中</span>
-                                        </div>
-                                      )}
-
-                                      {/* 结算状态标签 (可点击直接切换) */}
-                                      {!isLiveRecording && (
-                                        <button
-                                          onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
-                                          title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
-                                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border transition-all active:scale-95 ${
-                                            entry.is_invoiced
-                                              ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
-                                              : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
-                                          }`}
-                                        >
-                                          {entry.is_invoiced ? (
-                                            <>
-                                              <CheckCheck className="w-3 h-3 text-emerald-600" />
-                                              已结算
-                                            </>
-                                          ) : (
-                                            <>
-                                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                              待结算
-                                            </>
+                                    {/* 物理工时分配胶囊条：研发 vs 会议（时间不重复计算） */}
+                                    {totalSecs > 0 && (
+                                      <div className="flex items-center gap-3 pt-0.5">
+                                        <div className="flex-1 h-1.5 bg-slate-200/70 rounded-full overflow-hidden flex">
+                                          <div
+                                            className="h-full bg-indigo-500 rounded-l-full transition-all duration-300"
+                                            style={{ width: `${focusPercent}%` }}
+                                            title={`专注研发/业务: ${formatSeconds(focusSecs)} (${focusPercent}%)`}
+                                          />
+                                          {meetingPercent > 0 && (
+                                            <div
+                                              className="h-full bg-violet-500 rounded-r-full transition-all duration-300"
+                                              style={{ width: `${meetingPercent}%` }}
+                                              title={`会议沟通: ${formatSeconds(meetingTotalSecs)} (${meetingPercent}%)`}
+                                            />
                                           )}
-                                        </button>
-                                      )}
-                                    </div>
+                                        </div>
+                                        <div className="flex items-center gap-2.5 text-[10px] text-slate-500 shrink-0 font-medium">
+                                          <span className="flex items-center gap-1 text-slate-700">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                            <span>研发交付 {formatSeconds(focusSecs)}</span>
+                                          </span>
+                                          {meetingTotalSecs > 0 && (
+                                            <span className="flex items-center gap-1 text-violet-700 font-semibold">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+                                              <span>会议沟通 {formatSeconds(meetingTotalSecs)}</span>
+                                            </span>
+                                          )}
+                                          <span className="text-[10px] text-slate-400 font-normal hidden md:inline">
+                                            (时间重叠已并集核算)
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
 
-                                  {(() => {
-                                    const { summary: displaySummary, transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
-                                    const isExpanded = !!expandedSummaryEntryIds[entry.id];
-                                    const isLongContent = displaySummary.length > 160 || displaySummary.split("\n").length > 4;
-                                    const hasMeetingClips = (entry.meetings || []).some((m) => (m.clips || []).length > 0);
-                                    return (
-                                      <>
+                                  {/* 卡片主体：双维度独立区域 */}
+                                  <div className="p-3.5 space-y-3">
+                                    {/* 维度二：工作内容与交付凭据 */}
+                                    <div className="bg-slate-50/50 rounded-lg border border-slate-200/70 p-3 space-y-2">
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-5 h-5 rounded bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                                            <Code2 className="w-3 h-3" />
+                                          </div>
+                                          <span className="text-xs font-bold text-slate-800">工作内容与交付凭据</span>
+                                          {parsed.commits.length > 0 && (
+                                            <span className="px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/60 text-[10px] font-medium flex items-center gap-1">
+                                              <GitBranch className="w-2.5 h-2.5" />
+                                              {parsed.commits.length} 次代码提交
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <div className="flex items-center gap-1.5">
+                                          <button
+                                            onClick={() => handleTriggerGitExtract(entry)}
+                                            disabled={isExtractingGit}
+                                            className="px-2 py-0.5 rounded text-[11px] font-semibold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 shadow-2xs hover:shadow-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95 disabled:opacity-50"
+                                            title="自动读取关联 Git 仓库中在此时间区间的代码提交"
+                                          >
+                                            <GitBranch className="w-3 h-3 text-indigo-600" />
+                                            <span>从 Git 提取</span>
+                                          </button>
+                                          <button
+                                            onClick={() => setActiveEditSummaryModal({
+                                              entry_id: entry.id,
+                                              title: `📅 ${entry.date_str} 工作内容与交付说明`,
+                                              project_name: entry.project_name || activeProject?.name || "项目交付",
+                                              date_str: entry.date_str,
+                                              summary: entry.summary_text,
+                                              raw_transcript: rawTranscript,
+                                            })}
+                                            className="px-2 py-0.5 rounded text-[11px] font-medium text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 shadow-2xs transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                                            title="编辑工作内容与说明"
+                                          >
+                                            <Edit3 className="w-3 h-3 text-slate-500" />
+                                            <span>编辑内容</span>
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {/* 用户自定义说明与笔记 */}
+                                      {parsed.userNotes ? (
                                         <div className="relative">
                                           <div
-                                            className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal transition-all duration-200 ${
-                                              !isExpanded && isLongContent
-                                                ? "max-h-24 overflow-hidden mask-gradient-b"
-                                                : ""
+                                            className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal ${
+                                              !isExpanded && isLongContent ? "max-h-24 overflow-hidden mask-gradient-b" : ""
                                             }`}
-                                            dangerouslySetInnerHTML={{ __html: renderMarkdown(displaySummary) }}
+                                            dangerouslySetInnerHTML={{ __html: renderMarkdown(parsed.userNotes) }}
                                           />
                                           {isLongContent && (
                                             <div className="pt-1.5 flex items-center">
@@ -2338,269 +2559,316 @@ export function App() {
                                                 {isExpanded ? (
                                                   <>
                                                     <ChevronUp className="w-3.5 h-3.5" />
-                                                    收起内容
+                                                    收起说明
                                                   </>
                                                 ) : (
                                                   <>
                                                     <ChevronDown className="w-3.5 h-3.5" />
-                                                    展开查看完整内容 ({displaySummary.length}字)
+                                                    展开完整说明 ({parsed.userNotes.length}字)
                                                   </>
                                                 )}
                                               </button>
                                             </div>
                                           )}
-                                          {/* 若该日包含会议，分层结构化展示会议与录音片段列表 */}
-                                          {entry.meetings && entry.meetings.length > 0 && (
-                                            <div className="mt-2.5 pt-2 border-t border-slate-100 space-y-2">
-                                              <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-                                                <Mic className="w-3.5 h-3.5 text-indigo-500" />
-                                                <span>今日会议清单 ({entry.meetings.length} 场)</span>
+                                        </div>
+                                      ) : parsed.commits.length === 0 ? (
+                                        <div className="py-2 px-2.5 rounded bg-white border border-dashed border-slate-200 flex items-center justify-between text-xs text-slate-400">
+                                          <span className="flex items-center gap-1.5">
+                                            <Layers className="w-3.5 h-3.5 text-slate-300" />
+                                            暂未记录工作说明与交付凭据
+                                          </span>
+                                          <button
+                                            onClick={() => handleTriggerGitExtract(entry)}
+                                            className="text-[11px] text-indigo-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                                          >
+                                            <GitBranch className="w-3 h-3" />
+                                            一键从 Git 提取提交记录
+                                          </button>
+                                        </div>
+                                      ) : null}
+
+                                      {/* Git 结构化提交记录列表 */}
+                                      {parsed.commits.length > 0 && (
+                                        <div className="bg-white rounded-md border border-slate-200/80 p-2.5 space-y-1.5">
+                                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 pb-1 border-b border-slate-100">
+                                            <GitBranch className="w-3 h-3 text-indigo-500" />
+                                            <span>关联 Git 提交记录 ({parsed.commits.length})</span>
+                                          </div>
+                                          <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                                            {parsed.commits.map((c, idx) => (
+                                              <div key={idx} className="flex items-baseline gap-2 text-xs py-0.5 group">
+                                                {c.hash && (
+                                                  <span className="shrink-0 px-1.5 py-0.2 rounded bg-slate-100 group-hover:bg-indigo-50 text-slate-600 group-hover:text-indigo-700 font-mono text-[10px] font-semibold border border-slate-200 group-hover:border-indigo-200 transition-colors">
+                                                    {c.hash}
+                                                  </span>
+                                                )}
+                                                <span className="text-slate-700 leading-snug break-all">{c.message}</span>
                                               </div>
-                                              <div className="space-y-1.5">
-                                                {entry.meetings.map((m) => (
-                                                  <div key={m.id} className="p-2.5 bg-slate-50/80 hover:bg-slate-50 rounded-lg border border-slate-200/80 text-xs">
-                                                    <div className="flex items-center justify-between font-semibold text-slate-800">
-                                                      <div className="flex items-center gap-1.5">
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-                                                        <span>{m.topic}</span>
-                                                        <span className="text-[10px] text-slate-400 font-mono">({m.start_time}{m.end_time ? ` - ${m.end_time}` : ""} · {m.duration_text})</span>
-                                                      </div>
-                                                      <div className="flex items-center gap-1">
-                                                        {m.status === "in_progress" && (
-                                                          <button
-                                                            onClick={() => handleStartClipForMeeting(m.id)}
-                                                            className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-[10px] font-bold cursor-pointer"
-                                                            title="为此会议录制一段新的录音"
-                                                          >
-                                                            + 追加录音
-                                                          </button>
-                                                        )}
-                                                      </div>
-                                                    </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
 
-                                                    {/* 会议录音片段列表 */}
-                                                    {m.clips && m.clips.length > 0 && (
-                                                      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-                                                        <span className="text-[10px] text-slate-400">录音片段:</span>
-                                                        {m.clips.map((clip) => {
-                                                          const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
-                                                          const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
-                                                          const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
-                                                          const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
-
-                                                          return (
-                                                            <div
-                                                              key={clip.id}
-                                                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] border transition-all ${
-                                                                isFailed
-                                                                  ? "bg-rose-50/80 border-rose-200 text-rose-700 shadow-2xs"
-                                                                  : isPending
-                                                                  ? "bg-amber-50/80 border-amber-200 text-amber-700 animate-pulse"
-                                                                  : "bg-white border-slate-200 text-slate-700"
-                                                              }`}
-                                                            >
-                                                              {/* 播放录音片段按钮 */}
-                                                              <button
-                                                                onClick={() => handleOpenAudioPlayer(clip.audio_path, `片段 ${clip.clip_order}`)}
-                                                                className="font-semibold flex items-center gap-0.5 hover:underline cursor-pointer"
-                                                                title="播放该录音片段"
-                                                              >
-                                                                <Volume2 className="w-2.5 h-2.5" />
-                                                                <span>片段 {clip.clip_order} ({clip.duration_text})</span>
-                                                              </button>
-
-                                                              {/* 转写就绪状态：文稿查看与带确认的重新转写 */}
-                                                              {isTranscribed && (
-                                                                <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-0.5">
-                                                                  {clip.transcript && (
-                                                                    <button
-                                                                      onClick={() => setActiveTranscriptModal({
-                                                                        title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写稿`,
-                                                                        transcript: clip.transcript!,
-                                                                      })}
-                                                                      className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5 font-medium"
-                                                                      title="查看该片段转写文稿"
-                                                                    >
-                                                                      <FileText className="w-2.5 h-2.5" />
-                                                                      <span>文稿</span>
-                                                                    </button>
-                                                                  )}
-                                                                  <button
-                                                                    onClick={() => setConfirmRetryClipModal({
-                                                                      clipId: clip.id,
-                                                                      clipOrder: clip.clip_order,
-                                                                      durationText: clip.duration_text,
-                                                                      topic: m.topic,
-                                                                      hasTranscript: !!clip.transcript,
-                                                                    })}
-                                                                    className="text-slate-400 hover:text-indigo-600 hover:bg-slate-100 px-1 py-0.5 rounded cursor-pointer flex items-center gap-0.5 font-medium transition-colors"
-                                                                    title="重新转写此片段（将弹窗确认并覆盖现有文稿）"
-                                                                  >
-                                                                    <RotateCw className="w-2.5 h-2.5" />
-                                                                    <span>重新转写</span>
-                                                                  </button>
-                                                                </div>
-                                                              )}
-
-                                                              {/* 转写中状态 */}
-                                                              {isPending && (
-                                                                <span className="flex items-center gap-1 text-amber-600 font-medium border-l border-amber-200 pl-1.5 ml-0.5">
-                                                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                                                  <span>转写中...</span>
-                                                                </span>
-                                                              )}
-
-                                                              {/* 转写失败状态：醒目标识 + 重新转写按钮 */}
-                                                              {isFailed && (
-                                                                <div className="flex items-center gap-1 border-l border-rose-200 pl-1.5 ml-0.5">
-                                                                  <span className="flex items-center gap-0.5 text-rose-600 font-semibold">
-                                                                    <AlertCircle className="w-2.5 h-2.5" />
-                                                                    <span>转写失败</span>
-                                                                  </span>
-                                                                  <button
-                                                                    onClick={() => setConfirmRetryClipModal({
-                                                                      clipId: clip.id,
-                                                                      clipOrder: clip.clip_order,
-                                                                      durationText: clip.duration_text,
-                                                                      topic: m.topic,
-                                                                      hasTranscript: !!clip.transcript,
-                                                                    })}
-                                                                    className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] flex items-center gap-0.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
-                                                                    title="重新转写此录音片段"
-                                                                  >
-                                                                    <RotateCw className="w-2.5 h-2.5" />
-                                                                    <span>重新转写</span>
-                                                                  </button>
-                                                                </div>
-                                                              )}
-                                                            </div>
-                                                          );
-                                                        })}
-                                                      </div>
-                                                    )}
-                                                  </div>
-                                                ))}
-                                              </div>
+                                    {/* 维度三：会议沟通与决议（仅当有会议/录音/正在录制时呈现） */}
+                                    {((entry.meetings && entry.meetings.length > 0) || entry.has_audio || isLiveRecording) && (
+                                      <div className="bg-violet-50/40 rounded-lg border border-violet-100 p-3 space-y-2.5">
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            <div className="w-5 h-5 rounded bg-violet-100 text-violet-700 flex items-center justify-center font-bold">
+                                              <Mic className="w-3 h-3" />
                                             </div>
+                                            <span className="text-xs font-bold text-slate-800">会议沟通与决议</span>
+                                            {entry.meetings && entry.meetings.length > 0 && (
+                                              <span className="px-1.5 py-0.2 rounded-full bg-violet-100/80 text-violet-700 text-[10px] font-medium">
+                                                {entry.meetings.length} 场沟通
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          {(hasMeetingClips || entry.has_audio || !!rawTranscript) && !isLiveRecording && (
+                                            <button
+                                              onClick={() => setConfirmResummarizeModal({
+                                                entry,
+                                                topic: (entry.meetings && entry.meetings[0]?.topic) || undefined,
+                                              })}
+                                              className="px-2 py-0.5 rounded text-[11px] font-semibold text-violet-700 bg-white hover:bg-violet-50 border border-violet-200 shadow-2xs transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                                              title="基于录音片段与实录文稿重新提炼结构化会议纪要"
+                                            >
+                                              <Sparkles className="w-3 h-3 text-violet-600" />
+                                              <span>重新提炼纪要</span>
+                                            </button>
                                           )}
                                         </div>
 
-                                        {/* 操作按钮区 */}
-                                        <div className="flex items-center justify-between pt-1">
-                                          <div className="flex items-center gap-2">
-                                            {isLiveRecording && (
-                                              <button
-                                                onClick={handleStopMeeting}
-                                                disabled={isStoppingMeeting}
-                                                className="h-6.5 px-2.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                                                title="立即结束本次会议并保存录音"
-                                              >
-                                                <Square className="w-3 h-3 fill-current" />
-                                                结束会议并提炼纪要
-                                              </button>
-                                            )}
-                                            {entry.has_audio && !hasMeetingClips && (
-                                              <button
-                                                onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
-                                                className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                                                title="点击打开内置播放器，支持进度拖拽、快进后退与完整路径复制"
-                                              >
-                                                <Volume2 className="w-3.5 h-3.5 text-indigo-600" />
-                                                播放录音
-                                              </button>
-                                            )}
-                                            {rawTranscript && (
-                                              <button
-                                                onClick={() => setActiveTranscriptModal({
-                                                  title: `📅 ${entry.date_str} 会议全量转写实录`,
-                                                  transcript: rawTranscript,
-                                                })}
-                                                className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                                                title="在独立窗口中查看完整数万字逐字转写文稿"
-                                              >
-                                                <FileText className="w-3 h-3 text-slate-500" />
-                                                查看转写实录 ({rawTranscript.length}字)
-                                              </button>
-                                            )}
-                                            {(hasMeetingClips || entry.has_audio || !!rawTranscript) && !isLiveRecording && (
-                                              <button
-                                                onClick={() => setConfirmResummarizeModal({
-                                                  entry,
-                                                  topic: (entry.meetings && entry.meetings[0]?.topic) || undefined,
-                                                })}
-                                                className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                                                title="基于录音片段的所有文稿实录与便签，使用 AI 重新总结生成结构化会议纪要（核心议题、达成共识与后续待办）"
-                                              >
-                                                <Sparkles className="w-3 h-3 text-indigo-600" />
-                                                <span>{displaySummary ? "AI 重新提炼纪要" : "AI 提炼纪要"}</span>
-                                              </button>
-                                            )}
-                                          </div>
+                                        {/* 会议卡片列表 */}
+                                        {entry.meetings && entry.meetings.length > 0 ? (
+                                          <div className="space-y-2">
+                                            {entry.meetings.map((m) => (
+                                              <div key={m.id} className="bg-white rounded-md border border-violet-200/60 p-2.5 space-y-2 shadow-2xs">
+                                                <div className="flex items-center justify-between">
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+                                                    <span className="font-bold text-slate-800 text-xs">{m.topic}</span>
+                                                    <span className="text-[10px] text-slate-400 font-mono">
+                                                      ({m.start_time}{m.end_time ? ` - ${m.end_time}` : ""} · {m.duration_text})
+                                                    </span>
+                                                  </div>
+                                                  {m.status === "in_progress" && (
+                                                    <button
+                                                      onClick={() => handleStartClipForMeeting(m.id)}
+                                                      className="px-1.5 py-0.5 bg-violet-50 hover:bg-violet-100 text-violet-700 rounded text-[10px] font-bold cursor-pointer transition-colors"
+                                                    >
+                                                      + 追加录音
+                                                    </button>
+                                                  )}
+                                                </div>
 
-                                          <div className="flex items-center gap-2">
-                                            {!isLiveRecording && (
-                                              <>
-                                                <button
-                                                  onClick={() => {
-                                                    navigator.clipboard.writeText(displaySummary);
-                                                    showToast("📋 会议纪要已复制到剪贴板！可直接发送给 AI 智能体");
-                                                  }}
-                                                  className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                                  title="一键复制精炼会议纪要，方便丢给 Agent 进行开发拆解"
-                                                >
-                                                  <Copy className="w-3 h-3 text-slate-500" />
-                                                  复制纪要
-                                                </button>
-                                                <button
-                                                  onClick={() => setActiveEditSummaryModal({
-                                                    entry_id: entry.id,
-                                                    title: `📅 ${entry.date_str} 会议纪要与交付说明`,
-                                                    project_name: entry.project_name || activeProject?.name || "项目交付",
-                                                    date_str: entry.date_str,
-                                                    summary: displaySummary,
-                                                    raw_transcript: rawTranscript,
-                                                  })}
-                                                  className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                                  title="修改与微调 AI 提取的要点，保存后交付 Agent 实施开发"
-                                                >
-                                                  <Edit3 className="w-3 h-3 text-indigo-600" />
-                                                  编辑纪要
-                                                </button>
-                                                <button
-                                                  disabled={isExportingPdf}
-                                                  onClick={() => handleExportPdf({
-                                                    title: `【${entry.project_name || activeProject?.name || "项目"}】会议纪要与技术决议`,
-                                                    projectName: entry.project_name || activeProject?.name || "技术项目",
-                                                    dateStr: entry.date_str,
-                                                    summaryContent: displaySummary,
-                                                  })}
-                                                  className="h-6.5 px-2.5 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                                                  title="导出为精美商务 PDF 文档，可直接交付客户确认"
-                                                >
-                                                  <FileDown className="w-3 h-3 text-emerald-600" />
-                                                  导出PDF
-                                                </button>
-                                              </>
-                                            )}
+                                                {/* 录音片段胶囊列表 */}
+                                                {m.clips && m.clips.length > 0 && (
+                                                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                                    <span className="text-[10px] font-semibold text-slate-400">录音片段:</span>
+                                                    {m.clips.map((clip) => {
+                                                      const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
+                                                      const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
+                                                      const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
+                                                      const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
+
+                                                      return (
+                                                        <div
+                                                          key={clip.id}
+                                                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] border transition-all ${
+                                                            isFailed
+                                                              ? "bg-rose-50 border-rose-200 text-rose-700 shadow-2xs"
+                                                              : isPending
+                                                              ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
+                                                              : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100/80"
+                                                          }`}
+                                                        >
+                                                          <button
+                                                            onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
+                                                            className="font-semibold flex items-center gap-1 hover:underline cursor-pointer"
+                                                            title="播放该录音片段"
+                                                          >
+                                                            <Volume2 className="w-2.5 h-2.5 text-slate-500" />
+                                                            <span>片段 {clip.clip_order} ({clip.duration_text})</span>
+                                                          </button>
+
+                                                          {isTranscribed && (
+                                                            <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-0.5">
+                                                              {clip.transcript && (
+                                                                <button
+                                                                  onClick={() => setActiveTranscriptModal({
+                                                                    title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
+                                                                    transcript: clip.transcript!,
+                                                                  })}
+                                                                  className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5 font-medium"
+                                                                  title="查看该片段转写文稿"
+                                                                >
+                                                                  <FileText className="w-2.5 h-2.5" />
+                                                                  <span>文稿</span>
+                                                                </button>
+                                                              )}
+                                                              <button
+                                                                onClick={() => setConfirmRetryClipModal({
+                                                                  clipId: clip.id,
+                                                                  clipOrder: clip.clip_order,
+                                                                  durationText: clip.duration_text,
+                                                                  topic: m.topic,
+                                                                  hasTranscript: !!clip.transcript,
+                                                                })}
+                                                                className="text-slate-400 hover:text-indigo-600 px-0.5 py-0.2 rounded cursor-pointer flex items-center gap-0.5 font-medium transition-colors"
+                                                                title="重新转写此片段"
+                                                              >
+                                                                <RotateCw className="w-2.5 h-2.5" />
+                                                                <span>重新转写</span>
+                                                              </button>
+                                                            </div>
+                                                          )}
+
+                                                          {isPending && (
+                                                            <span className="flex items-center gap-1 text-amber-600 font-medium border-l border-amber-200 pl-1.5 ml-0.5">
+                                                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                              <span>转写中...</span>
+                                                            </span>
+                                                          )}
+
+                                                          {isFailed && (
+                                                            <div className="flex items-center gap-1 border-l border-rose-200 pl-1.5 ml-0.5">
+                                                              <span className="flex items-center gap-0.5 text-rose-600 font-semibold">
+                                                                <AlertCircle className="w-2.5 h-2.5" />
+                                                                <span>转写失败</span>
+                                                              </span>
+                                                              <button
+                                                                onClick={() => setConfirmRetryClipModal({
+                                                                  clipId: clip.id,
+                                                                  clipOrder: clip.clip_order,
+                                                                  durationText: clip.duration_text,
+                                                                  topic: m.topic,
+                                                                  hasTranscript: !!clip.transcript,
+                                                                })}
+                                                                className="px-1.5 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] flex items-center gap-0.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
+                                                              >
+                                                                <RotateCw className="w-2.5 h-2.5" />
+                                                                <span>重新转写</span>
+                                                              </button>
+                                                            </div>
+                                                          )}
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                )}
+
+                                                {/* 会议要点与决议内容 */}
+                                                {m.summary && (
+                                                  <div className="bg-slate-50/70 rounded p-2 text-xs text-slate-700 border border-slate-100 space-y-1">
+                                                    <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider flex items-center gap-1">
+                                                      <Sparkles className="w-2.5 h-2.5" />
+                                                      <span>达成共识与技术决议</span>
+                                                    </div>
+                                                    <div
+                                                      className="markdown-body leading-relaxed text-xs text-slate-700 font-normal"
+                                                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.summary) }}
+                                                    />
+                                                  </div>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : entry.has_audio && !hasMeetingClips ? (
+                                          <div className="bg-white rounded-md border border-violet-200/60 p-2.5 flex items-center justify-between">
+                                            <div className="flex items-center gap-2 text-xs text-slate-700">
+                                              <Volume2 className="w-4 h-4 text-violet-600" />
+                                              <span>现场会议录音凭证</span>
+                                            </div>
                                             <button
-                                              onClick={() => {
-                                                setSelectedEntry(entry);
-                                                setShowDetailModal(true);
-                                              }}
-                                              className="h-6.5 px-2.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+                                              onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
+                                              className="px-2.5 py-1 rounded bg-violet-50 text-violet-700 hover:bg-violet-100 text-xs font-semibold flex items-center gap-1 border border-violet-200 transition-colors cursor-pointer"
                                             >
-                                              <FileText className="w-3 h-3 text-slate-400" />
-                                              查看详情
+                                              <Volume2 className="w-3 h-3" />
+                                              <span>播放录音</span>
                                             </button>
                                           </div>
-                                        </div>
-                                      </>
-                                    );
-                                  })()}
+                                        ) : null}
+                                      </div>
+                                    )}
+
+                                    {/* 底部操作工具栏 */}
+                                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                                      <div className="flex items-center gap-2">
+                                        {isLiveRecording && (
+                                          <button
+                                            onClick={handleStopMeeting}
+                                            disabled={isStoppingMeeting}
+                                            className="h-6.5 px-2.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs active:scale-95"
+                                          >
+                                            <Square className="w-3 h-3 fill-current" />
+                                            <span>结束会议并提炼纪要</span>
+                                          </button>
+                                        )}
+                                        {rawTranscript && (
+                                          <button
+                                            onClick={() => setActiveTranscriptModal({
+                                              title: `📅 ${entry.date_str} 会议全量转写实录`,
+                                              transcript: rawTranscript,
+                                            })}
+                                            className="h-6.5 px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                                            title="在独立弹窗中查看完整逐字转写文稿"
+                                          >
+                                            <FileText className="w-3 h-3 text-slate-500" />
+                                            <span>查看转写实录 ({rawTranscript.length}字)</span>
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        {!isLiveRecording && (
+                                          <>
+                                            <button
+                                              onClick={() => {
+                                                const textToCopy = entry.summary_text || "";
+                                                navigator.clipboard.writeText(textToCopy);
+                                                showToast("📋 工作说明已复制到剪贴板！");
+                                              }}
+                                              className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                              title="复制工作内容与交付说明"
+                                            >
+                                              <Copy className="w-3 h-3 text-slate-500" />
+                                              <span>复制说明</span>
+                                            </button>
+                                            <button
+                                              disabled={isExportingPdf}
+                                              onClick={() => handleExportPdf({
+                                                title: `【${entry.project_name || activeProject?.name || "项目"}】工作交付说明与决议`,
+                                                projectName: entry.project_name || activeProject?.name || "技术项目",
+                                                dateStr: entry.date_str,
+                                                summaryContent: entry.summary_text,
+                                              })}
+                                              className="h-6.5 px-2.5 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                                              title="导出为精美商务 PDF 文档"
+                                            >
+                                              <FileDown className="w-3 h-3 text-emerald-600" />
+                                              <span>导出PDF</span>
+                                            </button>
+                                          </>
+                                        )}
+                                        <button
+                                          onClick={() => {
+                                            setSelectedEntry(entry);
+                                            setShowDetailModal(true);
+                                          }}
+                                          className="h-6.5 px-2.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                                        >
+                                          <FileText className="w-3 h-3 text-slate-400" />
+                                          <span>查看详情</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
                                 </div>
                                 );
-                              })}
-                            </div>
+                              })}\n                            </div>
                           </div>
                         ))
                       )}
