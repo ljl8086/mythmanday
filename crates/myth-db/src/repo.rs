@@ -784,6 +784,24 @@ impl Database {
         }
     }
 
+    pub fn recover_dangling_audio_clips(&self) -> Result<()> {
+        // 若已有转写文稿但状态仍为 pending，修正为 transcribed
+        self.conn.execute(
+            r#"UPDATE meeting_audio_clips
+               SET status = 'transcribed'
+               WHERE status = 'pending' AND transcript IS NOT NULL AND length(trim(transcript)) > 0"#,
+            [],
+        )?;
+        // 其它遗留的 pending 片段，因重启或异常断开导致未完成，置为 failed 以便用户重新触发转写
+        self.conn.execute(
+            r#"UPDATE meeting_audio_clips
+               SET status = 'failed'
+               WHERE status = 'pending'"#,
+            [],
+        )?;
+        Ok(())
+    }
+
     // --- 便签 CRUD ---
     pub fn insert_quick_note(&self, note: &QuickNote) -> Result<()> {
         self.conn.execute(

@@ -521,6 +521,22 @@ export function App() {
         month: mStr || null,
       });
       setDayGroups(groups);
+      setRetryingClipIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const g of groups) {
+          for (const e of g.entries) {
+            for (const m of e.meetings || []) {
+              for (const c of m.clips || []) {
+                if (c.status === "transcribed" || c.status === "failed" || c.transcript) {
+                  next.delete(c.id);
+                }
+              }
+            }
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
       const projNotes = await invoke<Note[]>("list_project_notes", { projectId: pid });
       setNotes(projNotes);
     } catch (e) {
@@ -2344,10 +2360,10 @@ export function App() {
                                                       <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                                                         <span className="text-[10px] text-slate-400">录音片段:</span>
                                                         {m.clips.map((clip) => {
-                                                          const isRetrying = retryingClipIds.has(clip.id);
-                                                          const isPending = isRetrying || clip.status === "pending";
-                                                          const isFailed = !isPending && (clip.status === "failed" || (!clip.transcript && clip.status !== "transcribed"));
-                                                          const isTranscribed = !isPending && (clip.status === "transcribed" || !!clip.transcript);
+                                                          const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
+                                                          const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
+                                                          const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
+                                                          const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
 
                                                           return (
                                                             <div

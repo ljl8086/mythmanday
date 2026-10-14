@@ -3154,6 +3154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 自动恢复由于崩溃或异常退出遗留的悬挂 pending 转写状态
+    if let Ok(guard) = db.lock() {
+        let _ = guard.recover_dangling_audio_clips();
+    }
+
     let state = AppState {
         db,
         timer_manager,
