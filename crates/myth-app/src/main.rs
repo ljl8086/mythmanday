@@ -1018,6 +1018,21 @@ async fn finish_meeting(
         };
 
         let summarizer = AiSummarizer::new(AiConfig { provider, api_base, api_key, model, proxy });
+
+        // 1. 等待名下所有音频片段转录完成 (最长等待 120 秒，避免并行 race condition)
+        let wait_start = std::time::Instant::now();
+        loop {
+            let pending_count = {
+                let guard = db_for_async.lock().unwrap();
+                let clips = guard.list_audio_clips_for_meeting(&m_id).unwrap_or_default();
+                clips.iter().filter(|c| c.status == "pending" && c.transcript.is_none()).count()
+            };
+            if pending_count == 0 || wait_start.elapsed() > std::time::Duration::from_secs(120) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
         let clips = db_for_async.lock().unwrap().list_audio_clips_for_meeting(&m_id).unwrap_or_default();
         let notes = db_for_async.lock().unwrap().list_quick_notes(&pid).unwrap_or_default();
 
@@ -1045,7 +1060,11 @@ async fn finish_meeting(
                 let _ = guard.insert_meeting(&m);
             }
             if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
-                let entry_summary = format!("【会议纪要：{}】\n{}\n\n---\n{}", topic_clone, summary, combined_transcript);
+                let entry_summary = if combined_transcript.trim().is_empty() {
+                    format!("【会议纪要：{}】\n{}", topic_clone, summary)
+                } else {
+                    format!("【会议纪要：{}】\n{}\n\n---\n【现场录音实录】：\n{}", topic_clone, summary, combined_transcript.trim())
+                };
                 e.summary = Some(entry_summary);
                 let _ = guard.insert_time_entry(&e);
             }

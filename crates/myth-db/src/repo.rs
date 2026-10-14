@@ -312,11 +312,24 @@ impl Database {
     // --- 工时流水 CRUD ---
     pub fn insert_time_entry(&self, entry: &TimeEntry) -> Result<()> {
         self.conn.execute(
-            r#"INSERT OR REPLACE INTO time_entries (
+            r#"INSERT INTO time_entries (
                 id, project_id, start_time, end_time, raw_duration_secs,
                 billable_hours, billable_days, rate_at_moment, total_amount,
                 summary, audio_path, is_invoiced, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                start_time = excluded.start_time,
+                end_time = excluded.end_time,
+                raw_duration_secs = excluded.raw_duration_secs,
+                billable_hours = excluded.billable_hours,
+                billable_days = excluded.billable_days,
+                rate_at_moment = excluded.rate_at_moment,
+                total_amount = excluded.total_amount,
+                summary = excluded.summary,
+                audio_path = excluded.audio_path,
+                is_invoiced = excluded.is_invoiced,
+                created_at = excluded.created_at"#,
             params![
                 entry.id.to_string(),
                 entry.project_id.to_string(),
@@ -496,9 +509,17 @@ impl Database {
     // --- 工作时段切片 WorkSpan CRUD ---
     pub fn insert_work_span(&self, span: &WorkSpan) -> Result<()> {
         self.conn.execute(
-            r#"INSERT OR REPLACE INTO work_spans (
+            r#"INSERT INTO work_spans (
                 id, entry_id, span_order, start_at, end_at, duration_secs, span_type, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                entry_id = excluded.entry_id,
+                span_order = excluded.span_order,
+                start_at = excluded.start_at,
+                end_at = excluded.end_at,
+                duration_secs = excluded.duration_secs,
+                span_type = excluded.span_type,
+                created_at = excluded.created_at"#,
             params![
                 span.id.to_string(),
                 span.entry_id.to_string(),
@@ -546,10 +567,21 @@ impl Database {
     // --- 会议 Meeting CRUD ---
     pub fn insert_meeting(&self, meeting: &Meeting) -> Result<()> {
         self.conn.execute(
-            r#"INSERT OR REPLACE INTO meetings (
+            r#"INSERT INTO meetings (
                 id, entry_id, project_id, topic, start_at, end_at, duration_secs,
                 status, meeting_summary, quick_notes, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ON CONFLICT(id) DO UPDATE SET
+                entry_id = excluded.entry_id,
+                project_id = excluded.project_id,
+                topic = excluded.topic,
+                start_at = excluded.start_at,
+                end_at = excluded.end_at,
+                duration_secs = excluded.duration_secs,
+                status = excluded.status,
+                meeting_summary = excluded.meeting_summary,
+                quick_notes = excluded.quick_notes,
+                created_at = excluded.created_at"#,
             params![
                 meeting.id.to_string(),
                 meeting.entry_id.to_string(),
@@ -673,9 +705,17 @@ impl Database {
     // --- 录音片段 MeetingAudioClip CRUD ---
     pub fn insert_audio_clip(&self, clip: &MeetingAudioClip) -> Result<()> {
         self.conn.execute(
-            r#"INSERT OR REPLACE INTO meeting_audio_clips (
+            r#"INSERT INTO meeting_audio_clips (
                 id, meeting_id, clip_order, audio_path, duration_secs, transcript, status, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                meeting_id = excluded.meeting_id,
+                clip_order = excluded.clip_order,
+                audio_path = excluded.audio_path,
+                duration_secs = excluded.duration_secs,
+                transcript = excluded.transcript,
+                status = excluded.status,
+                created_at = excluded.created_at"#,
             params![
                 clip.id.to_string(),
                 clip.meeting_id.to_string(),
@@ -974,5 +1014,58 @@ mod tests {
 
         let entries = db.list_entries_for_project(&project.id).unwrap();
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_meeting_and_clips_cascade_safety() {
+        let db = Database::open_in_memory().unwrap();
+
+        let project = Project::new("核心业务项目");
+        db.insert_project(&project).unwrap();
+
+        // 1. 创建每日工时主条目
+        let mut entry = TimeEntry {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            start_time: Utc::now(),
+            end_time: Utc::now(),
+            raw_duration_secs: 1800,
+            billable_hours: 0.5,
+            billable_days: 0.0625,
+            rate_at_moment: 350.0,
+            total_amount: 175.0,
+            summary: Some("初始会议中".to_string()),
+            audio_path: None,
+            is_invoiced: false,
+            created_at: Utc::now(),
+        };
+        db.insert_time_entry(&entry).unwrap();
+
+        // 2. 插入从属于该条目的会议
+        let mut meeting = Meeting::new(entry.id, project.id, "架构方案评审");
+        db.insert_meeting(&meeting).unwrap();
+
+        // 3. 插入从属于该会议的录音片段
+        let clip = MeetingAudioClip::new(meeting.id, 1, "/path/to/clip1.wav", 120);
+        db.insert_audio_clip(&clip).unwrap();
+
+        assert_eq!(db.list_meetings_for_entry(&entry.id).unwrap().len(), 1);
+        assert_eq!(db.list_audio_clips_for_meeting(&meeting.id).unwrap().len(), 1);
+
+        // 4. 更新 TimeEntry (模拟结束会议时写入提炼纪要，绝不能级联删除 Meeting 或 AudioClip)
+        entry.summary = Some("【会议纪要：架构方案评审】已完成评审并达成共识。".to_string());
+        db.insert_time_entry(&entry).unwrap();
+
+        // 验证 Meeting 完好保留！
+        let meetings = db.list_meetings_for_entry(&entry.id).unwrap();
+        assert_eq!(meetings.len(), 1, "Meeting 不应被 TimeEntry 的更新操作级联删除！");
+
+        // 5. 更新 Meeting (模拟状态变为 completed，绝不能级联删除 AudioClip)
+        meeting.status = "completed".to_string();
+        db.insert_meeting(&meeting).unwrap();
+
+        // 验证 AudioClip 完好保留！
+        let clips = db.list_audio_clips_for_meeting(&meeting.id).unwrap();
+        assert_eq!(clips.len(), 1, "AudioClip 不应被 Meeting 的更新操作级联删除！");
     }
 }

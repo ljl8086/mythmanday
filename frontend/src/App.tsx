@@ -485,8 +485,19 @@ export function App() {
       unlistenFn = unlisten;
     }).catch(console.error);
 
+    let unlistenClipFn: (() => void) | undefined;
+    listen<any>("meeting_clip_ready", () => {
+      refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+    }).then((unlisten) => {
+      unlistenClipFn = unlisten;
+    }).catch(console.error);
+
     return () => {
       if (unlistenFn) unlistenFn();
+      if (unlistenClipFn) unlistenClipFn();
     };
   }, [selectedProjectId, selectedMonth]);
 
