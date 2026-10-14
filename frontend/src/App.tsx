@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import * as XLSX from "xlsx-js-style";
 import { ModernDatePicker, ModernTimePicker } from "./DateTimePicker";
@@ -116,6 +117,7 @@ interface Entry {
   audio_path: string;
   raw_secs: number;
   is_invoiced: boolean;
+  status?: "normal" | "recording" | "summarizing" | string;
 }
 
 interface DayGroup {
@@ -439,9 +441,30 @@ export function App() {
   }, [selectedProjectId, selectedMonth]);
 
   useEffect(() => {
-    if (selectedProjectId) {
-      refreshProjectDetails(selectedProjectId, selectedMonth);
-    }
+    let unlistenFn: (() => void) | undefined;
+    listen<any>("meeting_summary_ready", (event) => {
+      const data = event.payload;
+      showToast(`🎉 会议【${data.topic}】AI 纪要已提炼就绪！已更新落盘。`);
+      refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+      // 自动弹出纪要确认/编辑弹窗，让用户第一时间查看和微调
+      setMeetingSummaryData({
+        project_id: data.project_id,
+        topic: data.topic,
+        audio_path: data.audio_path,
+        summary: data.summary,
+        transcript: data.transcript,
+      });
+      setShowMeetingSummaryModal(true);
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    }).catch(console.error);
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
   }, [selectedProjectId, selectedMonth]);
 
   const handlePrevMonth = () => {
@@ -652,23 +675,18 @@ export function App() {
     }
   };
 
-  // 结束会议录音 (项目通道继续运行，由 AI 提炼会议纪要)
+  // 结束会议录音 (项目通道继续运行，录音秒级封包落盘，AI 后台异步提炼纪要)
   const handleStopMeeting = async () => {
     setIsStoppingMeeting(true);
-    showToast("⏹ 正在停止录音并由 AI 智能提炼会议纪要 (音频转码中)...");
+    showToast("⏹ 正在停止录音并封包归档...");
     try {
       const res = await invoke<StopMeetingResult>("stop_current_meeting");
       if (res && res.success) {
-        setMeetingSummaryData({
-          project_id: res.project_id,
-          topic: res.topic,
-          audio_path: res.audio_path,
-          summary: res.summary,
-          transcript: res.transcript,
-        });
-        setShowMeetingSummaryModal(true);
         showToast("🎉 " + res.message);
         refreshData();
+        if (selectedProjectId) {
+          refreshProjectDetails(selectedProjectId, selectedMonth);
+        }
       }
     } catch (e: any) {
       showToast("结束会议录音失败: " + e.toString());
@@ -2004,10 +2022,20 @@ export function App() {
 
                             {/* 当日明细项列表 */}
                             <div className="space-y-2.5">
-                              {group.entries.map((entry) => (
+                              {group.entries.map((entry) => {
+                                const isLiveRecording = entry.status === "recording";
+                                const isSummarizing = entry.status === "summarizing";
+
+                                return (
                                 <div
                                   key={entry.id}
-                                  className="p-3.5 rounded-lg bg-slate-50/70 border border-slate-200/60 shadow-2xs space-y-2 hover:bg-slate-50/90 transition-all"
+                                  className={`p-3.5 rounded-lg border shadow-2xs space-y-2 transition-all ${
+                                    isLiveRecording
+                                      ? "bg-rose-50/70 border-rose-200/80 ring-1 ring-rose-300/60"
+                                      : isSummarizing
+                                      ? "bg-amber-50/70 border-amber-200/80 ring-1 ring-amber-300/60"
+                                      : "bg-slate-50/70 border-slate-200/60 hover:bg-slate-50/90"
+                                  }`}
                                 >
                                   <div className="flex items-center justify-between text-xs">
                                     <div className="flex items-center gap-3 text-slate-600">
@@ -2022,28 +2050,46 @@ export function App() {
                                       )}
                                     </div>
 
-                                    {/* 结算状态标签 (可点击直接切换) */}
-                                    <button
-                                      onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
-                                      title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
-                                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border transition-all active:scale-95 ${
-                                        entry.is_invoiced
-                                          ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
-                                          : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
-                                      }`}
-                                    >
-                                      {entry.is_invoiced ? (
-                                        <>
-                                          <CheckCheck className="w-3 h-3 text-emerald-600" />
-                                          已结算
-                                        </>
-                                      ) : (
-                                        <>
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                          待结算
-                                        </>
+                                    {/* 状态与结算徽章区 */}
+                                    <div className="flex items-center gap-2">
+                                      {isLiveRecording && (
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-300">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                                          <span>会议录音中</span>
+                                        </div>
                                       )}
-                                    </button>
+                                      {isSummarizing && (
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                          <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
+                                          <span>AI提炼中</span>
+                                        </div>
+                                      )}
+
+                                      {/* 结算状态标签 (可点击直接切换) */}
+                                      {!isLiveRecording && (
+                                        <button
+                                          onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
+                                          title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
+                                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border transition-all active:scale-95 ${
+                                            entry.is_invoiced
+                                              ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                                              : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
+                                          }`}
+                                        >
+                                          {entry.is_invoiced ? (
+                                            <>
+                                              <CheckCheck className="w-3 h-3 text-emerald-600" />
+                                              已结算
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                              待结算
+                                            </>
+                                          )}
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
 
                                   {(() => {
@@ -2087,6 +2133,17 @@ export function App() {
                                         {/* 操作按钮区 */}
                                         <div className="flex items-center justify-between pt-1">
                                           <div className="flex items-center gap-2">
+                                            {isLiveRecording && (
+                                              <button
+                                                onClick={handleStopMeeting}
+                                                disabled={isStoppingMeeting}
+                                                className="h-6.5 px-2.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                                title="立即结束本次会议并保存录音"
+                                              >
+                                                <Square className="w-3 h-3 fill-current" />
+                                                结束会议并提炼纪要
+                                              </button>
+                                            )}
                                             {entry.has_audio && (
                                               <button
                                                 onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
@@ -2110,7 +2167,7 @@ export function App() {
                                                 查看转写实录 ({rawTranscript.length}字)
                                               </button>
                                             )}
-                                            {entry.has_audio && (
+                                            {entry.has_audio && !isLiveRecording && (
                                               <button
                                                 onClick={() => handleTranscribe(entry)}
                                                 className="h-6.5 px-2.5 rounded bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
@@ -2123,46 +2180,50 @@ export function App() {
                                           </div>
 
                                           <div className="flex items-center gap-2">
-                                            <button
-                                              onClick={() => {
-                                                navigator.clipboard.writeText(displaySummary);
-                                                showToast("📋 会议纪要已复制到剪贴板！可直接发送给 AI 智能体");
-                                              }}
-                                              className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                              title="一键复制精炼会议纪要，方便丢给 Agent 进行开发拆解"
-                                            >
-                                              <Copy className="w-3 h-3 text-slate-500" />
-                                              复制纪要
-                                            </button>
-                                            <button
-                                              onClick={() => setActiveEditSummaryModal({
-                                                entry_id: entry.id,
-                                                title: `📅 ${entry.date_str} 会议纪要与交付说明`,
-                                                project_name: entry.project_name || activeProject?.name || "项目交付",
-                                                date_str: entry.date_str,
-                                                summary: displaySummary,
-                                                raw_transcript: rawTranscript,
-                                              })}
-                                              className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                              title="修改与微调 AI 提取的要点，保存后交付 Agent 实施开发"
-                                            >
-                                              <Edit3 className="w-3 h-3 text-indigo-600" />
-                                              编辑纪要
-                                            </button>
-                                            <button
-                                              disabled={isExportingPdf}
-                                              onClick={() => handleExportPdf({
-                                                title: `【${entry.project_name || activeProject?.name || "项目"}】会议纪要与技术决议`,
-                                                projectName: entry.project_name || activeProject?.name || "技术项目",
-                                                dateStr: entry.date_str,
-                                                summaryContent: displaySummary,
-                                              })}
-                                              className="h-6.5 px-2.5 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                                              title="导出为精美商务 PDF 文档，可直接交付客户确认"
-                                            >
-                                              <FileDown className="w-3 h-3 text-emerald-600" />
-                                              导出PDF
-                                            </button>
+                                            {!isLiveRecording && (
+                                              <>
+                                                <button
+                                                  onClick={() => {
+                                                    navigator.clipboard.writeText(displaySummary);
+                                                    showToast("📋 会议纪要已复制到剪贴板！可直接发送给 AI 智能体");
+                                                  }}
+                                                  className="h-6.5 px-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                                  title="一键复制精炼会议纪要，方便丢给 Agent 进行开发拆解"
+                                                >
+                                                  <Copy className="w-3 h-3 text-slate-500" />
+                                                  复制纪要
+                                                </button>
+                                                <button
+                                                  onClick={() => setActiveEditSummaryModal({
+                                                    entry_id: entry.id,
+                                                    title: `📅 ${entry.date_str} 会议纪要与交付说明`,
+                                                    project_name: entry.project_name || activeProject?.name || "项目交付",
+                                                    date_str: entry.date_str,
+                                                    summary: displaySummary,
+                                                    raw_transcript: rawTranscript,
+                                                  })}
+                                                  className="h-6.5 px-2.5 rounded bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                                  title="修改与微调 AI 提取的要点，保存后交付 Agent 实施开发"
+                                                >
+                                                  <Edit3 className="w-3 h-3 text-indigo-600" />
+                                                  编辑纪要
+                                                </button>
+                                                <button
+                                                  disabled={isExportingPdf}
+                                                  onClick={() => handleExportPdf({
+                                                    title: `【${entry.project_name || activeProject?.name || "项目"}】会议纪要与技术决议`,
+                                                    projectName: entry.project_name || activeProject?.name || "技术项目",
+                                                    dateStr: entry.date_str,
+                                                    summaryContent: displaySummary,
+                                                  })}
+                                                  className="h-6.5 px-2.5 rounded bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                                                  title="导出为精美商务 PDF 文档，可直接交付客户确认"
+                                                >
+                                                  <FileDown className="w-3 h-3 text-emerald-600" />
+                                                  导出PDF
+                                                </button>
+                                              </>
+                                            )}
                                             <button
                                               onClick={() => {
                                                 setSelectedEntry(entry);
@@ -2179,7 +2240,8 @@ export function App() {
                                     );
                                   })()}
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         ))
