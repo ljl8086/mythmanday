@@ -67,4 +67,40 @@ CREATE TABLE IF NOT EXISTS active_timers (
     is_paused INTEGER NOT NULL DEFAULT 0,
     last_heartbeat TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS work_spans (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES time_entries(id) ON DELETE CASCADE,
+    span_order INTEGER NOT NULL DEFAULT 1,
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    duration_secs INTEGER NOT NULL,
+    span_type TEXT NOT NULL DEFAULT 'timer',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meetings (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES time_entries(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT,
+    duration_secs INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'in_progress',
+    meeting_summary TEXT,
+    quick_notes TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meeting_audio_clips (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    clip_order INTEGER NOT NULL DEFAULT 1,
+    audio_path TEXT NOT NULL,
+    duration_secs INTEGER NOT NULL DEFAULT 0,
+    transcript TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL
+);
 "#;

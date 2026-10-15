@@ -20,6 +20,45 @@ pub enum AiError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsrConfig {
+    #[serde(default = "default_asr_mode")]
+    pub mode: String, // "local" | "cloud" | "agent"
+    #[serde(default)]
+    pub api_base: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub local_model: Option<String>,
+    #[serde(default)]
+    pub local_bin_path: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+fn default_asr_mode() -> String {
+    "local".to_string()
+}
+
+impl Default for AsrConfig {
+    fn default() -> Self {
+        Self {
+            mode: "local".to_string(),
+            api_base: None,
+            api_key: None,
+            model: Some("whisper-1".to_string()),
+            local_model: Some("ggml-base.bin".to_string()),
+            local_bin_path: None,
+            language: Some("zh".to_string()),
+            prompt: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
     pub provider: String,
     pub api_base: String,
@@ -27,6 +66,8 @@ pub struct AiConfig {
     pub model: String,
     #[serde(default)]
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub asr: AsrConfig,
 }
 
 impl Default for AiConfig {
@@ -45,6 +86,7 @@ impl Default for AiConfig {
             model: std::env::var("OPENAI_MODEL")
                 .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
             proxy: std::env::var("HTTP_PROXY").or_else(|_| std::env::var("HTTPS_PROXY")).or_else(|_| std::env::var("ALL_PROXY")).ok(),
+            asr: AsrConfig::default(),
         }
     }
 }
@@ -165,15 +207,33 @@ fn find_binary(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
-fn find_whisper_binary() -> Option<std::path::PathBuf> {
-    let candidates = ["whisper", "whisper-cli", "whisper-cpp", "main"];
-    for name in &candidates {
-        if let Ok(home) = std::env::var("HOME") {
-            let p = std::path::PathBuf::from(&home).join(".local").join("bin").join(name);
+pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathBuf> {
+    if let Some(cp) = custom_path {
+        let p = std::path::PathBuf::from(cp);
+        if p.exists() && p.is_file() {
+            return Some(p);
+        }
+    }
+    let candidates = ["whisper-cli", "whisper", "whisper-cpp", "main"];
+    if let Ok(home) = std::env::var("HOME") {
+        let home_p = std::path::Path::new(&home);
+        // 优先应用配置内置目录 ~/.config/mythmanday/bin/
+        for name in &candidates {
+            let p = home_p.join(".config").join("mythmanday").join("bin").join(name);
             if p.exists() {
                 return Some(p);
             }
         }
+        // 其次 ~/.local/bin/
+        for name in &candidates {
+            let p = home_p.join(".local").join("bin").join(name);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    // 最后检测系统 PATH
+    for name in &candidates {
         if let Ok(out) = std::process::Command::new("which").arg(name).output() {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -183,6 +243,49 @@ fn find_whisper_binary() -> Option<std::path::PathBuf> {
             }
         }
     }
+    None
+}
+
+pub fn find_whisper_model(custom_model: Option<&str>) -> Option<std::path::PathBuf> {
+    let mut search_dirs = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        search_dirs.push(std::path::PathBuf::from(&home).join(".config").join("mythmanday").join("models"));
+        search_dirs.push(std::path::PathBuf::from(&home).join(".local").join("share").join("mythmanday").join("models"));
+    }
+    search_dirs.push(std::path::PathBuf::from("./models"));
+
+    if let Some(cm) = custom_model {
+        let p = std::path::PathBuf::from(cm);
+        if p.is_absolute() && p.exists() {
+            return Some(p);
+        }
+        for dir in &search_dirs {
+            let candidate = dir.join(cm);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // 默认优先级查找模型
+    let default_models = ["ggml-base.bin", "ggml-tiny.bin", "ggml-small.bin", "ggml-medium.bin", "ggml-large-v3.bin"];
+    for dir in &search_dirs {
+        for m in &default_models {
+            let p = dir.join(m);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -540,7 +643,7 @@ impl AiSummarizer {
             .map_err(|e| AiError::ParseError(format!("解析批量智能总结 JSON 数组失败: {} (raw: {})", e, json_str)))
     }
 
-    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼商业级会议纪要
+    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼真实客观的会议纪要
     pub async fn summarize_meeting(
         &self,
         meeting_topic: &str,
@@ -558,10 +661,13 @@ impl AiSummarizer {
             prompt_content.push_str(&format!("【音频留存凭证】：{}\n\n", audio_info));
         }
 
-        if let Some(transcript) = audio_transcript {
-            if !transcript.trim().is_empty() {
-                prompt_content.push_str(&format!("【会议录音全量转写文稿】：\n{}\n\n", transcript));
-            }
+        let clean_transcript = audio_transcript
+            .map(|t| clean_repetitive_text(t))
+            .unwrap_or_default();
+
+        let has_transcript = !clean_transcript.trim().is_empty();
+        if has_transcript {
+            prompt_content.push_str(&format!("【现场录音文字转写】：\n{}\n\n", clean_transcript.trim()));
         }
 
         if !notes.is_empty() {
@@ -572,66 +678,34 @@ impl AiSummarizer {
             prompt_content.push('\n');
         }
 
-        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、内容详实、格局高远的商业交付级会议纪要。\n要求：\n1. 结构严格采用分层条目式：\n   一、【核心议题与沟通背景】（提炼本次会议讨论的核心背景与功能诉求）\n   二、【达成共识与技术决议】（条目式列出每一条落地的业务/技术架构决议，如菜单设计、表单归属、线下签字闭环、数据隔离等）\n   三、【后续推进与工程待办】（条目式列出具体待办事项）\n2. 内容要充分依据录音中讨论的实际细节进行真实提炼，严禁泛泛而谈或空话套话；\n3. 语言干练严谨、体现高维价值，适合直接呈报给客户或团队作为工时与技术交付凭据。";
+        if !has_transcript && notes.is_empty() {
+            return Ok(format!(
+                "【会议纪要：{}】\n本次会议时长 {:.2} 小时。未检测到录音转写文稿或速记要点，建议相关人员手动补充会议结论与待办事项。",
+                meeting_topic, duration_hours
+            ));
+        }
+
+        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、真实严谨的会议纪要。\n\
+        严格遵循以下原则：\n\
+        1. 真实客观第一原则：必须完全且仅基于实际会议讨论内容与录音文稿进行提炼，严禁凭空捏造、臆想或补充未在讨论中出现的任何业务功能、架构决议或流程！\n\
+        2. 若录音文稿较为零散、主要为口语闲聊或缺乏实质技术细节，请实事求是地归纳讨论触及的初步议题，并明确标注“待进一步明确”，严禁编造看似专业的虚假技术决议或虚假表格！\n\
+        3. 结构采用条目式：\n\
+           一、【核心议题与沟通背景】（真实归纳会议讨论的核心事项）\n\
+           二、【达成共识与讨论要点】（仅列出会议中实际达成一致或明确提到的要点）\n\
+           三、【后续推进与待办事项】（仅列出会议中实际明确的分工与下一步计划，若未提及则如实写“待后续对齐”）";
 
         self.execute_completion(system_prompt, &prompt_content).await
     }
 
-    /// 语音转文字处理（支持本地 Whisper CLI / agy CLI / codex CLI / 兼容 HTTP Whisper 接口）
-    pub async fn transcribe_audio(&self, input_path: &std::path::Path) -> Result<String, AiError> {
-        if !input_path.exists() {
-            return Err(AiError::ParseError(format!("音频文件不存在: {}", input_path.display())));
-        }
-
-        // 优先尝试将可能达到数百兆的 WAV 文件利用本地 ffmpeg 压缩转码为小体积 MP3 (通常缩减 95% 以上)
-        let actual_audio_path = if input_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
-            let path_buf = input_path.to_path_buf();
-            let converted = tokio::task::spawn_blocking(move || {
-                myth_audio::convert_wav_to_mp3(&path_buf)
-            }).await;
-            match converted {
-                Ok(Ok(mp3_p)) => mp3_p,
-                _ => input_path.to_path_buf(),
-            }
-        } else {
-            input_path.to_path_buf()
-        };
-
-        // 1. 如果本地系统安装了 whisper 命令行工具，优先尝试执行本地 whisper 提取
-        if let Some(whisper_bin) = find_whisper_binary() {
-            let audio_str = actual_audio_path.to_string_lossy().to_string();
-            let parent_dir = actual_audio_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_string_lossy()
-                .to_string();
-            let res = tokio::task::spawn_blocking(move || {
-                std::process::Command::new(&whisper_bin)
-                    .arg(&audio_str)
-                    .arg("--output_format")
-                    .arg("txt")
-                    .arg("--output_dir")
-                    .arg(&parent_dir)
-                    .output()
-            })
-            .await;
-            if let Ok(Ok(out)) = res {
-                if out.status.success() {
-                    let txt_path = actual_audio_path.with_extension("txt");
-                    if let Ok(text) = std::fs::read_to_string(&txt_path) {
-                        if !text.trim().is_empty() {
-                            return Ok(text.trim().to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        let provider = self.config.provider.trim().to_lowercase();
-        let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
-        // 2. 如果使用本地 AI 引擎 (agy)，agy 原生具备多模态音频理解与语音转文字能力
+    /// 语音转文字辅助函数：调用本地 CLI 智能体 (agy / codex)
+    async fn transcribe_with_cli_agent(
+        &self,
+        actual_audio_path: &std::path::Path,
+        provider: &str,
+        proxy_opt: Option<String>,
+    ) -> Result<String, AiError> {
+        let audio_str = actual_audio_path.to_string_lossy().to_string();
         if provider == "agy" {
-            let audio_str = actual_audio_path.to_string_lossy().to_string();
             let bin = find_binary("agy");
             let prompt = format!(
                 "请直接读取并聆听该本地音频文件：{}\n请直接转写该录音中说话人讲出的所有真实文字内容。要求：只输出转写后的纯中文/对话文字正文，不要输出任何解释说明、格式前缀或客套话。",
@@ -664,8 +738,7 @@ impl AiSummarizer {
                 return Err(AiError::ParseError("agy 音频识别结果为空".into()));
             }
             return Ok(res);
-        } else if provider == "codex" {
-            let audio_str = actual_audio_path.to_string_lossy().to_string();
+        } else {
             let bin = find_binary("codex");
             let prompt = format!(
                 "请直接读取并聆听该本地音频文件：{}\n请直接转写该录音中的说话人实际语音内容，只输出文字文本：",
@@ -696,8 +769,119 @@ impl AiSummarizer {
             let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
             return Ok(res);
         }
+    }
 
-        // 3. 走云端兼容 Whisper 标准的 HTTP API (/audio/transcriptions)
+    /// 语音转文字处理（支持模块化多模路由：本地 whisper.cpp 极速推理 / 云端标准 Whisper API / CLI 智能体）
+    pub async fn transcribe_audio(&self, input_path: &std::path::Path) -> Result<String, AiError> {
+        if !input_path.exists() {
+            return Err(AiError::ParseError(format!("音频文件不存在: {}", input_path.display())));
+        }
+
+        // 优先尝试将可能达到数百兆的 WAV 文件利用本地 ffmpeg 压缩转码为小体积 MP3 (通常缩减 95% 以上)
+        let actual_audio_path = if input_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
+            let path_buf = input_path.to_path_buf();
+            let converted = tokio::task::spawn_blocking(move || {
+                myth_audio::convert_wav_to_mp3(&path_buf)
+            }).await;
+            match converted {
+                Ok(Ok(mp3_p)) => mp3_p,
+                _ => input_path.to_path_buf(),
+            }
+        } else {
+            input_path.to_path_buf()
+        };
+
+        let mode = self.config.asr.mode.trim().to_lowercase();
+
+        // 1. 本地 whisper.cpp 极速推理模式 (默认优先)
+        if mode == "local" || (mode.is_empty() && find_whisper_binary(self.config.asr.local_bin_path.as_deref()).is_some() && find_whisper_model(self.config.asr.local_model.as_deref()).is_some()) {
+            let whisper_bin = find_whisper_binary(self.config.asr.local_bin_path.as_deref());
+            let whisper_model = find_whisper_model(self.config.asr.local_model.as_deref());
+
+            match (whisper_bin, whisper_model) {
+                (Some(bin), Some(model)) => {
+                    let audio_str = actual_audio_path.to_string_lossy().to_string();
+                    let model_str = model.to_string_lossy().to_string();
+                    let bin_str = bin.to_string_lossy().to_string();
+                    let lang = self.config.asr.language.as_deref().unwrap_or("zh").to_string();
+                    let prompt_opt = self.config.asr.prompt.clone();
+
+                    let res = tokio::task::spawn_blocking(move || {
+                        let mut cmd = std::process::Command::new(&bin_str);
+                        cmd.arg("-m").arg(&model_str)
+                           .arg("-f").arg(&audio_str)
+                           .arg("-l").arg(&lang)
+                           .arg("-nt")
+                           .arg("--no-prints")
+                           .arg("-t").arg("4")
+                           .arg("-sns")
+                           .arg("-et").arg("2.4")
+                           .arg("-nth").arg("0.6")
+                           .arg("-nf")
+                           .arg("-mc").arg("64");
+                        if let Some(ref p) = prompt_opt {
+                            if !p.trim().is_empty() {
+                                cmd.arg("--prompt").arg(p.trim());
+                            }
+                        }
+                        cmd.output()
+                    }).await;
+
+                    if let Ok(Ok(out)) = res {
+                        if out.status.success() {
+                            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            let cleaned = clean_repetitive_text(&text);
+                            if !cleaned.is_empty() {
+                                return Ok(cleaned);
+                            }
+                        } else {
+                            let err = String::from_utf8_lossy(&out.stderr);
+                            if mode == "local" {
+                                return Err(AiError::ParseError(format!("本地 whisper-cli 执行失败: {}", err)));
+                            }
+                        }
+                    }
+                }
+                (None, _) if mode == "local" => {
+                    return Err(AiError::ParseError("未检测到本地 whisper-cli 运行时程序。请在【系统设置 -> 录音转写引擎】中查看或切换为云端API。".into()));
+                }
+                (_, None) if mode == "local" => {
+                    return Err(AiError::ParseError("未检测到本地 Whisper 模型文件（如 ggml-base.bin）。请在【系统设置 -> 录音转写引擎】中一键下载推荐模型或切换为云端API。".into()));
+                }
+                _ => {}
+            }
+        }
+
+        // 2. 智能体模式 (agy / codex CLI)
+        if mode == "agent" {
+            let provider = self.config.provider.trim().to_lowercase();
+            let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
+            let res = self.transcribe_with_cli_agent(&actual_audio_path, &provider, proxy_opt).await?;
+            return Ok(clean_repetitive_text(&res));
+        }
+
+        // 3. 云端兼容 Whisper 标准的 HTTP API (/audio/transcriptions)
+        let asr_api_base = self.config.asr.api_base.as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| self.config.api_base.clone());
+
+        let asr_api_key = self.config.asr.api_key.as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                if self.config.api_key.trim().is_empty() {
+                    std::env::var("OPENAI_API_KEY").unwrap_or_default()
+                } else {
+                    self.config.api_key.clone()
+                }
+            });
+
+        let asr_model = self.config.asr.model.as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| "whisper-1".to_string());
+
         let file_bytes = tokio::fs::read(&actual_audio_path)
             .await
             .map_err(|e| AiError::ParseError(e.to_string()))?;
@@ -718,22 +902,23 @@ impl AiSummarizer {
             .mime_str(mime)
             .map_err(|e| AiError::ParseError(e.to_string()))?;
 
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .part("file", part)
-            .text("model", "whisper-1")
+            .text("model", asr_model)
             .text("response_format", "text");
 
-        let api_key = if self.config.api_key.trim().is_empty() {
-            std::env::var("OPENAI_API_KEY").unwrap_or_default()
-        } else {
-            self.config.api_key.clone()
-        };
-        let url = format!("{}/audio/transcriptions", self.config.api_base.trim_end_matches('/'));
+        if let Some(ref lang) = self.config.asr.language {
+            if !lang.trim().is_empty() && lang != "auto" {
+                form = form.text("language", lang.clone());
+            }
+        }
+
+        let url = format!("{}/audio/transcriptions", asr_api_base.trim_end_matches('/'));
 
         let resp = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {}", asr_api_key))
             .multipart(form)
             .send()
             .await?;
@@ -741,12 +926,266 @@ impl AiSummarizer {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let err_text = resp.text().await.unwrap_or_default();
-            return Err(AiError::ApiError(status, err_text));
+            return Err(AiError::ApiError(status, format!("云端 ASR 转写接口异常 ({url}): {err_text}")));
         }
 
         let text = resp.text().await.map_err(AiError::Reqwest)?;
-        Ok(text.trim().to_string())
+        Ok(clean_repetitive_text(&text))
     }
+}
+
+/// 对语音识别 (Whisper 等) 可能产生的恶性循环重复短语、静音幻觉文本进行清理与去重折叠
+pub fn clean_repetitive_text(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // 1. 过滤常见的静音低信噪比固定幻觉短语及循环复读词
+    let filter_hallucinations = [
+        "( 字幕:J Chong )",
+        "字幕:J Chong",
+        "请不吝赐教",
+        "感谢观看",
+        "谢谢大家观看",
+        "谢谢收看",
+        "优酷网",
+        "YouTube",
+        "点赞关注",
+    ];
+    let mut text = trimmed.to_string();
+    for h in filter_hallucinations {
+        text = text.replace(h, "");
+    }
+
+    // 过滤 Whisper 中文死循环幻觉（如“你不认识我吗”循环）
+    let loop_patterns = ["你不认识我吗", "我认识我吗", "你不认识我", "不认识我吗", "认识我吗"];
+    for lp in loop_patterns {
+        if text.matches(lp).count() >= 2 {
+            text = text.replace(lp, "");
+        }
+    }
+
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n < 4 {
+        return text.to_string();
+    }
+
+    // 2. 连续重复子串折叠（支持短语长度从 30 字符到 1 字符）
+    // 若某个长度为 L 的子串连续重复 >= 3 次，将其折叠为最多 1~2 次
+    let mut result_chars: Vec<char> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        let mut matched = false;
+        let max_plen = 30.min((n - i) / 3);
+        for plen in (1..=max_plen).rev() {
+            let pattern = &chars[i..i + plen];
+            if pattern.iter().all(|c| c.is_whitespace()) {
+                continue;
+            }
+            let mut repeat_count = 1;
+            while i + (repeat_count + 1) * plen <= n 
+                && &chars[i + repeat_count * plen..i + (repeat_count + 1) * plen] == pattern 
+            {
+                repeat_count += 1;
+            }
+
+            if repeat_count >= 3 {
+                let keep_count = if plen <= 2 { 2 } else { 1 };
+                for _ in 0..keep_count {
+                    result_chars.extend_from_slice(pattern);
+                }
+                i += repeat_count * plen;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            result_chars.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    let cleaned: String = result_chars.into_iter().collect();
+    cleaned.trim().to_string()
+}
+
+use futures_util::StreamExt;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperModelInfo {
+    pub name: String,
+    pub path: String,
+    pub size_mb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvailableModelInfo {
+    pub name: String,
+    pub size_label: String,
+    pub desc: String,
+    pub is_downloaded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsrRuntimeStatus {
+    pub whisper_bin_installed: bool,
+    pub whisper_bin_path: Option<String>,
+    pub installed_models: Vec<WhisperModelInfo>,
+    pub available_models: Vec<AvailableModelInfo>,
+    pub active_mode: String,
+    pub active_model: String,
+}
+
+pub fn get_whisper_models_dir() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home).join(".config").join("mythmanday").join("models")
+    } else {
+        std::path::PathBuf::from("./models")
+    }
+}
+
+pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
+    let bin_path = find_whisper_binary(cfg.asr.local_bin_path.as_deref());
+    let models_dir = get_whisper_models_dir();
+    let mut installed = Vec::new();
+
+    if models_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&models_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("bin") {
+                    let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let size_mb = (file_size as f64) / (1024.0 * 1024.0);
+                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    installed.push(WhisperModelInfo {
+                        name,
+                        path: p.to_string_lossy().to_string(),
+                        size_mb: (size_mb * 10.0).round() / 10.0,
+                    });
+                }
+            }
+        }
+    }
+
+    let installed_names: std::collections::HashSet<String> = installed.iter().map(|m| m.name.clone()).collect();
+
+    let preset_models = vec![
+        ("ggml-tiny.bin", "75 MB", "极速轻量，内存开销极小，适合简单对话"),
+        ("ggml-base.bin", "141 MB", "均衡推荐 (官方推荐)，中文识别精准稳定"),
+        ("ggml-small.bin", "466 MB", "高精细度，适合专业术语多、发音嘈杂的场景"),
+    ];
+
+    let available = preset_models.into_iter().map(|(name, size, desc)| {
+        AvailableModelInfo {
+            name: name.to_string(),
+            size_label: size.to_string(),
+            desc: desc.to_string(),
+            is_downloaded: installed_names.contains(name),
+        }
+    }).collect();
+
+    AsrRuntimeStatus {
+        whisper_bin_installed: bin_path.is_some(),
+        whisper_bin_path: bin_path.map(|p| p.to_string_lossy().to_string()),
+        installed_models: installed,
+        available_models: available,
+        active_mode: cfg.asr.mode.clone(),
+        active_model: cfg.asr.local_model.clone().unwrap_or_else(|| "ggml-base.bin".to_string()),
+    }
+}
+
+pub async fn download_whisper_model_file<F>(
+    model_name: &str,
+    proxy: Option<&str>,
+    mut on_progress: F,
+) -> Result<std::path::PathBuf, String>
+where
+    F: FnMut(f64, u64, u64) + Send + 'static,
+{
+    let target_dir = get_whisper_models_dir();
+    tokio::fs::create_dir_all(&target_dir).await.map_err(|e| e.to_string())?;
+    let target_path = target_dir.join(model_name);
+
+    let urls = [
+        format!("https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/{}", model_name),
+        format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_name),
+    ];
+
+    let mut client_builder = reqwest::Client::builder();
+    if let Some(p) = proxy {
+        if !p.trim().is_empty() {
+            if let Ok(proxy_obj) = reqwest::Proxy::all(p.trim()) {
+                client_builder = client_builder.proxy(proxy_obj);
+            }
+        }
+    }
+    let client = client_builder.build().map_err(|e| e.to_string())?;
+
+    let mut last_err = String::new();
+    for url in &urls {
+        match client.get(url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let total_bytes = resp.content_length().unwrap_or(0);
+                let mut downloaded: u64 = 0;
+                let mut stream = resp.bytes_stream();
+                let tmp_path = target_dir.join(format!("{}.tmp", model_name));
+                let mut file = match tokio::fs::File::create(&tmp_path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        last_err = e.to_string();
+                        continue;
+                    }
+                };
+                use tokio::io::AsyncWriteExt;
+
+                let mut ok = true;
+                while let Some(chunk_res) = stream.next().await {
+                    match chunk_res {
+                        Ok(chunk) => {
+                            if let Err(e) = file.write_all(&chunk).await {
+                                last_err = e.to_string();
+                                ok = false;
+                                break;
+                            }
+                            downloaded += chunk.len() as u64;
+                            let pct = if total_bytes > 0 {
+                                (downloaded as f64 / total_bytes as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+                            on_progress(pct, downloaded, total_bytes);
+                        }
+                        Err(e) => {
+                            last_err = e.to_string();
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    let _ = file.flush().await;
+                    drop(file);
+                    tokio::fs::rename(&tmp_path, &target_path).await.map_err(|e| e.to_string())?;
+                    return Ok(target_path);
+                }
+            }
+            Ok(resp) => {
+                last_err = format!("HTTP 状态码: {}", resp.status());
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+    }
+
+    Err(format!("下载模型失败: {}", last_err))
 }
 
 #[cfg(test)]
@@ -798,6 +1237,30 @@ mod tests {
         assert_eq!(report.category, WorkCategory::FeatureDevelopment);
         assert_eq!(report.deliverables.len(), 2);
         assert!(report.executive_summary.contains("OpenAI structured deliverable"));
+    }
+
+    #[test]
+    fn test_asr_config_defaults() {
+        let cfg = AiConfig::default();
+        assert_eq!(cfg.asr.mode, "local");
+        assert_eq!(cfg.asr.model, Some("whisper-1".to_string()));
+        assert_eq!(cfg.asr.local_model, Some("ggml-base.bin".to_string()));
+        assert_eq!(cfg.asr.language, Some("zh".to_string()));
+    }
+
+    #[test]
+    fn test_find_whisper_helpers() {
+        let _ = find_whisper_binary(None);
+        let _ = find_whisper_model(None);
+    }
+
+    #[test]
+    fn test_clean_repetitive_text() {
+        let input = "喂大家上午好对你你你你你你你你你你不认识我吗你不认识我吗你不认识我吗你不认识我吗( 字幕:J Chong )";
+        let cleaned = clean_repetitive_text(input);
+        assert!(cleaned.starts_with("喂大家上午好对你你你不认识我吗") || cleaned.contains("喂大家上午好"));
+        assert!(!cleaned.contains("( 字幕:J Chong )"));
+        assert!(!cleaned.contains("你不认识我吗你不认识我吗你不认识我吗"));
     }
 }
 
