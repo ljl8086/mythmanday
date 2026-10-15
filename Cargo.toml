@@ -6,7 +6,6 @@ members = [
     "crates/myth-git",
     "crates/myth-ai",
     "crates/myth-audio",
-    "crates/myth-desktop",
     "crates/myth-app",
 ]
 
