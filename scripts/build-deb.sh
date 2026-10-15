@@ -8,7 +8,7 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_NAME="mythmanday-app"
 PACKAGE_NAME="mythmanday"
-VERSION="0.1.0"
+VERSION="${APP_VERSION:-$(grep -m1 '^version =' "${PROJECT_DIR}/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')}"
 ARCH="amd64"
 
 BUILD_DIR="${PROJECT_DIR}/target/deb-build"

@@ -4031,7 +4031,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "myth-ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "futures-util",
@@ -4049,7 +4049,7 @@ dependencies = [
 
 [[package]]
 name = "myth-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "cpal",
@@ -4061,7 +4061,7 @@ dependencies = [
 
 [[package]]
 name = "myth-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -4074,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "myth-db"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "myth-core",
@@ -4087,7 +4087,7 @@ dependencies = [
 
 [[package]]
 name = "myth-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "chrono",
@@ -4108,7 +4108,7 @@ dependencies = [
 
 [[package]]
 name = "myth-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -4118,7 +4118,7 @@ dependencies = [
 
 [[package]]
 name = "mythmanday-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dirs",
