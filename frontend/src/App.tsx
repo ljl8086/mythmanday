@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import * as XLSX from "xlsx-js-style";
 import { ModernDatePicker, ModernTimePicker } from "./DateTimePicker";
 import {
@@ -642,9 +643,10 @@ export function App() {
   const renderMarkdown = (content: string) => {
     if (!content) return "";
     try {
-      return marked.parse(content, { breaks: true, gfm: true }) as string;
+      const rawHtml = marked.parse(content, { breaks: true, gfm: true }) as string;
+      return DOMPurify.sanitize(rawHtml);
     } catch {
-      return content;
+      return DOMPurify.sanitize(content);
     }
   };
 
@@ -708,14 +710,38 @@ export function App() {
   useEffect(() => {
     refreshData();
     loadSettings();
-    const interval = setInterval(() => {
-      refreshData();
-      if (selectedProjectId) {
-        refreshProjectDetails(selectedProjectId, selectedMonth);
+    if (selectedProjectId) {
+      refreshProjectDetails(selectedProjectId, selectedMonth);
+    }
+  }, [selectedProjectId, selectedMonth]);
+
+  // 高性能解耦轮询：消除无差别的每秒全量 IPC 与 SQLite 全表扫描
+  // 1) 仅当有项目运行计时时，每秒仅轻量获取项目计时器状态；
+  // 2) 每日工时、便签等全量数据在用户操作时即时拉取，后台仅保留 30 秒低频心跳对齐
+  useEffect(() => {
+    const hasRunningProject = projects.some((p) => p.is_running);
+    if (!hasRunningProject) {
+      const idleInterval = setInterval(() => {
+        refreshData();
+        if (selectedProjectId) {
+          refreshProjectDetails(selectedProjectId, selectedMonth);
+        }
+      }, 30000);
+      return () => clearInterval(idleInterval);
+    }
+
+    // 仅在有计时任务时，每秒轻量轮询项目计时状态
+    const timerInterval = setInterval(async () => {
+      try {
+        const projs = await invoke<Project[]>("get_projects");
+        setProjects(projs);
+      } catch (e) {
+        console.error(e);
       }
     }, 1000);
-    return () => clearInterval(interval);
-  }, [selectedProjectId, selectedMonth]);
+
+    return () => clearInterval(timerInterval);
+  }, [projects, selectedProjectId, selectedMonth]);
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;

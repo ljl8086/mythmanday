@@ -836,7 +836,15 @@ impl AiSummarizer {
             match (whisper_bin, whisper_model) {
 
                 (Some(bin), Some(model)) => {
-                    let audio_str = actual_audio_path.to_string_lossy().to_string();
+                    // 硬件级参数兼容：确保音频文件符合 whisper.cpp 严格要求的 16kHz 单声道 16-bit PCM 格式
+                    let compatible_wav = {
+                        let path_clone = actual_audio_path.clone();
+                        tokio::task::spawn_blocking(move || {
+                            myth_audio::ensure_whisper_compatible_wav(&path_clone)
+                        }).await.map_err(|e| AiError::ParseError(e.to_string()))?
+                        .unwrap_or(actual_audio_path.clone())
+                    };
+                    let audio_str = compatible_wav.to_string_lossy().to_string();
                     let model_str = model.to_string_lossy().to_string();
                     let bin_str = bin.to_string_lossy().to_string();
                     let lang = self.config.asr.language.as_deref().unwrap_or("zh").to_string();

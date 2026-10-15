@@ -253,10 +253,35 @@ fn get_client_name(db: &Database, client_id: Option<Uuid>) -> String {
 }
 
 fn user_home_dir() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .map(std::path::PathBuf::from)
+    dirs::home_dir().or_else(|| {
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok()
+            .map(std::path::PathBuf::from)
+    })
+}
+
+fn user_download_dir() -> std::path::PathBuf {
+    if let Some(d) = dirs::download_dir() {
+        if d.exists() {
+            return d;
+        }
+    }
+    if let Some(home) = user_home_dir() {
+        let candidates = [
+            home.join("Downloads"),
+            home.join("下载"),
+            home.join("Desktop"),
+            home.join("桌面"),
+        ];
+        for c in candidates {
+            if c.exists() && c.is_dir() {
+                return c;
+            }
+        }
+        return home;
+    }
+    std::env::temp_dir()
 }
 
 fn system_open_path(path: &std::path::Path) -> Result<std::process::Child, std::io::Error> {
@@ -2878,14 +2903,7 @@ async fn download_whisper_model(
 #[tauri::command]
 fn save_and_open_excel(filename: String, base64_data: String) -> Result<String, String> {
     use std::io::Write;
-    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-    let downloads_dir = home.join("Downloads");
-    let target_dir = if downloads_dir.exists() {
-        downloads_dir
-    } else {
-        std::env::temp_dir()
-    };
-
+    let target_dir = user_download_dir();
     let target_path = target_dir.join(&filename);
     let decoded = base64_decode(&base64_data).map_err(|e| e.to_string())?;
     let mut file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
@@ -2908,13 +2926,7 @@ pub struct FilePayload {
 #[tauri::command]
 fn save_multiple_excel_files(files: Vec<FilePayload>) -> Result<Vec<String>, String> {
     use std::io::Write;
-    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-    let downloads_dir = home.join("Downloads");
-    let target_dir = if downloads_dir.exists() {
-        downloads_dir
-    } else {
-        std::env::temp_dir()
-    };
+    let target_dir = user_download_dir();
 
     let mut saved_paths = Vec::new();
     for item in files {
@@ -2947,14 +2959,7 @@ async fn export_meeting_pdf(
     html_content: String,
 ) -> Result<String, String> {
     use std::io::Write;
-    let home = user_home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-    let downloads_dir = home.join("Downloads");
-    let target_dir = if downloads_dir.exists() {
-        downloads_dir
-    } else {
-        std::env::temp_dir()
-    };
-
+    let target_dir = user_download_dir();
     let target_pdf = target_dir.join(&filename);
     let temp_html = std::env::temp_dir().join(format!("meeting_{}.html", uuid::Uuid::new_v4()));
 

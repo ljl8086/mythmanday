@@ -13,6 +13,7 @@
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-shell": "^2.4.1",
     "clsx": "^2.1.1",
+    "dompurify": "^3.4.17",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.53.0",
@@ -20,12 +21,12 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
-    "xlsx": "^0.18.5",
     "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.1",
+    "@types/dompurify": "^3.2.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",

@@ -103,4 +103,12 @@ CREATE TABLE IF NOT EXISTS meeting_audio_clips (
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_time_entries_project_start ON time_entries (project_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_work_spans_entry_id ON work_spans (entry_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_entry_id ON meetings (entry_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_project_id ON meetings (project_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_clips_meeting_id ON meeting_audio_clips (meeting_id);
+CREATE INDEX IF NOT EXISTS idx_quick_notes_project_id ON quick_notes (project_id);
 "#;
+
