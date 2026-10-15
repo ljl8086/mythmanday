@@ -717,9 +717,9 @@ export function App() {
 
   // 高性能解耦轮询：消除无差别的每秒全量 IPC 与 SQLite 全表扫描
   // 1) 仅当有项目运行计时时，每秒仅轻量获取项目计时器状态；
-  // 2) 每日工时、便签等全量数据在用户操作时即时拉取，后台仅保留 30 秒低频心跳对齐
+  // 2) 依赖项仅订阅布尔值 hasRunningProject，避免 setProjects 导致定时器每秒销毁重建
+  const hasRunningProject = projects.some((p) => p.is_running);
   useEffect(() => {
-    const hasRunningProject = projects.some((p) => p.is_running);
     if (!hasRunningProject) {
       const idleInterval = setInterval(() => {
         refreshData();
@@ -741,7 +741,7 @@ export function App() {
     }, 1000);
 
     return () => clearInterval(timerInterval);
-  }, [projects, selectedProjectId, selectedMonth]);
+  }, [hasRunningProject, selectedProjectId, selectedMonth]);
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;

@@ -407,14 +407,18 @@ pub fn ensure_whisper_compatible_wav(input_path: &Path) -> Result<PathBuf, Strin
     let raw_samples: Vec<f32> = match in_spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
         hound::SampleFormat::Int => {
-            let max_val = match in_spec.bits_per_sample {
-                8 => 128.0,
-                16 => 32768.0,
-                24 => 8388608.0,
-                32 => 2147483648.0,
-                _ => 32768.0,
-            };
-            reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| (s as f64 / max_val) as f32).collect()
+            if in_spec.bits_per_sample == 8 {
+                // 8-bit PCM 规范定义为无符号数 (0~255，静音中心为 128)，减去偏置以防引入直流偏置
+                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| ((s as f64 - 128.0) / 128.0) as f32).collect()
+            } else {
+                let max_val = match in_spec.bits_per_sample {
+                    16 => 32768.0,
+                    24 => 8388608.0,
+                    32 => 2147483648.0,
+                    _ => 32768.0,
+                };
+                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| (s as f64 / max_val) as f32).collect()
+            }
         }
     };
 

@@ -871,6 +871,11 @@ impl AiSummarizer {
                         cmd.output()
                     }).await;
 
+                    // 清理重采样生成的临时合规音频，防止磁盘空间翻倍占用
+                    if compatible_wav != actual_audio_path {
+                        let _ = std::fs::remove_file(&compatible_wav);
+                    }
+
                     if let Ok(Ok(out)) = res {
                         if out.status.success() {
                             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
