@@ -20,9 +20,7 @@ pub enum TimerStatus {
         accumulated_secs: u64,
     },
     /// 已暂停 (挂起中)
-    Paused {
-        accumulated_secs: u64,
-    },
+    Paused { accumulated_secs: u64 },
 }
 
 /// 独立的通道计时器 (Channel Timer)
@@ -178,7 +176,10 @@ impl MultiChannelManager {
     }
 
     /// 停止指定项目通道并返回结算数据
-    pub fn stop_channel(&mut self, project_id: Uuid) -> Option<(DateTime<Utc>, DateTime<Utc>, u64)> {
+    pub fn stop_channel(
+        &mut self,
+        project_id: Uuid,
+    ) -> Option<(DateTime<Utc>, DateTime<Utc>, u64)> {
         if let Some(timer) = self.channels.get_mut(&project_id) {
             timer.stop()
         } else {

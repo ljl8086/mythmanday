@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import * as XLSX from "xlsx-js-style";
 import { ModernDatePicker, ModernTimePicker } from "./DateTimePicker";
 import {
@@ -642,9 +643,10 @@ export function App() {
   const renderMarkdown = (content: string) => {
     if (!content) return "";
     try {
-      return marked.parse(content, { breaks: true, gfm: true }) as string;
+      const rawHtml = marked.parse(content, { breaks: true, gfm: true }) as string;
+      return DOMPurify.sanitize(rawHtml);
     } catch {
-      return content;
+      return DOMPurify.sanitize(content);
     }
   };
 
@@ -708,14 +710,45 @@ export function App() {
   useEffect(() => {
     refreshData();
     loadSettings();
-    const interval = setInterval(() => {
-      refreshData();
-      if (selectedProjectId) {
-        refreshProjectDetails(selectedProjectId, selectedMonth);
+    if (selectedProjectId) {
+      refreshProjectDetails(selectedProjectId, selectedMonth);
+    }
+  }, [selectedProjectId, selectedMonth]);
+
+  // 高性能解耦轮询：消除无差别的每秒全量 IPC 与 SQLite 全表扫描
+  // 1) 仅当有项目运行计时时，每秒仅轻量获取项目计时器状态；
+  // 2) 依赖项仅订阅布尔值 hasRunningProject，避免 setProjects 导致定时器每秒销毁重建
+  const hasRunningProject = projects.some((p) => p.is_running);
+  useEffect(() => {
+    if (!hasRunningProject) {
+      const idleInterval = setInterval(() => {
+        refreshData();
+        if (selectedProjectId) {
+          refreshProjectDetails(selectedProjectId, selectedMonth);
+        }
+      }, 30000);
+      return () => clearInterval(idleInterval);
+    }
+
+    // 仅在有计时任务时，每秒轻量轮询项目计时状态与录音横幅，每 5 秒同步一次工时流水
+    let tickCount = 0;
+    const timerInterval = setInterval(async () => {
+      try {
+        const projs = await invoke<Project[]>("get_projects");
+        setProjects(projs);
+        const stats = await invoke<GlobalStats>("get_global_stats");
+        setGlobalStats(stats);
+        tickCount++;
+        if (tickCount % 5 === 0 && selectedProjectId) {
+          refreshProjectDetails(selectedProjectId, selectedMonth);
+        }
+      } catch (e) {
+        console.error(e);
       }
     }, 1000);
-    return () => clearInterval(interval);
-  }, [selectedProjectId, selectedMonth]);
+
+    return () => clearInterval(timerInterval);
+  }, [hasRunningProject, selectedProjectId, selectedMonth]);
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -2006,7 +2039,15 @@ export function App() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => invoke("toggle_audio_pause")}
+                onClick={async () => {
+                  try {
+                    await invoke("toggle_audio_pause");
+                    const stats = await invoke<GlobalStats>("get_global_stats");
+                    setGlobalStats(stats);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                }}
                 className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer"
               >
                 {globalStats.is_audio_paused ? "▶ 继续录音" : "⏸ 暂停录音"}
@@ -2697,7 +2738,7 @@ export function App() {
                                             <div className="space-y-2">
                                               {entry.meetings.map((m, mIdx) => {
                                                 const clipTotalSecs = (m.clips || []).reduce((acc, c) => acc + (c.duration_secs || 0), 0);
-                                                const mDurationText = clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : (m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : "进行中");
+                                                const meetingDurationText = m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : (m.status === "in_progress" ? "进行中" : (clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : "-"));
 
                                                 return (
                                                   <div key={m.id} className="p-2.5 rounded-lg border border-slate-200/80 bg-slate-50/50 space-y-1.5 text-xs">
@@ -2705,7 +2746,7 @@ export function App() {
                                                       <div className="flex items-center gap-2">
                                                         <span className="font-bold text-slate-900">{mIdx + 1}. {m.topic}</span>
                                                         <span className="text-slate-400 font-mono text-[11px]">
-                                                          ({m.start_time}{m.end_time ? ` — ${m.end_time}` : ""} · 时长: {mDurationText})
+                                                          ({m.start_time}{m.end_time ? ` — ${m.end_time}` : ""} · 时长: {meetingDurationText}{clipTotalSecs > 0 ? ` · 录音: ${formatSeconds(clipTotalSecs)}` : ""})
                                                         </span>
                                                         {m.status === "in_progress" && (
                                                           <button

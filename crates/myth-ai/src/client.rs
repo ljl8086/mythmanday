@@ -83,9 +83,11 @@ impl Default for AiConfig {
             api_base: std::env::var("OPENAI_API_BASE")
                 .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
             api_key: env_key,
-            model: std::env::var("OPENAI_MODEL")
-                .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
-            proxy: std::env::var("HTTP_PROXY").or_else(|_| std::env::var("HTTPS_PROXY")).or_else(|_| std::env::var("ALL_PROXY")).ok(),
+            model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+            proxy: std::env::var("HTTP_PROXY")
+                .or_else(|_| std::env::var("HTTPS_PROXY"))
+                .or_else(|_| std::env::var("ALL_PROXY"))
+                .ok(),
             asr: AsrConfig::default(),
         }
     }
@@ -199,12 +201,34 @@ pub struct AiSummarizer {
 
 fn find_binary(name: &str) -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        let p = std::path::PathBuf::from(home).join(".local").join("bin").join(name);
+        let p = std::path::PathBuf::from(home)
+            .join(".local")
+            .join("bin")
+            .join(name);
         if p.exists() {
             return p;
         }
     }
     std::path::PathBuf::from(name)
+}
+
+pub fn get_user_home_dir() -> Option<std::path::PathBuf> {
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return Some(std::path::PathBuf::from(home));
+        }
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        if !userprofile.trim().is_empty() {
+            return Some(std::path::PathBuf::from(userprofile));
+        }
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            return Some(std::path::PathBuf::from(appdata));
+        }
+    }
+    None
 }
 
 pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathBuf> {
@@ -214,12 +238,27 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
             return Some(p);
         }
     }
-    let candidates = ["whisper-cli", "whisper", "whisper-cpp", "main"];
-    if let Ok(home) = std::env::var("HOME") {
-        let home_p = std::path::Path::new(&home);
+    let candidates = if cfg!(windows) {
+        vec![
+            "whisper-cli.exe",
+            "whisper.exe",
+            "whisper-cpp.exe",
+            "main.exe",
+            "whisper-cli",
+            "whisper",
+        ]
+    } else {
+        vec!["whisper-cli", "whisper", "whisper-cpp", "main"]
+    };
+
+    if let Some(home_p) = get_user_home_dir() {
         // 优先应用配置内置目录 ~/.config/mythmanday/bin/
         for name in &candidates {
-            let p = home_p.join(".config").join("mythmanday").join("bin").join(name);
+            let p = home_p
+                .join(".config")
+                .join("mythmanday")
+                .join("bin")
+                .join(name);
             if p.exists() {
                 return Some(p);
             }
@@ -232,13 +271,17 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
             }
         }
     }
-    // 最后检测系统 PATH
+    // 最后检测系统 PATH (跨平台适配：Windows 使用 where，Unix 使用 which)
+    let lookup_cmd = if cfg!(windows) { "where" } else { "which" };
     for name in &candidates {
-        if let Ok(out) = std::process::Command::new("which").arg(name).output() {
+        if let Ok(out) = std::process::Command::new(lookup_cmd).arg(name).output() {
             if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() {
-                    return Some(std::path::PathBuf::from(s));
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(first_line) = s.lines().map(|l| l.trim()).find(|l| !l.is_empty()) {
+                    let pb = std::path::PathBuf::from(first_line);
+                    if pb.exists() {
+                        return Some(pb);
+                    }
                 }
             }
         }
@@ -248,9 +291,14 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
 
 pub fn find_whisper_model(custom_model: Option<&str>) -> Option<std::path::PathBuf> {
     let mut search_dirs = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        search_dirs.push(std::path::PathBuf::from(&home).join(".config").join("mythmanday").join("models"));
-        search_dirs.push(std::path::PathBuf::from(&home).join(".local").join("share").join("mythmanday").join("models"));
+    if let Some(home) = get_user_home_dir() {
+        search_dirs.push(home.join(".config").join("mythmanday").join("models"));
+        search_dirs.push(
+            home.join(".local")
+                .join("share")
+                .join("mythmanday")
+                .join("models"),
+        );
     }
     search_dirs.push(std::path::PathBuf::from("./models"));
 
@@ -268,7 +316,13 @@ pub fn find_whisper_model(custom_model: Option<&str>) -> Option<std::path::PathB
     }
 
     // 默认优先级查找模型
-    let default_models = ["ggml-base.bin", "ggml-tiny.bin", "ggml-small.bin", "ggml-medium.bin", "ggml-large-v3.bin"];
+    let default_models = [
+        "ggml-base.bin",
+        "ggml-tiny.bin",
+        "ggml-small.bin",
+        "ggml-medium.bin",
+        "ggml-large-v3.bin",
+    ];
     for dir in &search_dirs {
         for m in &default_models {
             let p = dir.join(m);
@@ -303,14 +357,15 @@ impl AiSummarizer {
             }
         }
         let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self {
-            config,
-            client,
-        }
+        Self { config, client }
     }
 
     /// 统一调用 AI 提供商 (支持 agy CLI / codex CLI / 兼容 HTTP API)
-    pub async fn execute_completion(&self, system_prompt: &str, user_content: &str) -> Result<String, AiError> {
+    pub async fn execute_completion(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+    ) -> Result<String, AiError> {
         let provider = self.config.provider.trim().to_lowercase();
         let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
         if provider == "agy" {
@@ -318,14 +373,16 @@ impl AiSummarizer {
             let bin = find_binary("agy");
             let output = tokio::task::spawn_blocking(move || {
                 let mut cmd = std::process::Command::new(bin);
-                cmd.arg("-p").arg(&full_prompt).arg("--dangerously-skip-permissions");
+                cmd.arg("-p")
+                    .arg(&full_prompt)
+                    .arg("--dangerously-skip-permissions");
                 if let Some(ref px) = proxy_opt {
                     cmd.env("HTTP_PROXY", px)
-                       .env("HTTPS_PROXY", px)
-                       .env("ALL_PROXY", px)
-                       .env("http_proxy", px)
-                       .env("https_proxy", px)
-                       .env("all_proxy", px);
+                        .env("HTTPS_PROXY", px)
+                        .env("ALL_PROXY", px)
+                        .env("http_proxy", px)
+                        .env("https_proxy", px)
+                        .env("all_proxy", px);
                 }
                 cmd.output()
             })
@@ -350,11 +407,11 @@ impl AiSummarizer {
                 cmd.arg("exec").arg(&full_prompt);
                 if let Some(ref px) = proxy_opt {
                     cmd.env("HTTP_PROXY", px)
-                       .env("HTTPS_PROXY", px)
-                       .env("ALL_PROXY", px)
-                       .env("http_proxy", px)
-                       .env("https_proxy", px)
-                       .env("all_proxy", px);
+                        .env("HTTPS_PROXY", px)
+                        .env("ALL_PROXY", px)
+                        .env("http_proxy", px)
+                        .env("https_proxy", px)
+                        .env("all_proxy", px);
                 }
                 cmd.output()
             })
@@ -376,7 +433,10 @@ impl AiSummarizer {
         } else {
             self.config.api_key.clone()
         };
-        let url = format!("{}/chat/completions", self.config.api_base.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.config.api_base.trim_end_matches('/')
+        );
         let request_body = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
@@ -448,7 +508,10 @@ impl AiSummarizer {
         }
 
         if !git_summary.diff_stat.is_empty() {
-            prompt_content.push_str(&format!("【代码变更规模 (Diff Stat)】：\n{}\n\n", git_summary.diff_stat));
+            prompt_content.push_str(&format!(
+                "【代码变更规模 (Diff Stat)】：\n{}\n\n",
+                git_summary.diff_stat
+            ));
         }
 
         if !git_summary.diff_snippet.is_empty() {
@@ -477,11 +540,13 @@ impl AiSummarizer {
         git_summary: &GitActivitySummary,
         notes: &[QuickNote],
     ) -> Result<String, AiError> {
-        let prompt_content = Self::build_session_context(project_name, duration_hours, git_summary, notes);
+        let prompt_content =
+            Self::build_session_context(project_name, duration_hours, git_summary, notes);
 
         let system_prompt = "你是一名资深的技术架构师与软件工程专家。请根据开发者在本次工时区间内的真实代码变动（含 Git Commits 与代码 Diff 片段）及工作便签，撰写一段专业、严谨、有交付价值的工作成果摘要。要求：\n1. 语言干练体面，突出业务交付成果与技术严谨性（即使 commit 信息简略，也请从代码 Diff 中提炼出真实的业务/模块改动）；\n2. 涵盖代码开发、需求对齐或联调要点；\n3. 输出 1~3 句话（100字左右），不带任何客套寒暄。";
 
-        self.execute_completion(system_prompt, &prompt_content).await
+        self.execute_completion(system_prompt, &prompt_content)
+            .await
     }
 
     /// 生成 OpenAI 结构化交付物审计报告 (Structured JSON Output)
@@ -492,7 +557,8 @@ impl AiSummarizer {
         git_summary: &GitActivitySummary,
         notes: &[QuickNote],
     ) -> Result<StructuredDeliverableReport, AiError> {
-        let prompt_content = Self::build_session_context(project_name, duration_hours, git_summary, notes);
+        let prompt_content =
+            Self::build_session_context(project_name, duration_hours, git_summary, notes);
         let system_prompt = r#"You are a senior software engineering auditor. Analyze the developer's Git commits, code diff patches, and session notes, then output ONLY a valid JSON object matching this schema:
 {
   "executive_summary": "Concise 1-2 sentence client-facing billing summary",
@@ -501,7 +567,9 @@ impl AiSummarizer {
   "technical_scope": "Affected crates/modules/components"
 }"#;
 
-        let raw = self.execute_completion(system_prompt, &prompt_content).await?;
+        let raw = self
+            .execute_completion(system_prompt, &prompt_content)
+            .await?;
         let cleaned = raw
             .trim()
             .trim_start_matches("```json")
@@ -509,8 +577,12 @@ impl AiSummarizer {
             .trim_end_matches("```")
             .trim();
 
-        serde_json::from_str::<StructuredDeliverableReport>(cleaned)
-            .map_err(|e| AiError::ParseError(format!("Failed to parse structured deliverable JSON: {} (raw: {})", e, cleaned)))
+        serde_json::from_str::<StructuredDeliverableReport>(cleaned).map_err(|e| {
+            AiError::ParseError(format!(
+                "Failed to parse structured deliverable JSON: {} (raw: {})",
+                e, cleaned
+            ))
+        })
     }
 
     /// 评估 Git 活动与代码变更规模，智能推算研发时段（开始/结束时间）与商业交付说明
@@ -567,7 +639,9 @@ impl AiSummarizer {
             user_content.push_str(&format!("- {}\n", c));
         }
 
-        let raw = self.execute_completion(system_prompt, &user_content).await?;
+        let raw = self
+            .execute_completion(system_prompt, &user_content)
+            .await?;
         let cleaned = raw
             .trim()
             .trim_start_matches("```json")
@@ -585,8 +659,9 @@ impl AiSummarizer {
             cleaned
         };
 
-        serde_json::from_str::<AiWorkEvaluationResult>(json_str)
-            .map_err(|e| AiError::ParseError(format!("解析 AI 响应失败: {} (raw: {})", e, json_str)))
+        serde_json::from_str::<AiWorkEvaluationResult>(json_str).map_err(|e| {
+            AiError::ParseError(format!("解析 AI 响应失败: {} (raw: {})", e, json_str))
+        })
     }
 
     /// 解析用户输入的第三方 AI 智能体总结、聊天纪要或一段时期的自由文本记录，
@@ -621,7 +696,9 @@ impl AiSummarizer {
             project_name, client_name, raw_text
         );
 
-        let raw = self.execute_completion(system_prompt, &user_content).await?;
+        let raw = self
+            .execute_completion(system_prompt, &user_content)
+            .await?;
         let cleaned = raw
             .trim()
             .trim_start_matches("```json")
@@ -639,8 +716,12 @@ impl AiSummarizer {
             cleaned
         };
 
-        serde_json::from_str::<Vec<AiBatchParsedItem>>(json_str)
-            .map_err(|e| AiError::ParseError(format!("解析批量智能总结 JSON 数组失败: {} (raw: {})", e, json_str)))
+        serde_json::from_str::<Vec<AiBatchParsedItem>>(json_str).map_err(|e| {
+            AiError::ParseError(format!(
+                "解析批量智能总结 JSON 数组失败: {} (raw: {})",
+                e, json_str
+            ))
+        })
     }
 
     /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼真实客观的会议纪要
@@ -667,7 +748,10 @@ impl AiSummarizer {
 
         let has_transcript = !clean_transcript.trim().is_empty();
         if has_transcript {
-            prompt_content.push_str(&format!("【现场录音文字转写】：\n{}\n\n", clean_transcript.trim()));
+            prompt_content.push_str(&format!(
+                "【现场录音文字转写】：\n{}\n\n",
+                clean_transcript.trim()
+            ));
         }
 
         if !notes.is_empty() {
@@ -694,7 +778,8 @@ impl AiSummarizer {
            二、【达成共识与讨论要点】（仅列出会议中实际达成一致或明确提到的要点）\n\
            三、【后续推进与待办事项】（仅列出会议中实际明确的分工与下一步计划，若未提及则如实写“待后续对齐”）";
 
-        self.execute_completion(system_prompt, &prompt_content).await
+        self.execute_completion(system_prompt, &prompt_content)
+            .await
     }
 
     /// 语音转文字辅助函数：调用本地 CLI 智能体 (agy / codex)
@@ -714,14 +799,16 @@ impl AiSummarizer {
             let px = proxy_opt.clone();
             let output = tokio::task::spawn_blocking(move || {
                 let mut cmd = std::process::Command::new(bin);
-                cmd.arg("-p").arg(&prompt).arg("--dangerously-skip-permissions");
+                cmd.arg("-p")
+                    .arg(&prompt)
+                    .arg("--dangerously-skip-permissions");
                 if let Some(ref p) = px {
                     cmd.env("HTTP_PROXY", p)
-                       .env("HTTPS_PROXY", p)
-                       .env("ALL_PROXY", p)
-                       .env("http_proxy", p)
-                       .env("https_proxy", p)
-                       .env("all_proxy", p);
+                        .env("HTTPS_PROXY", p)
+                        .env("ALL_PROXY", p)
+                        .env("http_proxy", p)
+                        .env("https_proxy", p)
+                        .env("all_proxy", p);
                 }
                 cmd.output()
             })
@@ -750,11 +837,11 @@ impl AiSummarizer {
                 cmd.arg("exec").arg(&prompt);
                 if let Some(ref p) = px {
                     cmd.env("HTTP_PROXY", p)
-                       .env("HTTPS_PROXY", p)
-                       .env("ALL_PROXY", p)
-                       .env("http_proxy", p)
-                       .env("https_proxy", p)
-                       .env("all_proxy", p);
+                        .env("HTTPS_PROXY", p)
+                        .env("ALL_PROXY", p)
+                        .env("http_proxy", p)
+                        .env("https_proxy", p)
+                        .env("all_proxy", p);
                 }
                 cmd.output()
             })
@@ -774,15 +861,31 @@ impl AiSummarizer {
     /// 语音转文字处理（支持模块化多模路由：本地 whisper.cpp 极速推理 / 云端标准 Whisper API / CLI 智能体）
     pub async fn transcribe_audio(&self, input_path: &std::path::Path) -> Result<String, AiError> {
         if !input_path.exists() {
-            return Err(AiError::ParseError(format!("音频文件不存在: {}", input_path.display())));
+            return Err(AiError::ParseError(format!(
+                "音频文件不存在: {}",
+                input_path.display()
+            )));
         }
 
-        // 优先尝试将可能达到数百兆的 WAV 文件利用本地 ffmpeg 压缩转码为小体积 MP3 (通常缩减 95% 以上)
-        let actual_audio_path = if input_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
+        let mode = self.config.asr.mode.trim().to_lowercase();
+        let is_local_mode = mode == "local"
+            || (mode.is_empty()
+                && find_whisper_binary(self.config.asr.local_bin_path.as_deref()).is_some()
+                && find_whisper_model(self.config.asr.local_model.as_deref()).is_some());
+
+        // 原生 whisper.cpp 仅支持 16kHz PCM WAV 格式，切勿转为 MP3！
+        // 仅在非本地模式（云端 Whisper API 或 CLI 智能体上传）时，才尝试将大体积 WAV 压缩转码为 MP3
+        let actual_audio_path = if !is_local_mode
+            && input_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("wav"))
+                .unwrap_or(false)
+        {
             let path_buf = input_path.to_path_buf();
-            let converted = tokio::task::spawn_blocking(move || {
-                myth_audio::convert_wav_to_mp3(&path_buf)
-            }).await;
+            let converted =
+                tokio::task::spawn_blocking(move || myth_audio::convert_wav_to_mp3(&path_buf))
+                    .await;
             match converted {
                 Ok(Ok(mp3_p)) => mp3_p,
                 _ => input_path.to_path_buf(),
@@ -791,41 +894,68 @@ impl AiSummarizer {
             input_path.to_path_buf()
         };
 
-        let mode = self.config.asr.mode.trim().to_lowercase();
-
         // 1. 本地 whisper.cpp 极速推理模式 (默认优先)
-        if mode == "local" || (mode.is_empty() && find_whisper_binary(self.config.asr.local_bin_path.as_deref()).is_some() && find_whisper_model(self.config.asr.local_model.as_deref()).is_some()) {
+        if is_local_mode {
             let whisper_bin = find_whisper_binary(self.config.asr.local_bin_path.as_deref());
             let whisper_model = find_whisper_model(self.config.asr.local_model.as_deref());
 
             match (whisper_bin, whisper_model) {
                 (Some(bin), Some(model)) => {
-                    let audio_str = actual_audio_path.to_string_lossy().to_string();
+                    // 硬件级参数兼容：确保音频文件符合 whisper.cpp 严格要求的 16kHz 单声道 16-bit PCM 格式
+                    let compatible_wav = {
+                        let path_clone = actual_audio_path.clone();
+                        tokio::task::spawn_blocking(move || {
+                            myth_audio::ensure_whisper_compatible_wav(&path_clone)
+                        })
+                        .await
+                        .map_err(|e| AiError::ParseError(e.to_string()))?
+                        .unwrap_or(actual_audio_path.clone())
+                    };
+                    let audio_str = compatible_wav.to_string_lossy().to_string();
                     let model_str = model.to_string_lossy().to_string();
                     let bin_str = bin.to_string_lossy().to_string();
-                    let lang = self.config.asr.language.as_deref().unwrap_or("zh").to_string();
+                    let lang = self
+                        .config
+                        .asr
+                        .language
+                        .as_deref()
+                        .unwrap_or("zh")
+                        .to_string();
                     let prompt_opt = self.config.asr.prompt.clone();
 
                     let res = tokio::task::spawn_blocking(move || {
                         let mut cmd = std::process::Command::new(&bin_str);
-                        cmd.arg("-m").arg(&model_str)
-                           .arg("-f").arg(&audio_str)
-                           .arg("-l").arg(&lang)
-                           .arg("-nt")
-                           .arg("--no-prints")
-                           .arg("-t").arg("4")
-                           .arg("-sns")
-                           .arg("-et").arg("2.4")
-                           .arg("-nth").arg("0.6")
-                           .arg("-nf")
-                           .arg("-mc").arg("64");
+                        cmd.arg("-m")
+                            .arg(&model_str)
+                            .arg("-f")
+                            .arg(&audio_str)
+                            .arg("-l")
+                            .arg(&lang)
+                            .arg("-nt")
+                            .arg("--no-prints")
+                            .arg("-t")
+                            .arg("4")
+                            .arg("-sns")
+                            .arg("-et")
+                            .arg("2.4")
+                            .arg("-nth")
+                            .arg("0.6")
+                            .arg("-nf")
+                            .arg("-mc")
+                            .arg("64");
                         if let Some(ref p) = prompt_opt {
                             if !p.trim().is_empty() {
                                 cmd.arg("--prompt").arg(p.trim());
                             }
                         }
                         cmd.output()
-                    }).await;
+                    })
+                    .await;
+
+                    // 清理重采样生成的临时合规音频，防止磁盘空间翻倍占用
+                    if compatible_wav != actual_audio_path {
+                        let _ = std::fs::remove_file(&compatible_wav);
+                    }
 
                     if let Ok(Ok(out)) = res {
                         if out.status.success() {
@@ -837,7 +967,10 @@ impl AiSummarizer {
                         } else {
                             let err = String::from_utf8_lossy(&out.stderr);
                             if mode == "local" {
-                                return Err(AiError::ParseError(format!("本地 whisper-cli 执行失败: {}", err)));
+                                return Err(AiError::ParseError(format!(
+                                    "本地 whisper-cli 执行失败: {}",
+                                    err
+                                )));
                             }
                         }
                     }
@@ -856,17 +989,27 @@ impl AiSummarizer {
         if mode == "agent" {
             let provider = self.config.provider.trim().to_lowercase();
             let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
-            let res = self.transcribe_with_cli_agent(&actual_audio_path, &provider, proxy_opt).await?;
+            let res = self
+                .transcribe_with_cli_agent(&actual_audio_path, &provider, proxy_opt)
+                .await?;
             return Ok(clean_repetitive_text(&res));
         }
 
         // 3. 云端兼容 Whisper 标准的 HTTP API (/audio/transcriptions)
-        let asr_api_base = self.config.asr.api_base.as_ref()
+        let asr_api_base = self
+            .config
+            .asr
+            .api_base
+            .as_ref()
             .filter(|s| !s.trim().is_empty())
             .cloned()
             .unwrap_or_else(|| self.config.api_base.clone());
 
-        let asr_api_key = self.config.asr.api_key.as_ref()
+        let asr_api_key = self
+            .config
+            .asr
+            .api_key
+            .as_ref()
             .filter(|s| !s.trim().is_empty())
             .cloned()
             .unwrap_or_else(|| {
@@ -877,7 +1020,11 @@ impl AiSummarizer {
                 }
             });
 
-        let asr_model = self.config.asr.model.as_ref()
+        let asr_model = self
+            .config
+            .asr
+            .model
+            .as_ref()
             .filter(|s| !s.trim().is_empty())
             .cloned()
             .unwrap_or_else(|| "whisper-1".to_string());
@@ -913,7 +1060,10 @@ impl AiSummarizer {
             }
         }
 
-        let url = format!("{}/audio/transcriptions", asr_api_base.trim_end_matches('/'));
+        let url = format!(
+            "{}/audio/transcriptions",
+            asr_api_base.trim_end_matches('/')
+        );
 
         let resp = self
             .client
@@ -926,7 +1076,10 @@ impl AiSummarizer {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let err_text = resp.text().await.unwrap_or_default();
-            return Err(AiError::ApiError(status, format!("云端 ASR 转写接口异常 ({url}): {err_text}")));
+            return Err(AiError::ApiError(
+                status,
+                format!("云端 ASR 转写接口异常 ({url}): {err_text}"),
+            ));
         }
 
         let text = resp.text().await.map_err(AiError::Reqwest)?;
@@ -959,7 +1112,13 @@ pub fn clean_repetitive_text(input: &str) -> String {
     }
 
     // 过滤 Whisper 中文死循环幻觉（如“你不认识我吗”循环）
-    let loop_patterns = ["你不认识我吗", "我认识我吗", "你不认识我", "不认识我吗", "认识我吗"];
+    let loop_patterns = [
+        "你不认识我吗",
+        "我认识我吗",
+        "你不认识我",
+        "不认识我吗",
+        "认识我吗",
+    ];
     for lp in loop_patterns {
         if text.matches(lp).count() >= 2 {
             text = text.replace(lp, "");
@@ -990,8 +1149,8 @@ pub fn clean_repetitive_text(input: &str) -> String {
                 continue;
             }
             let mut repeat_count = 1;
-            while i + (repeat_count + 1) * plen <= n 
-                && &chars[i + repeat_count * plen..i + (repeat_count + 1) * plen] == pattern 
+            while i + (repeat_count + 1) * plen <= n
+                && &chars[i + repeat_count * plen..i + (repeat_count + 1) * plen] == pattern
             {
                 repeat_count += 1;
             }
@@ -1044,8 +1203,8 @@ pub struct AsrRuntimeStatus {
 }
 
 pub fn get_whisper_models_dir() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("mythmanday").join("models")
+    if let Some(home) = get_user_home_dir() {
+        home.join(".config").join("mythmanday").join("models")
     } else {
         std::path::PathBuf::from("./models")
     }
@@ -1063,7 +1222,11 @@ pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
                 if p.extension().and_then(|s| s.to_str()) == Some("bin") {
                     let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     let size_mb = (file_size as f64) / (1024.0 * 1024.0);
-                    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    let name = p
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
                     installed.push(WhisperModelInfo {
                         name,
                         path: p.to_string_lossy().to_string(),
@@ -1074,22 +1237,36 @@ pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
         }
     }
 
-    let installed_names: std::collections::HashSet<String> = installed.iter().map(|m| m.name.clone()).collect();
+    let installed_names: std::collections::HashSet<String> =
+        installed.iter().map(|m| m.name.clone()).collect();
 
     let preset_models = vec![
-        ("ggml-tiny.bin", "75 MB", "极速轻量，内存开销极小，适合简单对话"),
-        ("ggml-base.bin", "141 MB", "均衡推荐 (官方推荐)，中文识别精准稳定"),
-        ("ggml-small.bin", "466 MB", "高精细度，适合专业术语多、发音嘈杂的场景"),
+        (
+            "ggml-tiny.bin",
+            "75 MB",
+            "极速轻量，内存开销极小，适合简单对话",
+        ),
+        (
+            "ggml-base.bin",
+            "141 MB",
+            "均衡推荐 (官方推荐)，中文识别精准稳定",
+        ),
+        (
+            "ggml-small.bin",
+            "466 MB",
+            "高精细度，适合专业术语多、发音嘈杂的场景",
+        ),
     ];
 
-    let available = preset_models.into_iter().map(|(name, size, desc)| {
-        AvailableModelInfo {
+    let available = preset_models
+        .into_iter()
+        .map(|(name, size, desc)| AvailableModelInfo {
             name: name.to_string(),
             size_label: size.to_string(),
             desc: desc.to_string(),
             is_downloaded: installed_names.contains(name),
-        }
-    }).collect();
+        })
+        .collect();
 
     AsrRuntimeStatus {
         whisper_bin_installed: bin_path.is_some(),
@@ -1097,7 +1274,11 @@ pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
         installed_models: installed,
         available_models: available,
         active_mode: cfg.asr.mode.clone(),
-        active_model: cfg.asr.local_model.clone().unwrap_or_else(|| "ggml-base.bin".to_string()),
+        active_model: cfg
+            .asr
+            .local_model
+            .clone()
+            .unwrap_or_else(|| "ggml-base.bin".to_string()),
     }
 }
 
@@ -1110,12 +1291,20 @@ where
     F: FnMut(f64, u64, u64) + Send + 'static,
 {
     let target_dir = get_whisper_models_dir();
-    tokio::fs::create_dir_all(&target_dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let target_path = target_dir.join(model_name);
 
     let urls = [
-        format!("https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/{}", model_name),
-        format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_name),
+        format!(
+            "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/{}",
+            model_name
+        ),
+        format!(
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
+            model_name
+        ),
     ];
 
     let mut client_builder = reqwest::Client::builder();
@@ -1172,7 +1361,9 @@ where
                 if ok {
                     let _ = file.flush().await;
                     drop(file);
-                    tokio::fs::rename(&tmp_path, &target_path).await.map_err(|e| e.to_string())?;
+                    tokio::fs::rename(&tmp_path, &target_path)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     return Ok(target_path);
                 }
             }
@@ -1236,7 +1427,9 @@ mod tests {
         let report: StructuredDeliverableReport = serde_json::from_str(sample_json).unwrap();
         assert_eq!(report.category, WorkCategory::FeatureDevelopment);
         assert_eq!(report.deliverables.len(), 2);
-        assert!(report.executive_summary.contains("OpenAI structured deliverable"));
+        assert!(report
+            .executive_summary
+            .contains("OpenAI structured deliverable"));
     }
 
     #[test]
@@ -1258,9 +1451,11 @@ mod tests {
     fn test_clean_repetitive_text() {
         let input = "喂大家上午好对你你你你你你你你你你不认识我吗你不认识我吗你不认识我吗你不认识我吗( 字幕:J Chong )";
         let cleaned = clean_repetitive_text(input);
-        assert!(cleaned.starts_with("喂大家上午好对你你你不认识我吗") || cleaned.contains("喂大家上午好"));
+        assert!(
+            cleaned.starts_with("喂大家上午好对你你你不认识我吗")
+                || cleaned.contains("喂大家上午好")
+        );
         assert!(!cleaned.contains("( 字幕:J Chong )"));
         assert!(!cleaned.contains("你不认识我吗你不认识我吗你不认识我吗"));
     }
 }
-

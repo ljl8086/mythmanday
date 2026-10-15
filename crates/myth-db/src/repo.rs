@@ -26,7 +26,9 @@ impl Database {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
-        let _ = conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+        let _ = conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+        );
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
@@ -42,9 +44,17 @@ impl Database {
 
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(CREATE_TABLES_SQL)?;
-        let _ = self.conn.execute("ALTER TABLE time_entries ADD COLUMN audio_path TEXT", []);
-        let _ = self.conn.execute("ALTER TABLE projects ADD COLUMN rounding_mode TEXT NOT NULL DEFAULT 'ceil'", []);
-        let _ = self.conn.execute("ALTER TABLE projects ADD COLUMN min_granularity REAL NOT NULL DEFAULT 0.5", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE time_entries ADD COLUMN audio_path TEXT", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE projects ADD COLUMN rounding_mode TEXT NOT NULL DEFAULT 'ceil'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE projects ADD COLUMN min_granularity REAL NOT NULL DEFAULT 0.5",
+            [],
+        );
         Ok(())
     }
 
@@ -63,7 +73,9 @@ impl Database {
     }
 
     pub fn list_clients(&self) -> Result<Vec<Client>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, default_currency, created_at FROM clients ORDER BY created_at DESC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, default_currency, created_at FROM clients ORDER BY created_at DESC",
+        )?;
         let rows = stmt.query_map([], |row| {
             let id_str: String = row.get(0)?;
             let created_at_str: String = row.get(3)?;
@@ -460,7 +472,11 @@ impl Database {
     }
 
     /// 查询某项目在指定日期 (YYYY-MM-DD) 的主工时记录（实现一日一记录）
-    pub fn get_entry_for_project_and_date(&self, project_id: &Uuid, date_str: &str) -> Result<Option<TimeEntry>> {
+    pub fn get_entry_for_project_and_date(
+        &self,
+        project_id: &Uuid,
+        date_str: &str,
+    ) -> Result<Option<TimeEntry>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, project_id, start_time, end_time, raw_duration_secs,
                       billable_hours, billable_days, rate_at_moment, total_amount,
@@ -550,11 +566,17 @@ impl Database {
                 id: Uuid::parse_str(&id_str).unwrap_or_default(),
                 entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
                 span_order: row.get(2)?,
-                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
-                end_at: DateTime::parse_from_rfc3339(&e_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                start_at: DateTime::parse_from_rfc3339(&s_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_at: DateTime::parse_from_rfc3339(&e_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
                 duration_secs: dur.max(0) as u64,
                 span_type: row.get(6)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         let mut spans = Vec::new();
@@ -619,13 +641,21 @@ impl Database {
                 entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
                 project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
                 topic: row.get(3)?,
-                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
-                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                start_at: DateTime::parse_from_rfc3339(&s_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .ok()
+                }),
                 duration_secs: dur.max(0) as u64,
                 status: row.get(7)?,
                 meeting_summary: row.get(8)?,
                 quick_notes: row.get(9)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             }))
         } else {
             Ok(None)
@@ -651,13 +681,21 @@ impl Database {
                 entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
                 project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
                 topic: row.get(3)?,
-                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
-                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                start_at: DateTime::parse_from_rfc3339(&s_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .ok()
+                }),
                 duration_secs: dur.max(0) as u64,
                 status: row.get(7)?,
                 meeting_summary: row.get(8)?,
                 quick_notes: row.get(9)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         let mut list = Vec::new();
@@ -686,13 +724,21 @@ impl Database {
                 entry_id: Uuid::parse_str(&e_id_str).unwrap_or_default(),
                 project_id: Uuid::parse_str(&p_id_str).unwrap_or_default(),
                 topic: row.get(3)?,
-                start_at: DateTime::parse_from_rfc3339(&s_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
-                end_at: e_str.and_then(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)).ok()),
+                start_at: DateTime::parse_from_rfc3339(&s_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                end_at: e_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .ok()
+                }),
                 duration_secs: dur.max(0) as u64,
                 status: row.get(7)?,
                 meeting_summary: row.get(8)?,
                 quick_notes: row.get(9)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         let mut list = Vec::new();
@@ -748,7 +794,9 @@ impl Database {
                 duration_secs: dur.max(0) as u64,
                 transcript: row.get(5)?,
                 status: row.get(6)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             })
         })?;
         let mut clips = Vec::new();
@@ -777,7 +825,9 @@ impl Database {
                 duration_secs: dur.max(0) as u64,
                 transcript: row.get(5)?,
                 status: row.get(6)?,
-                created_at: DateTime::parse_from_rfc3339(&c_str).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             }))
         } else {
             Ok(None)
@@ -845,7 +895,7 @@ impl Database {
 
     pub fn list_all_quick_notes(&self) -> Result<Vec<QuickNote>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, logged_at, content FROM quick_notes ORDER BY logged_at DESC"
+            "SELECT id, project_id, logged_at, content FROM quick_notes ORDER BY logged_at DESC",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -871,22 +921,37 @@ impl Database {
     }
 
     pub fn delete_quick_note(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute("DELETE FROM quick_notes WHERE id = ?1", params![id.to_string()])?;
+        self.conn.execute(
+            "DELETE FROM quick_notes WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(())
     }
 
     pub fn delete_project(&self, id: &Uuid) -> Result<()> {
         let id_str = id.to_string();
-        let _ = self.conn.execute("DELETE FROM active_timers WHERE project_id = ?1", params![&id_str]);
-        let _ = self.conn.execute("DELETE FROM quick_notes WHERE project_id = ?1", params![&id_str]);
-        let _ = self.conn.execute("DELETE FROM time_entries WHERE project_id = ?1", params![&id_str]);
-        self.conn.execute("DELETE FROM projects WHERE id = ?1", params![&id_str])?;
+        let _ = self.conn.execute(
+            "DELETE FROM active_timers WHERE project_id = ?1",
+            params![&id_str],
+        );
+        let _ = self.conn.execute(
+            "DELETE FROM quick_notes WHERE project_id = ?1",
+            params![&id_str],
+        );
+        let _ = self.conn.execute(
+            "DELETE FROM time_entries WHERE project_id = ?1",
+            params![&id_str],
+        );
+        self.conn
+            .execute("DELETE FROM projects WHERE id = ?1", params![&id_str])?;
         Ok(())
     }
 
     // --- 系统设置 Key-Value ---
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM app_settings WHERE key = ?1")?;
         let mut rows = stmt.query(params![key])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -1049,7 +1114,10 @@ mod tests {
 
         // 验证读取
         let fetched1 = db.get_time_entry(&entry1.id).unwrap().unwrap();
-        assert_eq!(fetched1.audio_path, Some("/tmp/meeting_rec.wav".to_string()));
+        assert_eq!(
+            fetched1.audio_path,
+            Some("/tmp/meeting_rec.wav".to_string())
+        );
         assert_eq!(fetched1.summary.as_deref(), Some("技术方案对齐与决议研讨"));
 
         let fetched2 = db.get_time_entry(&entry2.id).unwrap().unwrap();
@@ -1094,7 +1162,10 @@ mod tests {
         db.insert_audio_clip(&clip).unwrap();
 
         assert_eq!(db.list_meetings_for_entry(&entry.id).unwrap().len(), 1);
-        assert_eq!(db.list_audio_clips_for_meeting(&meeting.id).unwrap().len(), 1);
+        assert_eq!(
+            db.list_audio_clips_for_meeting(&meeting.id).unwrap().len(),
+            1
+        );
 
         // 4. 更新 TimeEntry (模拟结束会议时写入提炼纪要，绝不能级联删除 Meeting 或 AudioClip)
         entry.summary = Some("【会议纪要：架构方案评审】已完成评审并达成共识。".to_string());
@@ -1102,7 +1173,11 @@ mod tests {
 
         // 验证 Meeting 完好保留！
         let meetings = db.list_meetings_for_entry(&entry.id).unwrap();
-        assert_eq!(meetings.len(), 1, "Meeting 不应被 TimeEntry 的更新操作级联删除！");
+        assert_eq!(
+            meetings.len(),
+            1,
+            "Meeting 不应被 TimeEntry 的更新操作级联删除！"
+        );
 
         // 5. 更新 Meeting (模拟状态变为 completed，绝不能级联删除 AudioClip)
         meeting.status = "completed".to_string();
@@ -1110,6 +1185,10 @@ mod tests {
 
         // 验证 AudioClip 完好保留！
         let clips = db.list_audio_clips_for_meeting(&meeting.id).unwrap();
-        assert_eq!(clips.len(), 1, "AudioClip 不应被 Meeting 的更新操作级联删除！");
+        assert_eq!(
+            clips.len(),
+            1,
+            "AudioClip 不应被 Meeting 的更新操作级联删除！"
+        );
     }
 }

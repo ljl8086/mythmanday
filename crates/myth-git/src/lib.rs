@@ -6,4 +6,6 @@
 
 pub mod git_extractor;
 
-pub use git_extractor::{GitActivitySummary, GitCommitRecord, GitError, GitScanner, GitWorkSummary};
+pub use git_extractor::{
+    GitActivitySummary, GitCommitRecord, GitError, GitScanner, GitWorkSummary,
+};

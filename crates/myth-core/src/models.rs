@@ -181,7 +181,14 @@ pub struct WorkSpan {
 }
 
 impl WorkSpan {
-    pub fn new(entry_id: Uuid, span_order: u32, start_at: DateTime<Utc>, end_at: DateTime<Utc>, duration_secs: u64, span_type: impl Into<String>) -> Self {
+    pub fn new(
+        entry_id: Uuid,
+        span_order: u32,
+        start_at: DateTime<Utc>,
+        end_at: DateTime<Utc>,
+        duration_secs: u64,
+        span_type: impl Into<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             entry_id,
@@ -249,7 +256,12 @@ pub struct MeetingAudioClip {
 }
 
 impl MeetingAudioClip {
-    pub fn new(meeting_id: Uuid, clip_order: u32, audio_path: impl Into<String>, duration_secs: u64) -> Self {
+    pub fn new(
+        meeting_id: Uuid,
+        clip_order: u32,
+        audio_path: impl Into<String>,
+        duration_secs: u64,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             meeting_id,

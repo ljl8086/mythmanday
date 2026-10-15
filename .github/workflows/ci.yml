@@ -8,9 +8,11 @@ on:
 
 jobs:
   check-and-test:
+    name: Lint, Test & Build Check
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -22,21 +24,32 @@ jobs:
         with:
           version: 10
 
-      - name: Setup Rust
+      - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Install Linux build dependencies
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
 
-      - name: Frontend build check
+      - name: Frontend Lint & Build Check
         run: |
           cd frontend
           pnpm install
+          pnpm run lint
           pnpm build
 
-      - name: Rust cargo check & unit tests
+      - name: Rust Formatting & Clippy Check
+        run: |
+          cargo fmt -- --check
+          cargo clippy --workspace --no-deps
+
+      - name: Rust Cargo Check & Unit Tests
         run: |
           cargo check --workspace
           cargo test -p myth-core -p myth-db -p myth-git -p myth-ai

@@ -75,7 +75,11 @@ impl BillingEngine {
     }
 
     /// 将计费工时换算为人天 (Man-Days)
-    pub fn calculate_billable_days(billable_hours: f64, hours_per_day: f64, mode: DayCalcMode) -> f64 {
+    pub fn calculate_billable_days(
+        billable_hours: f64,
+        hours_per_day: f64,
+        mode: DayCalcMode,
+    ) -> f64 {
         if billable_hours <= 0.0 || hours_per_day <= 0.0 {
             return 0.0;
         }
@@ -161,15 +165,25 @@ impl BillingEngine {
             return Vec::new();
         }
 
-        let cap_hours = if hours_per_day > 0.0 { hours_per_day } else { 8.0 };
+        let cap_hours = if hours_per_day > 0.0 {
+            hours_per_day
+        } else {
+            8.0
+        };
 
         let mut days_map: BTreeMap<NaiveDate, RawDayHelper> = BTreeMap::new();
         for e in daily_entries {
             let local_start = e.start_time.with_timezone(&Local);
             let date = local_start.date_naive();
             let entry_secs = e.raw_duration_secs;
-            let summary = e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string());
-            let has_audio = e.audio_path.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
+            let summary = e
+                .summary
+                .unwrap_or_else(|| "持续代码开发与测试交付".to_string());
+            let has_audio = e
+                .audio_path
+                .as_ref()
+                .map(|p| !p.is_empty())
+                .unwrap_or(false);
 
             let day = days_map.entry(date).or_insert_with(|| RawDayHelper {
                 date,
@@ -215,19 +229,24 @@ impl BillingEngine {
                 // 策略 4: 实际工时合并 (当天只合并为一行，实报实销)
                 for (date, raw) in days_map {
                     let actual_hours = raw.total_secs as f64 / 3600.0;
-                    target_days.insert(date, TargetDay {
+                    target_days.insert(
                         date,
-                        hours: actual_hours,
-                        summaries: raw.summaries,
-                        is_invoiced: raw.has_invoiced,
-                        has_audio: raw.any_audio,
-                    });
+                        TargetDay {
+                            date,
+                            hours: actual_hours,
+                            summaries: raw.summaries,
+                            is_invoiced: raw.has_invoiced,
+                            has_audio: raw.any_audio,
+                        },
+                    );
                 }
             }
 
             SettlementStrategy::RebalanceWorkdays => {
                 // 策略 1: 削峰填谷模式
-                return Self::rebalance_project_workdays_internal(days_map, cap_hours, daily_rate, currency);
+                return Self::rebalance_project_workdays_internal(
+                    days_map, cap_hours, daily_rate, currency,
+                );
             }
 
             SettlementStrategy::Min8HoursCarryOver => {
@@ -256,17 +275,24 @@ impl BillingEngine {
                         cap_hours
                     };
 
-                    target_days.insert(d, TargetDay {
-                        date: d,
-                        hours: effective_day_hours,
-                        summaries: raw.summaries,
-                        is_invoiced: raw.has_invoiced,
-                        has_audio: raw.any_audio,
-                    });
+                    target_days.insert(
+                        d,
+                        TargetDay {
+                            date: d,
+                            hours: effective_day_hours,
+                            summaries: raw.summaries,
+                            is_invoiced: raw.has_invoiced,
+                            has_audio: raw.any_audio,
+                        },
+                    );
                 }
 
                 // 将多余的工时追加顺延到新工作日
-                let last_date = target_days.keys().last().cloned().unwrap_or_else(|| chrono::Local::now().date_naive());
+                let last_date = target_days
+                    .keys()
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| chrono::Local::now().date_naive());
                 let mut curr_date = last_date.succ_opt().unwrap_or(last_date);
 
                 while overflow_hours > 0.001 {
@@ -285,13 +311,16 @@ impl BillingEngine {
                         }
 
                         // 新顺延出的一天同样按 8 小时核算 (保底)
-                        target_days.insert(curr_date, TargetDay {
-                            date: curr_date,
-                            hours: cap_hours,
-                            summaries: carry_summaries,
-                            is_invoiced: false,
-                            has_audio: false,
-                        });
+                        target_days.insert(
+                            curr_date,
+                            TargetDay {
+                                date: curr_date,
+                                hours: cap_hours,
+                                summaries: carry_summaries,
+                                is_invoiced: false,
+                                has_audio: false,
+                            },
+                        );
                     }
                     curr_date = curr_date.succ_opt().unwrap_or(curr_date);
                 }
@@ -317,26 +346,36 @@ impl BillingEngine {
                                 overflow_summaries.push(s.clone());
                             }
                         }
-                        target_days.insert(d, TargetDay {
-                            date: d,
-                            hours: cap_hours,
-                            summaries: raw.summaries,
-                            is_invoiced: raw.has_invoiced,
-                            has_audio: raw.any_audio,
-                        });
+                        target_days.insert(
+                            d,
+                            TargetDay {
+                                date: d,
+                                hours: cap_hours,
+                                summaries: raw.summaries,
+                                is_invoiced: raw.has_invoiced,
+                                has_audio: raw.any_audio,
+                            },
+                        );
                     } else {
-                        target_days.insert(d, TargetDay {
-                            date: d,
-                            hours: raw_hours,
-                            summaries: raw.summaries,
-                            is_invoiced: raw.has_invoiced,
-                            has_audio: raw.any_audio,
-                        });
+                        target_days.insert(
+                            d,
+                            TargetDay {
+                                date: d,
+                                hours: raw_hours,
+                                summaries: raw.summaries,
+                                is_invoiced: raw.has_invoiced,
+                                has_audio: raw.any_audio,
+                            },
+                        );
                     }
                 }
 
                 // 将多余的工时追加顺延到新工作日
-                let last_date = target_days.keys().last().cloned().unwrap_or_else(|| chrono::Local::now().date_naive());
+                let last_date = target_days
+                    .keys()
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| chrono::Local::now().date_naive());
                 let mut curr_date = last_date.succ_opt().unwrap_or(last_date);
 
                 while overflow_hours > 0.001 {
@@ -354,13 +393,16 @@ impl BillingEngine {
                             carry_summaries.push("阶段性工时顺延交付与核算".to_string());
                         }
 
-                        target_days.insert(curr_date, TargetDay {
-                            date: curr_date,
-                            hours: take,
-                            summaries: carry_summaries,
-                            is_invoiced: false,
-                            has_audio: false,
-                        });
+                        target_days.insert(
+                            curr_date,
+                            TargetDay {
+                                date: curr_date,
+                                hours: take,
+                                summaries: carry_summaries,
+                                is_invoiced: false,
+                                has_audio: false,
+                            },
+                        );
                     }
                     curr_date = curr_date.succ_opt().unwrap_or(curr_date);
                 }
@@ -444,13 +486,16 @@ impl BillingEngine {
                     }
                 }
 
-                adjusted_days.insert(d, AdjustedDay {
-                    date: d,
-                    hours: cap_hours,
-                    summaries: raw.summaries,
-                    is_invoiced: raw.has_invoiced,
-                    has_audio: raw.any_audio,
-                });
+                adjusted_days.insert(
+                    d,
+                    AdjustedDay {
+                        date: d,
+                        hours: cap_hours,
+                        summaries: raw.summaries,
+                        is_invoiced: raw.has_invoiced,
+                        has_audio: raw.any_audio,
+                    },
+                );
             } else {
                 let can_absorb = cap_hours - raw_hours;
                 let take = overflow_hours.min(can_absorb);
@@ -466,13 +511,16 @@ impl BillingEngine {
                     }
                 }
 
-                adjusted_days.insert(d, AdjustedDay {
-                    date: d,
-                    hours: final_hours,
-                    summaries: combined_summaries,
-                    is_invoiced: raw.has_invoiced,
-                    has_audio: raw.any_audio,
-                });
+                adjusted_days.insert(
+                    d,
+                    AdjustedDay {
+                        date: d,
+                        hours: final_hours,
+                        summaries: combined_summaries,
+                        is_invoiced: raw.has_invoiced,
+                        has_audio: raw.any_audio,
+                    },
+                );
             }
         }
 
@@ -498,9 +546,11 @@ impl BillingEngine {
         }
 
         if overflow_hours > 0.001 {
-            let last_date = adjusted_days.keys().last().cloned().unwrap_or_else(|| {
-                chrono::Local::now().date_naive()
-            });
+            let last_date = adjusted_days
+                .keys()
+                .last()
+                .cloned()
+                .unwrap_or_else(|| chrono::Local::now().date_naive());
             let mut curr_date = last_date.succ_opt().unwrap_or(last_date);
 
             while overflow_hours > 0.001 {
@@ -518,13 +568,16 @@ impl BillingEngine {
                         carry_summaries.push("阶段性研发与交付成果顺延对账".to_string());
                     }
 
-                    adjusted_days.insert(curr_date, AdjustedDay {
-                        date: curr_date,
-                        hours: take,
-                        summaries: carry_summaries,
-                        is_invoiced: false,
-                        has_audio: false,
-                    });
+                    adjusted_days.insert(
+                        curr_date,
+                        AdjustedDay {
+                            date: curr_date,
+                            hours: take,
+                            summaries: carry_summaries,
+                            is_invoiced: false,
+                            has_audio: false,
+                        },
+                    );
                 }
                 curr_date = curr_date.succ_opt().unwrap_or(curr_date);
             }
@@ -568,7 +621,6 @@ impl BillingEngine {
         )
     }
 }
-
 
 /// 平摊重排后的单日合规工作日结构
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -649,7 +701,11 @@ mod tests {
 
         // 投入 3.5 小时 -> 0.5 天 -> ¥1500
         let hours = 3.5;
-        let days = BillingEngine::calculate_billable_days(hours, project.hours_per_day, project.day_calc_mode);
+        let days = BillingEngine::calculate_billable_days(
+            hours,
+            project.hours_per_day,
+            project.day_calc_mode,
+        );
         let (rate, amount) = BillingEngine::calculate_amount(&project, hours, days);
 
         assert_eq!(days, 0.5);

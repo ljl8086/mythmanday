@@ -9,7 +9,6 @@ pub mod client;
 pub use client::{
     download_whisper_model_file, find_whisper_binary, find_whisper_model, get_asr_runtime_status,
     get_whisper_models_dir, AiBatchParsedItem, AiConfig, AiError, AiSummarizer, AiTimeSlotOption,
-    AiWorkEvaluationRequest, AiWorkEvaluationResult, AsrConfig, AsrRuntimeStatus, AvailableModelInfo,
-    StructuredDeliverableReport, WhisperModelInfo, WorkCategory,
+    AiWorkEvaluationRequest, AiWorkEvaluationResult, AsrConfig, AsrRuntimeStatus,
+    AvailableModelInfo, StructuredDeliverableReport, WhisperModelInfo, WorkCategory,
 };
-

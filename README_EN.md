@@ -1,80 +1,166 @@
-# MythManDay (The Mythical Man-Day)
+# 🧙‍♂️ MythManDay (The Mythical Man-Day)
 
 [![CI Status](https://github.com/ljl8086/mythmanday/actions/workflows/ci.yml/badge.svg)](https://github.com/ljl8086/mythmanday/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ljl8086/mythmanday?include_prereleases&label=version&color=blue)](https://github.com/ljl8086/mythmanday/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
-[![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8.svg?logo=tauri&logoColor=white)](https://v2.tauri.app/)
+[![Stars](https://img.shields.io/github/stars/ljl8086/mythmanday?style=flat-square&logo=github&color=gold)](https://github.com/ljl8086/mythmanday/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8.svg?style=flat-square&logo=tauri&logoColor=white)](https://v2.tauri.app/)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/ljl8086/mythmanday/releases)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
-[**中文文档**](README.md) | **English**
+[**中文说明**](README.md) | **English**
 
-> **A local-first, multi-channel time tracking and contract billing platform tailored for modern AI-assisted software development.**
+> **“In the AI era, adding manpower to a late software project makes it later;  
+> but tracking keystrokes with traditional punch-clocks only punishes your high efficiency.”**  
+> —— In tribute to *The Mythical Man-Month* and every modern developer burdened by timesheets.
+
+**The Commercial Timesheet & Billing Platform for Indie Hackers, Consultants, and Dev Studios.**  
+**End the nightmare of monthly manual Excel spreadsheets. Turn every line of code, 3-hour client meeting, and parallel session into auditable, contract-compliant billable man-days.**
 
 ![MythManDay Dashboard](docs/images/dashboard_preview.png)
 
 ---
 
-## 💡 Why MythManDay?
+## 🤯 Are You Suffering from Monthly "Timesheet Hell"?
 
-In the era of AI-assisted engineering and autonomous coding agents, developer workflow has changed fundamentally:
-- **The Efficiency Paradox**: Simply logging active keystroke hours penalizes high-leverage engineers who ship faster with AI.
-- **Concurrent Multitasking**: Running background agents, automated test suites, and compilation workflows while simultaneously attending architecture reviews or client syncs cannot be represented by traditional single-threaded stopwatches.
-- **Zero-Commit Gaps**: Strategic developer value is often spent in design discussions, problem triage, and verbal client alignments without Git commits, leaving developers vulnerable during milestone billing.
-- **Commercial Man-Day Billing**: Enterprises, client contracts, and consulting engagements operate on **Man-Days** and milestone rules that require auditable, fair, and contract-aligned settlement models.
+If you freelance, consult, or run a software development boutique, you know these frustrating moments:
 
-**MythManDay is engineered to solve these challenges.**
+### 1. Manual Excel Torture: Month-End Amnesia & Fabricated Entries
+- **The Reality**: The client demands a detailed timesheet before releasing payment. Staring at an empty spreadsheet, you dig frantically through chat logs, calendars, and git commits just to remember what you did on the 10th.
+- **The Agony**: Hand-tweaking hours with a calculator to make sure no day exceeds 8 hours, shifting overtime across weekdays, only to have broken formulas or formatting rejected by strict accounting departments.
 
----
+### 2. The 3-Hour Meeting Trap: Zero Commits, Zero Proof
+- **The Reality**: You spend half the day on a video call negotiating architecture boundaries, debugging client staging environments, and clarifying specs. You are mentally exhausted, but **your Git commit log is 100% blank**.
+- **The Trap**: You bill "4 hours: Architecture meeting," and the client pushes back: *"Four hours just to chat? Cut that in half."* Without a recorded paper trail, you're forced to take the hit.
 
-## ✨ Key Features
+### 3. The AI Efficiency Paradox: The Faster You Deliver, The Less You Earn?
+- **The Reality**: Using your senior architecture skills combined with AI, you build in 1 day what used to take 5 days. If you log 8 hours on a traditional timer, do you only bill for 1 day? **Your extreme efficiency earns you a pay cut instead of a premium!**
 
-- **⚡ Multi-Channel Parallel Tracking**: Run independent stopwatches for multiple client projects and personal initiatives simultaneously. Accurately capture multi-project engagement without mutually exclusive constraints.
-- **⚖️ Four Contract Settlement Strategies**:
-  > ⚠️ **Auditability Note**: The platform strictly separates **raw physical elapsed time** (immutable ground truth) from **contract billing calculations** (commercial rules). Raw work logs remain tamper-proof and fully auditable.
-  - **Contract Peak Shaving & Valley Filling**: Caps daily billable hours at 8h (1.0 man-day), automatically balancing weekly workload across eligible workdays while excluding weekends.
-  - **Consultant Minimum Guarantee**: Automatically guarantees 1.0 man-day baseline upon any qualified engagement, carrying over surplus hours to supplementary billing days.
-  - **Capped Postpone Carryover**: Strictly enforces an 8h daily billing cap, rolling overflow forward as sequential billing days.
-  - **Proportional Physical Ratio**: Pure time-and-materials mode converting actual physical hours proportionally (`hours / 8.0`) without smoothing.
-- **🏢 Commercial Billing & Granularity Rules**:
-  - Flexible billing units: By Day (default minimum 0.5 day) or by Hour.
-  - Multi-currency: CNY (`¥`), USD (`$`), EUR (`€`), HKD (`HK$`), JPY (`¥`), GBP (`£`), etc.
-  - Step rounding modes: Ceiling (round up), Half-up (standard), or Floor (truncate).
-  - Minimum step control: 0.5, 1.0, 0.25, or 0.1 increments.
-- **🔒 Global Amount Privacy Mask**:
-  - One-click top-bar toggle to hide monetary rates and totals across dashboards, time entries, and reports during public presentations or internal team syncs.
-- **📊 Multi-Dimensional Excel Statement Export**:
-  - Batch export across multiple projects and billing months into clean `.xlsx` workbooks.
-  - Automatically splits billing months into dedicated sheets with enterprise layout, wrapped delivery scopes, and configurable rate privacy switches.
-- **🎙️ Hardware-Level Audio Meeting Evidence**:
-  - Native cross-platform sound card audio capture (`cpal`), recording meetings directly into local tamper-evident WAV archives.
-- **🤖 Git Activity Sniffing & AI Summaries**:
-  - Inspects local repository commits and code diffs, distilling fragmented commit messages into client-ready structured milestone reports.
-- **🛡️ Local-First & Zero Data Telemetry**:
-  - Built on embedded SQLite with automatic schema migrations. No telemetry, no cloud dependency, and total confidentiality.
+### 4. NDA & Commercial Secrecy on Public Cloud SaaS
+- **The Reality**: Why should your hourly billing rates, client roster, and confidential meeting discussions be uploaded to third-party US-hosted SaaS tools like Toggl or Clockify?
 
 ---
 
-## 🏗️ Architecture
+## 💡 How MythManDay Destroys the Old Workflow
 
-```text
-mythmanday/
-├── Cargo.toml                    # Root workspace manifest
-├── install.sh                    # Linux desktop installer (menus, icons, binaries)
-├── uninstall.sh                  # Clean uninstallation script
-├── scripts/
-│   ├── build-deb.sh              # Debian / Ubuntu package builder
-│   └── publish-ppa.sh            # Ubuntu Launchpad PPA automated publisher
-├── docs/
-│   └── BUILD.md                  # Comprehensive cross-platform build guide
-├── frontend/                     # Modern GUI built with React 19 + TypeScript + Tailwind CSS
-└── crates/
-    ├── myth-core/                # State machines, domain models, and settlement engines
-    ├── myth-db/                  # Embedded SQLite storage & auto-migrations
-    ├── myth-git/                 # Git commit inspector & diff extractor
-    ├── myth-audio/               # Cross-platform hardware audio recorder (cpal + hound)
-    ├── myth-ai/                  # Structured delivery summary generator
-    ├── myth-app/                 # Tauri 2.0 application entrypoint (mythmanday-app)
-    └── myth-desktop/             # Host utilities and system tray integration
+| Dimension | Manual Handcrafted Excel | Traditional Cloud SaaS (Toggl / Clockify) | **MythManDay** |
+| :--- | :--- | :--- | :--- |
+| **Tracking** | Forgotten, retrospective guesswork | Single-task serial timers; tedious switching | **Parallel multi-channel**, one-click effortless tracking |
+| **Meetings & Audio** | 0 commit evidence; vulnerable to rate cuts | Plain time log; zero substantive proof | **Record on-the-fly + Local AI summary**, auto-linked to deliverables |
+| **AI Deliverables** | Vague, hand-typed daily reports | No access to local git or dev context | **Git Commits + Code Diffs + Audio** full-pipeline structured extraction |
+| **Contract Rules** | Manual calculator hacks for day minimums | Primitive math (hours × rate) without contract logic | **4 Built-in Contract Engines** (smoothing, consultant floor, rollover) |
+| **Exporting Bills** | Hours spent reformatting broken sheets | Clunky CSVs/PDFs rejected by enterprise finance | **Instant multi-dimensional `.xlsx`** (auto monthly sheets, finance-ready) |
+| **Data Privacy** | Local, but prone to corruption/loss | Forced cloud upload; rates & clients exposed | **100% Local SQLite**, one-click stealth mode for rates |
+
+---
+
+## ✨ Core Features
+
+### 📊 1. Multi-Dimensional Excel Commercial Timesheet Export
+- **One-Click Batch Export**: Select multiple projects and months to produce standardized, professional `.xlsx` workbooks.
+- **Automatic Monthly Sheets**: Every project generates a clean workbook with separate monthly sheets, styled business headers, automatic line wrapping, and pure numerical formulas.
+- **Configurable Privacy Columns**: Toggle whether billing rates and amounts are exported. Omitting financial columns cleanly reflows the table into a compliant 7-column timesheet.
+
+### 🎙️ 2. Meeting Audio Evidence & Local Voice Capture
+- **Meeting = Billable Time**: Start a voice memo to activate project tracking; meeting duration seamlessly solidifies into legitimate billable records.
+- **Automated MP3 Archiving**: Cleanly resamples audio to 16kHz mono and compresses raw captures into lightweight MP3s upon session end.
+- **Local-First Whisper ASR**: Transcribe speech locally without cloud leaks, adhering 100% to commercial Non-Disclosure Agreements (NDAs).
+
+### 🤖 3. End-to-End AI-Assisted Deliverables
+- **Structured Executive Meeting Summaries**:
+  Cleans hallucinations and speech filler, extracting actionable **Discussion Topics**, **Architecture Decisions**, and **Action Items**, directly appended to the day's timesheet log.
+- **Git Commit & Diff Synthesis**:
+  Inspects local repository commits and code diffs over specified time windows, using LLMs to compile messy commit histories into polished client deliverable reports.
+- **Local & Private LLM Friendly**: Connect seamlessly with local Ollama/vLLM endpoints or private OpenAI-compatible gateways.
+
+### ⚙️ 4. Four Commercial Contract Settlement Engines
+> ⚠️ **Strict Separation of Facts & Rules**: Raw elapsed physical seconds are stored immutably. Contract man-days are evaluated dynamically based on commercial agreements.
+- **Contract Compliant Smoothing**: Caps billable time at 8h/day (1.0 man-day), backfilling deficit historical weekdays or rolling over into future working days (excluding weekends).
+- **Consultant Minimum 8h Floor**: Any qualifying engagement on a calendar day bills as a minimum 1.0 man-day floor; surplus time rolls forward.
+- **Cap & Rollover**: 8h daily cap, carrying forward overflow hours into subsequent billing cycles.
+- **Physical Proportional**: Exact linear conversion (Elapsed Hours / 8.0) without smoothing.
+- **Granular Stepped Rounding**: Supports Ceil, Round, and Floor steps (0.5d, 1.0d, 0.25d).
+
+### 🔄 5. Multi-Channel Parallel Tracking & AFK Deduction
+- Run Channel A (compiling/testing), Channel B (client communication), and Channel C (R&D) concurrently.
+- One-click AFK idle time deduction ensures honest tracking.
+
+### 🕵️ 6. 100% Local-First & Global Amount Stealth Mode
+- **Zero Cloud Exposure**: All rates, logs, clients, and recordings stay securely inside your local SQLite database.
+- **One-Click Stealth Mode**: Toggle hidden amounts in header to mask billing figures instantly during screen shares, client demos, or cafe work.
+
+---
+
+## 🗺️ Roadmap: Native Model Context Protocol (MCP) Support
+
+> **MythManDay is evolving into the essential billing & timesheet infrastructure for AI Coding Agents.**
+
+As autonomous AI development tools (Cursor, Claude Desktop, Windsurf) become the standard, we are introducing **Native Local MCP Server** capabilities:
+
+```mermaid
+flowchart LR
+    subgraph IDE["🤖 AI Coding Ecosystem (Cursor / Claude / Windsurf)"]
+        Agent["AI Coding Agent"]
+    end
+
+    subgraph MCP["🔌 Native Local MCP Server"]
+        M1["start_timer / stop_timer"]
+        M2["record_deliverable"]
+        M3["export_timesheet_excel"]
+    end
+
+    subgraph Core["🧙‍♂️ MythManDay Desktop Engine"]
+        Engine["4 Contract Settlement Engines"]
+        DB[("Local SQLite Facts")]
+        Excel["Multi-Sheet .xlsx Timesheets"]
+    end
+
+    Agent <-->|MCP Protocol| MCP
+    MCP <--> Core
+```
+
+- 🔌 **Autonomous Agent Tracking**:
+  When you dispatch a task in Cursor or Claude, the agent automatically invokes `start_timer(project="client_a")` via MCP, stopping upon task completion.
+- 📊 **Automatic Deliverable Injection**:
+  Upon test verification, the agent pushes code summaries and resolved issues directly into the timesheet log.
+- 💬 **Conversational Billing**:
+  Ask your agent: *"Export last month's smoothed timesheet for Client B"*, and receive the finalized `.xlsx` workbook directly inside your chat window.
+
+---
+
+## 🏗️ Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Input["📥 Inputs & Sensors"]
+        T1["Parallel Stopwatches (Channel A/B/C)"]
+        T2["Git Commit & Diff Sniffer"]
+        T3["Voice Audio & Local Whisper ASR"]
+        T4["AI Agent Sessions (Upcoming MCP)"]
+    end
+
+    subgraph Storage["💾 Local-First Facts Layer"]
+        DB[("Embedded SQLite Tables<br/>(Immutable Raw Elapsed Seconds)")]
+    end
+
+    subgraph Core["⚙️ Contract Settlement Engine"]
+        E1["Compliant Smoothing (8h Cap / Weekday Backfill)"]
+        E2["Consultant Minimum (1.0 Man-Day Floor)"]
+        E3["Cap & Rollover (Carryforward Overflow)"]
+        E4["Physical Proportional (Exact Linear Math)"]
+    end
+
+    subgraph Presentation["🖥️ Output & Deliverables (Tauri 2.0 IPC)"]
+        UI["React 19 Modern Dashboard (Rate Stealth)"]
+        XLSX["Multi-Sheet Excel Timesheets (.xlsx)"]
+        MD["Markdown / HTML Deliverable Reports"]
+        MCP_OUT["MCP Protocol Responses for Agents"]
+    end
+
+    Input --> DB
+    DB --> Core
+    Core --> Presentation
 ```
 
 ---
@@ -83,88 +169,72 @@ mythmanday/
 
 ### 1. Run Unit Tests
 ```bash
-cargo test -p myth-core -p myth-db
+cargo test -p myth-core -p myth-db -p myth-git -p myth-ai
 ```
 
 ### 2. Local Development
 ```bash
-# Start frontend Vite dev server (port 1420)
+# 1. Start Vite development server
 cd frontend && pnpm install && pnpm dev --port 1420
 
-# In another terminal, run the desktop client
+# 2. Launch Tauri desktop app in another terminal
 cargo run --bin mythmanday-app
 ```
 
----
+### 3. Installation & Distribution
 
-## 📦 Building & Releases
-
-For detailed multi-platform build requirements on **Linux**, **Windows**, and **macOS**, please refer to:  
-📖 **[Cross-Platform Build & Packaging Guide (docs/BUILD.md)](docs/BUILD.md)**.
-
-### Quick Packaging References:
-
-#### 🐧 Ubuntu Launchpad PPA Install (Recommended)
-Supports Ubuntu 22.04 (`jammy`), 24.04 (`noble`), 26.04 (`resolute`), and newer releases:
+#### 🐧 Ubuntu PPA Quick Install
 ```bash
-# 1. Add PPA repository (once)
 sudo add-apt-repository ppa:ljl8086/ppa
 sudo apt update
-
-# 2. Install via apt
 sudo apt install mythmanday
-
-# 3. Launch via desktop app menu or terminal
 mythmanday
-
-# Upgrade / Uninstall:
-# sudo apt update && sudo apt upgrade mythmanday
-# sudo apt remove mythmanday
 ```
 
-#### 🛠️ Linux (Native User Script Install)
+#### 🛠️ Linux One-Click Script (Non-Root)
 ```bash
 chmod +x ./install.sh && ./install.sh
-# Launch via app launcher or run 'mythmanday' in terminal
 ```
 
-#### 📦 Linux (.deb Package)
+#### 📦 Build Debian / Ubuntu `.deb` Package
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
-# Install: sudo apt install ./dist/mythmanday_0.1.0_amd64.deb
 ```
 
-#### 🪟 Windows (.exe / .msi)
+#### 🪟 Windows Build
 ```powershell
 cd frontend && pnpm build && cd ..
 cargo build --release --bin mythmanday-app
-# Or bundle with installer: cd frontend && pnpm tauri build
 ```
 
-#### 🍏 macOS (.dmg / Universal Binary)
+#### 🍏 macOS Build
 ```bash
 cd frontend && pnpm build && cd ..
 cargo build --release --bin mythmanday-app
-# Generate DMG: cd frontend && pnpm tauri build --bundles dmg,app
 ```
 
 ---
 
 ## 🛠️ Technology Stack
 
-| Component | Official Reference | Architectural Role |
+| Component | Official Reference | Role |
 | :--- | :--- | :--- |
-| **Rust 1.80+** | [www.rust-lang.org](https://www.rust-lang.org/) | High-performance, memory-safe parallel tracking & billing engine |
-| **Tauri 2.0** | [v2.tauri.app](https://v2.tauri.app/) | Secure, lightweight native desktop runtime and IPC bridge |
-| **React 19** | [react.dev](https://react.dev/) | Modern declarative component system for responsive desktop UI |
-| **Tailwind CSS** | [tailwindcss.com](https://tailwindcss.com/) | Atomic styling with modern slate dark-mode sidebar layout |
-| **SQLite (rusqlite)** | [www.sqlite.org](https://www.sqlite.org/) | Embedded local-first storage ensuring zero cloud exposure |
+| **Rust 1.80+** | [www.rust-lang.org](https://www.rust-lang.org/) | Core parallel timing and contract billing engine |
+| **Tauri 2.0** | [v2.tauri.app](https://v2.tauri.app/) | Secure, lightweight native cross-platform desktop runtime |
+| **React 19** | [react.dev](https://react.dev/) | High-performance declarative user interface |
+| **Tailwind CSS** | [tailwindcss.com](https://tailwindcss.com/) | Modern atomic styling with dark slate theme |
+| **SQLite (rusqlite)** | [www.sqlite.org](https://www.sqlite.org/) | Embedded local-first storage safeguarding commercial privacy |
 
 ---
 
-## 📄 License & Intellectual Property
+## 📈 Star History
 
-- **Official Name**: 人天神话-开发者人天中台 (MythManDay)
-- **Copyright**: Copyright (c) 2026 ljl8086 <ljl8086@gmail.com>. All Rights Reserved.
+[![Star History Chart](https://api.star-history.com/svg?repos=ljl8086/mythmanday&type=Date)](https://star-history.com/#ljl8086/mythmanday&Date)
+
+---
+
+## 📜 Intellectual Property & License
+
+- **Software Name**: 人天神话-开发者人天中台 (MythManDay)
+- **Copyright**: Copyright (c) 2026 ljl8086 <ljl8086@126.com>. All Rights Reserved.
 - **License**: Released under the [MIT License](LICENSE).
-- **Contributing**: Please review [CONTRIBUTING.md](CONTRIBUTING.md) before submitting pull requests.
