@@ -1045,6 +1045,26 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
                 let _ = guard.insert_audio_clip(&target);
             }
         }
+
+        // 录音转写完成后，自动将临时 WAV 压缩转码为 MP3 归档，彻底释放磁盘空间并丢弃原 WAV
+        if audio_file_clone.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
+            let path_to_convert = audio_file_clone.clone();
+            let converted_mp3 = tokio::task::spawn_blocking(move || {
+                myth_audio::convert_wav_to_mp3(&path_to_convert)
+            }).await;
+
+            if let Ok(Ok(mp3_path)) = converted_mp3 {
+                if mp3_path.exists() {
+                    let _ = std::fs::remove_file(&audio_file_clone);
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&clip_id) {
+                        target.audio_path = mp3_path.display().to_string();
+                        let _ = guard.insert_audio_clip(&target);
+                    }
+                }
+            }
+        }
+
         let _ = app_handle.emit("meeting_clip_ready", meeting_id.to_string());
     });
 
@@ -1103,6 +1123,26 @@ async fn retry_transcribe_audio_clip(app: AppHandle, state: State<'_, AppState>,
                 let _ = guard.insert_audio_clip(&target);
             }
         }
+
+        // 若历史片段仍为临时 WAV，转写完成后自动转为 MP3 归档并清理原 WAV
+        if audio_file.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
+            let path_to_convert = audio_file.clone();
+            let converted_mp3 = tokio::task::spawn_blocking(move || {
+                myth_audio::convert_wav_to_mp3(&path_to_convert)
+            }).await;
+
+            if let Ok(Ok(mp3_path)) = converted_mp3 {
+                if mp3_path.exists() {
+                    let _ = std::fs::remove_file(&audio_file);
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut target)) = guard.get_audio_clip(&cid) {
+                        target.audio_path = mp3_path.display().to_string();
+                        let _ = guard.insert_audio_clip(&target);
+                    }
+                }
+            }
+        }
+
         let _ = app_handle.emit("meeting_clip_ready", meeting_id.to_string());
     });
 
