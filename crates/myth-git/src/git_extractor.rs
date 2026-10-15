@@ -152,7 +152,9 @@ impl GitScanner {
             .output()?;
 
         let mut raw_patch = if patch_out.status.success() {
-            String::from_utf8_lossy(&patch_out.stdout).trim().to_string()
+            String::from_utf8_lossy(&patch_out.stdout)
+                .trim()
+                .to_string()
         } else {
             String::new()
         };
@@ -171,7 +173,9 @@ impl GitScanner {
                 .output()
             {
                 if log_patch.status.success() {
-                    raw_patch = String::from_utf8_lossy(&log_patch.stdout).trim().to_string();
+                    raw_patch = String::from_utf8_lossy(&log_patch.stdout)
+                        .trim()
+                        .to_string();
                 }
             }
         }
@@ -308,9 +312,18 @@ impl GitScanner {
             let c = &commits[0];
             summary_lines.push(format!("{} [{}]", c.message, c.hash));
         } else {
-            summary_lines.push(format!("完成代码研发与提交 (共 {} 次提交)：", commits.len()));
+            summary_lines.push(format!(
+                "完成代码研发与提交 (共 {} 次提交)：",
+                commits.len()
+            ));
             for (idx, c) in commits.iter().enumerate() {
-                summary_lines.push(format!("{}. {} [{}] ({})", idx + 1, c.message, c.hash, c.time_str));
+                summary_lines.push(format!(
+                    "{}. {} [{}] ({})",
+                    idx + 1,
+                    c.message,
+                    c.hash,
+                    c.time_str
+                ));
             }
         }
 
@@ -400,11 +413,14 @@ impl GitScanner {
         }
 
         let commits = Self::read_commit_records(path, since, until)?;
-        let mut map: std::collections::BTreeMap<String, Vec<GitCommitRecord>> = std::collections::BTreeMap::new();
+        let mut map: std::collections::BTreeMap<String, Vec<GitCommitRecord>> =
+            std::collections::BTreeMap::new();
 
         for c in commits {
             let date_key = if let Ok(dt) = DateTime::parse_from_rfc3339(&c.datetime) {
-                dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
             } else if c.datetime.len() >= 10 {
                 c.datetime[0..10].to_string()
             } else {

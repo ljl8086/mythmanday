@@ -730,11 +730,18 @@ export function App() {
       return () => clearInterval(idleInterval);
     }
 
-    // 仅在有计时任务时，每秒轻量轮询项目计时状态
+    // 仅在有计时任务时，每秒轻量轮询项目计时状态与录音横幅，每 5 秒同步一次工时流水
+    let tickCount = 0;
     const timerInterval = setInterval(async () => {
       try {
         const projs = await invoke<Project[]>("get_projects");
         setProjects(projs);
+        const stats = await invoke<GlobalStats>("get_global_stats");
+        setGlobalStats(stats);
+        tickCount++;
+        if (tickCount % 5 === 0 && selectedProjectId) {
+          refreshProjectDetails(selectedProjectId, selectedMonth);
+        }
       } catch (e) {
         console.error(e);
       }
@@ -2032,7 +2039,15 @@ export function App() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => invoke("toggle_audio_pause")}
+                onClick={async () => {
+                  try {
+                    await invoke("toggle_audio_pause");
+                    const stats = await invoke<GlobalStats>("get_global_stats");
+                    setGlobalStats(stats);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                }}
                 className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer"
               >
                 {globalStats.is_audio_paused ? "▶ 继续录音" : "⏸ 暂停录音"}

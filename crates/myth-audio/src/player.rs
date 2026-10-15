@@ -54,7 +54,13 @@ impl AudioPlayer {
             .arg(path)
             .spawn()
             .or_else(|_| Command::new("pw-play").arg(path).spawn())
-            .or_else(|_| Command::new("ffplay").arg("-nodisp").arg("-autoexit").arg(path).spawn())
+            .or_else(|_| {
+                Command::new("ffplay")
+                    .arg("-nodisp")
+                    .arg("-autoexit")
+                    .arg(path)
+                    .spawn()
+            })
             .or_else(|_| Command::new("aplay").arg(path).spawn())
             .or_else(|_| Command::new("xdg-open").arg(path).spawn())
             .map_err(|e| format!("启动音频播放进程失败: {}", e))?;

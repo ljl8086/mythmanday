@@ -45,7 +45,8 @@ mod tests {
         }
 
         // 转换重采样
-        let converted = ensure_whisper_compatible_wav(&input_wav).expect("conversion should succeed");
+        let converted =
+            ensure_whisper_compatible_wav(&input_wav).expect("conversion should succeed");
         assert!(converted.exists());
 
         // 验证转换后的 WAV 规格必须严格是 16kHz 单声道 16-bit
@@ -60,4 +61,3 @@ mod tests {
         let _ = std::fs::remove_file(&converted);
     }
 }
-

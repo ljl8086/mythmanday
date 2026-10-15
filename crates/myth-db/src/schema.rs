@@ -111,4 +111,3 @@ CREATE INDEX IF NOT EXISTS idx_meetings_project_id ON meetings (project_id);
 CREATE INDEX IF NOT EXISTS idx_meeting_clips_meeting_id ON meeting_audio_clips (meeting_id);
 CREATE INDEX IF NOT EXISTS idx_quick_notes_project_id ON quick_notes (project_id);
 "#;
-

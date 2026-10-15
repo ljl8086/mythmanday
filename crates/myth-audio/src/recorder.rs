@@ -94,7 +94,10 @@ impl AudioRecorder {
 
     /// 获取当前麦克风实时音量等级 (0.0 ~ 1.0)，用于前端绘制跳动声波
     pub fn current_volume(&self) -> f32 {
-        *self.current_volume.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .current_volume
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 获取本次录音累计秒数
@@ -391,9 +394,9 @@ pub fn ensure_whisper_compatible_wav(input_path: &Path) -> Result<PathBuf, Strin
         }
     }
 
-    // 3. 无 ffmpeg 时，利用内建纯 Rust 算法进行多声道降混与线性插值重采样
-    let mut reader = hound::WavReader::open(input_path)
-        .map_err(|e| format!("读取原始音频失败: {}", e))?;
+    // 3. 无 ffmpeg 时，利用内建纯 Rust 流式算法进行多声道降混与线性插值重采样 (内存恒定 O(1)，无惧大音频)
+    let reader =
+        hound::WavReader::open(input_path).map_err(|e| format!("读取原始音频失败: {}", e))?;
     let in_spec = reader.spec();
     let in_channels = in_spec.channels as usize;
     let in_rate = in_spec.sample_rate as f64;
@@ -403,69 +406,94 @@ pub fn ensure_whisper_compatible_wav(input_path: &Path) -> Result<PathBuf, Strin
         return Err("非法音频规格参数".to_string());
     }
 
-    // 读取所有样本并归一化为 f32 [-1.0, 1.0]
-    let raw_samples: Vec<f32> = match in_spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
-        hound::SampleFormat::Int => {
-            if in_spec.bits_per_sample == 8 {
-                // 8-bit PCM 规范定义为无符号数 (0~255，静音中心为 128)，减去偏置以防引入直流偏置
-                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| ((s as f64 - 128.0) / 128.0) as f32).collect()
-            } else {
-                let max_val = match in_spec.bits_per_sample {
-                    16 => 32768.0,
-                    24 => 8388608.0,
-                    32 => 2147483648.0,
-                    _ => 32768.0,
-                };
-                reader.samples::<i32>().filter_map(|s| s.ok()).map(|s| (s as f64 / max_val) as f32).collect()
-            }
-        }
-    };
-
-    if raw_samples.is_empty() {
-        return Err("音频数据为空".to_string());
-    }
-
-    // 多声道合并为单声道 (Averaging)
-    let mono_samples: Vec<f32> = raw_samples
-        .chunks_exact(in_channels)
-        .map(|frame| frame.iter().sum::<f32>() / (in_channels as f32))
-        .collect();
-
-    if mono_samples.is_empty() {
-        return Err("声道合并后样本为空".to_string());
-    }
-
-    // 线性插值重采样至 16000 Hz
-    let out_len = ((mono_samples.len() as f64) * out_rate / in_rate).round() as usize;
-    let mut resampled: Vec<i16> = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let src_idx = (i as f64) * in_rate / out_rate;
-        let idx0 = src_idx.floor() as usize;
-        let frac = (src_idx - idx0 as f64) as f32;
-        let s0 = *mono_samples.get(idx0).unwrap_or(&0.0);
-        let s1 = *mono_samples.get(idx0 + 1).unwrap_or(&s0);
-        let val = (s0 + (s1 - s0) * frac).clamp(-1.0, 1.0);
-        resampled.push((val * 32767.0).round() as i16);
-    }
-
-    // 写入标准 16kHz 单声道 16-bit PCM WAV
     let out_spec = hound::WavSpec {
         channels: 1,
         sample_rate: 16000,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let file = std::fs::File::create(&target_path)
-        .map_err(|e| format!("创建合规 WAV 文件失败: {}", e))?;
+    let file =
+        std::fs::File::create(&target_path).map_err(|e| format!("创建合规 WAV 文件失败: {}", e))?;
     let mut writer = hound::WavWriter::new(std::io::BufWriter::new(file), out_spec)
         .map_err(|e| format!("初始化 WAV 写入器失败: {}", e))?;
 
-    for s in resampled {
-        writer.write_sample(s).map_err(|e| format!("写入样本失败: {}", e))?;
+    let max_int_val = match in_spec.bits_per_sample {
+        8 => 128.0,
+        16 => 32768.0,
+        24 => 8388608.0,
+        32 => 2147483648.0,
+        _ => 32768.0,
+    };
+
+    let mut float_samples: Box<dyn Iterator<Item = f32>> = match in_spec.sample_format {
+        hound::SampleFormat::Float => Box::new(reader.into_samples::<f32>().filter_map(|s| s.ok())),
+        hound::SampleFormat::Int => Box::new(
+            reader
+                .into_samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(move |s| (s as f64 / max_int_val) as f32),
+        ),
+    };
+
+    // 单声道流式生成器
+    let mut mono_stream = std::iter::from_fn(move || {
+        let mut sum = 0.0f32;
+        let mut count = 0usize;
+        for _ in 0..in_channels {
+            if let Some(s) = float_samples.next() {
+                sum += s;
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if count == 0 {
+            None
+        } else {
+            Some(sum / (count as f32))
+        }
+    });
+
+    let mut s0 = match mono_stream.next() {
+        Some(s) => s,
+        None => return Err("音频数据为空".to_string()),
+    };
+    let mut s1 = mono_stream.next().unwrap_or(s0);
+
+    let mut in_frame: usize = 0;
+    let mut out_frame: usize = 0;
+
+    loop {
+        let target_in = (out_frame as f64) * in_rate / out_rate;
+        let target_floor = target_in.floor() as usize;
+
+        while in_frame < target_floor {
+            s0 = s1;
+            if let Some(next_s) = mono_stream.next() {
+                s1 = next_s;
+                in_frame += 1;
+            } else {
+                break;
+            }
+        }
+
+        if in_frame < target_floor {
+            break;
+        }
+
+        let frac = (target_in - (target_floor as f64)) as f32;
+        let val = (s0 + (s1 - s0) * frac).clamp(-1.0, 1.0);
+        let sample_i16 = (val * 32767.0).round() as i16;
+        writer
+            .write_sample(sample_i16)
+            .map_err(|e| format!("写入样本失败: {}", e))?;
+
+        out_frame += 1;
     }
-    writer.finalize().map_err(|e| format!("写入完成失败: {}", e))?;
+
+    writer
+        .finalize()
+        .map_err(|e| format!("写入完成失败: {}", e))?;
 
     Ok(target_path)
 }
-

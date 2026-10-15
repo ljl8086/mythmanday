@@ -25,7 +25,15 @@ use uuid::Uuid;
 
 fn extract_wav_path(summary: Option<&str>) -> Option<String> {
     if let Some(s) = summary {
-        for word in s.split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '(' || c == ')' || c == ',' || c == ';') {
+        for word in s.split(|c: char| {
+            c.is_whitespace()
+                || c == '['
+                || c == ']'
+                || c == '('
+                || c == ')'
+                || c == ','
+                || c == ';'
+        }) {
             if word.ends_with(".wav") && std::path::Path::new(word).exists() {
                 return Some(word.to_string());
             }
@@ -58,7 +66,10 @@ fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> 
         .map(|p| {
             let rate_info = match p.billing_type {
                 BillingType::Daily => {
-                    format!("{:.0} {} / 天 ({}h基准)", p.daily_rate, p.currency, p.hours_per_day)
+                    format!(
+                        "{:.0} {} / 天 ({}h基准)",
+                        p.daily_rate, p.currency, p.hours_per_day
+                    )
                 }
                 BillingType::Hourly => format!("{:.0} {} / 小时", p.hourly_rate, p.currency),
                 BillingType::FixedCap => format!("固定总包 {:.0} {}", p.daily_rate, p.currency),
@@ -86,7 +97,6 @@ fn build_project_items(projects: &[Project], db: &Database) -> Vec<ProjectItem> 
         })
         .collect()
 }
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -158,7 +168,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if restored_count > 0 {
-        app.set_toast_message(format!("已自动恢复崩溃/重启前运行中的 {} 个通道，工时精准延续！", restored_count).into());
+        app.set_toast_message(
+            format!(
+                "已自动恢复崩溃/重启前运行中的 {} 个通道，工时精准延续！",
+                restored_count
+            )
+            .into(),
+        );
     }
 
     let projects_ref = Rc::new(RefCell::new(projects));
@@ -199,10 +215,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (rate, rate_str) = match first_p.billing_type {
             BillingType::Daily => {
                 let r = (first_p.daily_rate / first_p.hours_per_day.max(1.0)).round();
-                (r, format!("{:.0} {} / 天 (约 {:.0}/h)", first_p.daily_rate, first_p.currency, r))
+                (
+                    r,
+                    format!(
+                        "{:.0} {} / 天 (约 {:.0}/h)",
+                        first_p.daily_rate, first_p.currency, r
+                    ),
+                )
             }
-            BillingType::Hourly => (first_p.hourly_rate.round(), format!("{:.0} {} / 小时", first_p.hourly_rate, first_p.currency)),
-            BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", first_p.daily_rate, first_p.currency)),
+            BillingType::Hourly => (
+                first_p.hourly_rate.round(),
+                format!("{:.0} {} / 小时", first_p.hourly_rate, first_p.currency),
+            ),
+            BillingType::FixedCap => (
+                350.0,
+                format!("固定总包 {:.0} {}", first_p.daily_rate, first_p.currency),
+            ),
             BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
         };
         app.set_meeting_rate_input(format!("{:.0}", rate).into());
@@ -211,7 +239,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let model_for_refresh = model.clone();
     let current_selected_id = Rc::new(RefCell::new(
-        projects_ref.borrow().first().map(|p| p.id.to_string()).unwrap_or_default()
+        projects_ref
+            .borrow()
+            .first()
+            .map(|p| p.id.to_string())
+            .unwrap_or_default(),
     ));
 
     let refresh_entries_ui = {
@@ -240,7 +272,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let audio_path = e.audio_path.clone().unwrap_or_else(|| {
                             extract_wav_path(e.summary.as_deref()).unwrap_or_default()
                         });
-                        let has_audio = !audio_path.is_empty() && std::path::Path::new(&audio_path).exists();
+                        let has_audio =
+                            !audio_path.is_empty() && std::path::Path::new(&audio_path).exists();
                         all_entries.push(EntryItem {
                             id: e.id.to_string().into(),
                             project_id: p.id.to_string().into(),
@@ -248,8 +281,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             duration_text: format_duration(e.raw_duration_secs).into(),
                             days_text: format!("{:.2} 天", e.billable_days).into(),
                             amount_text: format!("{} {:.2}", p.currency, e.total_amount).into(),
-                            summary_text: e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string()).into(),
-                            time_range: format!("{}-{}", start_local.format("%H:%M"), end_local.format("%H:%M")).into(),
+                            summary_text: e
+                                .summary
+                                .unwrap_or_else(|| "持续代码开发与测试交付".to_string())
+                                .into(),
+                            time_range: format!(
+                                "{}-{}",
+                                start_local.format("%H:%M"),
+                                end_local.format("%H:%M")
+                            )
+                            .into(),
                             date_str: start_local.format("%Y-%m-%d").to_string().into(),
                             has_audio,
                             audio_path: audio_path.into(),
@@ -260,10 +301,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 按照日期将选中项目的条目聚合为「一天一个卡片」
-            let mut days_map: std::collections::BTreeMap<String, Vec<EntryItem>> = std::collections::BTreeMap::new();
+            let mut days_map: std::collections::BTreeMap<String, Vec<EntryItem>> =
+                std::collections::BTreeMap::new();
             for item in &all_entries {
                 if item.project_id.as_str() == active_pid_str {
-                    days_map.entry(item.date_str.to_string()).or_default().push(item.clone());
+                    days_map
+                        .entry(item.date_str.to_string())
+                        .or_default()
+                        .push(item.clone());
                 }
             }
 
@@ -405,7 +450,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if !audio_player_timer.borrow().is_playing() {
                 if let Some(ui) = app_weak.upgrade() {
-                    if !ui.get_playing_audio_path().is_empty() || !ui.get_playing_entry_id().is_empty() {
+                    if !ui.get_playing_audio_path().is_empty()
+                        || !ui.get_playing_entry_id().is_empty()
+                    {
                         ui.set_playing_entry_id("".into());
                         ui.set_playing_audio_path("".into());
                     }
@@ -445,7 +492,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(mut item) = model_clone.row_data(idx) {
                     let elapsed = mgr.get_elapsed(&p.id);
                     let status = mgr.get_status(&p.id);
-                    let is_running = matches!(status, myth_core::timer::TimerStatus::Running { .. });
+                    let is_running =
+                        matches!(status, myth_core::timer::TimerStatus::Running { .. });
                     let is_paused = matches!(status, myth_core::timer::TimerStatus::Paused { .. });
 
                     if is_running {
@@ -456,9 +504,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     item.is_paused = is_paused;
                     item.timer_text = format_duration(elapsed).into();
 
-                    let billable_hours = BillingEngine::calculate_billable_hours(elapsed, p.rounding_minutes);
-                    let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
-                    let (_, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
+                    let billable_hours =
+                        BillingEngine::calculate_billable_hours(elapsed, p.rounding_minutes);
+                    let billable_days = BillingEngine::calculate_billable_days(
+                        billable_hours,
+                        p.hours_per_day,
+                        p.day_calc_mode,
+                    );
+                    let (_, amount) =
+                        BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
                     item.days_text = format!("{:.2} 人天", billable_days).into();
                     item.amount_text = format!("{} {:.2}", p.currency, amount).into();
@@ -480,7 +534,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for p in projs.iter() {
                     let status = mgr.get_status(&p.id);
                     if matches!(status, myth_core::timer::TimerStatus::Running { .. }) {
-                        let session_start = mgr.get_timer(&p.id).and_then(|t| t.session_start_at).unwrap_or(now);
+                        let session_start = mgr
+                            .get_timer(&p.id)
+                            .and_then(|t| t.session_start_at)
+                            .unwrap_or(now);
                         let elapsed = mgr.get_elapsed(&p.id);
                         let _ = db_timer.upsert_active_timer(&ActiveTimerRecord {
                             project_id: p.id,
@@ -542,7 +599,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(id) = Uuid::parse_str(id_str.as_str()) {
             timer_mgr_start.borrow_mut().start_channel(id);
             let now = Utc::now();
-            let session_start = timer_mgr_start.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or(now);
+            let session_start = timer_mgr_start
+                .borrow()
+                .get_timer(&id)
+                .and_then(|t| t.session_start_at)
+                .unwrap_or(now);
             let _ = db_start.upsert_active_timer(&ActiveTimerRecord {
                 project_id: id,
                 session_start_at: session_start,
@@ -571,7 +632,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let elapsed = timer_mgr_pause.borrow().get_elapsed(&id);
-            let session_start = timer_mgr_pause.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or_else(Utc::now);
+            let session_start = timer_mgr_pause
+                .borrow()
+                .get_timer(&id)
+                .and_then(|t| t.session_start_at)
+                .unwrap_or_else(Utc::now);
             let _ = db_pause.upsert_active_timer(&ActiveTimerRecord {
                 project_id: id,
                 session_start_at: session_start,
@@ -601,7 +666,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let now = Utc::now();
             let elapsed = timer_mgr_resume.borrow().get_elapsed(&id);
-            let session_start = timer_mgr_resume.borrow().get_timer(&id).and_then(|t| t.session_start_at).unwrap_or(now);
+            let session_start = timer_mgr_resume
+                .borrow()
+                .get_timer(&id)
+                .and_then(|t| t.session_start_at)
+                .unwrap_or(now);
             let _ = db_resume.upsert_active_timer(&ActiveTimerRecord {
                 project_id: id,
                 session_start_at: session_start,
@@ -654,26 +723,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let projs = projects_stop.borrow();
                 if let Some(p) = projs.iter().find(|proj| proj.id == id) {
-                    let billable_hours = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
-                    let billable_days = BillingEngine::calculate_billable_days(billable_hours, p.hours_per_day, p.day_calc_mode);
-                    let (rate, amount) = BillingEngine::calculate_amount(p, billable_hours, billable_days);
+                    let billable_hours =
+                        BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
+                    let billable_days = BillingEngine::calculate_billable_days(
+                        billable_hours,
+                        p.hours_per_day,
+                        p.day_calc_mode,
+                    );
+                    let (rate, amount) =
+                        BillingEngine::calculate_amount(p, billable_hours, billable_days);
 
                     // 3. 智能嗅探 Git 活动与便签记录
                     let mut git_summary = myth_git::GitActivitySummary::default();
                     if let Some(ref git_path) = p.git_repo_path {
-                        if let Ok(scanned) = GitScanner::extract_activity(git_path, start_at, end_at) {
+                        if let Ok(scanned) =
+                            GitScanner::extract_activity(git_path, start_at, end_at)
+                        {
                             git_summary = scanned;
                         }
                     }
 
                     let notes = db_stop.list_quick_notes(&id).unwrap_or_default();
-                    let user_notes: Vec<&str> = notes.iter()
+                    let user_notes: Vec<&str> = notes
+                        .iter()
                         .map(|n| n.content.as_str())
                         .filter(|s| !s.starts_with('['))
                         .collect();
 
                     // 4. 构建业务级规范工作成果摘要（绝不污染机器文件路径或内部调试标记）
-                    let is_meeting = p.name.contains("会议") || p.name.contains("沟通") || p.name.contains("评审") || saved_audio_file.is_some();
+                    let is_meeting = p.name.contains("会议")
+                        || p.name.contains("沟通")
+                        || p.name.contains("评审")
+                        || saved_audio_file.is_some();
                     let summary_desc = if is_meeting {
                         if !user_notes.is_empty() {
                             format!("会议沟通与决议：{}", user_notes.join("；"))
@@ -681,9 +762,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             format!("会议沟通与技术决策：{}", p.name)
                         }
                     } else if !git_summary.commits.is_empty() {
-                        format!("代码研发与提交 {} 次：{}", git_summary.commits.len(), git_summary.commits.join("; "))
+                        format!(
+                            "代码研发与提交 {} 次：{}",
+                            git_summary.commits.len(),
+                            git_summary.commits.join("; ")
+                        )
                     } else if git_summary.has_uncommitted_changes {
-                        format!("修改了 {} 个工作区文件，完成功能研发联调", git_summary.uncommitted_files.len())
+                        format!(
+                            "修改了 {} 个工作区文件，完成功能研发联调",
+                            git_summary.uncommitted_files.len()
+                        )
                     } else if !user_notes.is_empty() {
                         format!("阶段性研发与联调：{}", user_notes.join("；"))
                     } else {
@@ -711,7 +799,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     refresh_entries_stop();
 
                     if let Some(ui) = app_weak_stop.upgrade() {
-                        ui.set_toast_message(format!("工时已归档入库：{:.2} 人天", billable_days).into());
+                        ui.set_toast_message(
+                            format!("工时已归档入库：{:.2} 人天", billable_days).into(),
+                        );
                     }
 
                     // 5. 后台全自动静默调用 AI 润色提炼交付总结 / 会议纪要
@@ -720,13 +810,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let app_async = app_weak_stop.clone();
                     let proj_name = p.name.clone();
 
-                    let ai_provider = db_stop.get_setting("ai_provider").ok().flatten().unwrap_or_else(|| "codex".into());
-                    let ai_base = db_stop.get_setting("ai_base").ok().flatten().unwrap_or_else(|| "https://api.openai.com/v1".into());
-                    let ai_key = db_stop.get_setting("ai_key").ok().flatten().unwrap_or_default();
-                    let ai_model = db_stop.get_setting("ai_model").ok().flatten().unwrap_or_else(|| "gpt-4o-mini".into());
+                    let ai_provider = db_stop
+                        .get_setting("ai_provider")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "codex".into());
+                    let ai_base = db_stop
+                        .get_setting("ai_base")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "https://api.openai.com/v1".into());
+                    let ai_key = db_stop
+                        .get_setting("ai_key")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let ai_model = db_stop
+                        .get_setting("ai_model")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "gpt-4o-mini".into());
 
                     let is_cli = ai_provider == "agy" || ai_provider == "codex";
-                    if is_cli || !ai_key.is_empty() || ai_base.contains("localhost") || ai_base.contains("127.0.0.1") {
+                    if is_cli
+                        || !ai_key.is_empty()
+                        || ai_base.contains("localhost")
+                        || ai_base.contains("127.0.0.1")
+                    {
                         slint::spawn_local(async move {
                             let summarizer = AiSummarizer::new(AiConfig {
                                 provider: ai_provider,
@@ -737,9 +847,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 asr: Default::default(),
                             });
                             let ai_summary_res = if is_meeting {
-                                summarizer.summarize_meeting(&proj_name, billable_hours, &notes, saved_audio_file.as_deref(), None).await
+                                summarizer
+                                    .summarize_meeting(
+                                        &proj_name,
+                                        billable_hours,
+                                        &notes,
+                                        saved_audio_file.as_deref(),
+                                        None,
+                                    )
+                                    .await
                             } else {
-                                summarizer.summarize_session(&proj_name, billable_hours, &git_summary, &notes).await
+                                summarizer
+                                    .summarize_session(
+                                        &proj_name,
+                                        billable_hours,
+                                        &git_summary,
+                                        &notes,
+                                    )
+                                    .await
                             };
                             if let Ok(ai_summary) = ai_summary_res {
                                 if let Ok(Some(mut e)) = db_async.get_time_entry(&entry_id) {
@@ -747,11 +872,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let _ = db_async.insert_time_entry(&e);
                                     refresh_async();
                                     if let Some(ui) = app_async.upgrade() {
-                                        ui.set_toast_message(format!("🤖 AI 已自动提炼完成工时成果：{}", proj_name).into());
+                                        ui.set_toast_message(
+                                            format!("🤖 AI 已自动提炼完成工时成果：{}", proj_name)
+                                                .into(),
+                                        );
                                     }
                                 }
                             }
-                        }).unwrap();
+                        })
+                        .unwrap();
                     }
                 }
             }
@@ -829,7 +958,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let daily_rate = rate_str.parse::<f64>().unwrap_or(3000.0);
             let mut p = Project::new(name);
             p.daily_rate = daily_rate;
-            p.currency = if currency.is_empty() { "CNY".to_string() } else { currency };
+            p.currency = if currency.is_empty() {
+                "CNY".to_string()
+            } else {
+                currency
+            };
             if !git_path_str.is_empty() {
                 p.git_repo_path = Some(git_path_str);
             }
@@ -895,7 +1028,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let pid = p.id;
                 let name = p.name.clone();
                 projects_quick_meeting.borrow_mut().push(p);
-                let new_items = build_project_items(&projects_quick_meeting.borrow(), &db_quick_meeting);
+                let new_items =
+                    build_project_items(&projects_quick_meeting.borrow(), &db_quick_meeting);
                 model_quick_meeting.set_vec(new_items);
                 (pid, name)
             };
@@ -921,10 +1055,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut rec = audio_rec_meeting.borrow_mut();
                 match rec.start_recording(&wav_file) {
                     Ok(_) => {
-                        *active_rec_meeting.borrow_mut() = Some((pid, topic.clone(), wav_file.clone()));
+                        *active_rec_meeting.borrow_mut() =
+                            Some((pid, topic.clone(), wav_file.clone()));
                         ui.set_is_recording_audio(true);
                         ui.set_is_audio_paused(false);
-                        ui.set_active_recording_project_name(format!("{} · {}", proj_name, topic).into());
+                        ui.set_active_recording_project_name(
+                            format!("{} · {}", proj_name, topic).into(),
+                        );
                         rec_started = true;
                     }
                     Err(e) => {
@@ -937,9 +1074,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_meeting_topic_input("".into());
             ui.set_show_meeting_modal(false);
             if rec_started {
-                ui.set_toast_message(format!("已启动【{}】项目会议并开启全程录音！议题: {}", proj_name, topic).into());
+                ui.set_toast_message(
+                    format!(
+                        "已启动【{}】项目会议并开启全程录音！议题: {}",
+                        proj_name, topic
+                    )
+                    .into(),
+                );
             } else {
-                ui.set_toast_message(format!("已启动【{}】项目会议计时！议题: {}", proj_name, topic).into());
+                ui.set_toast_message(
+                    format!("已启动【{}】项目会议计时！议题: {}", proj_name, topic).into(),
+                );
             }
         }
     });
@@ -960,10 +1105,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (rate, rate_str) = match p.billing_type {
                     BillingType::Daily => {
                         let r = (p.daily_rate / p.hours_per_day.max(1.0)).round();
-                        (r, format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r))
+                        (
+                            r,
+                            format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r),
+                        )
                     }
-                    BillingType::Hourly => (p.hourly_rate.round(), format!("{:.0} {} / 小时", p.hourly_rate, p.currency)),
-                    BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", p.daily_rate, p.currency)),
+                    BillingType::Hourly => (
+                        p.hourly_rate.round(),
+                        format!("{:.0} {} / 小时", p.hourly_rate, p.currency),
+                    ),
+                    BillingType::FixedCap => (
+                        350.0,
+                        format!("固定总包 {:.0} {}", p.daily_rate, p.currency),
+                    ),
                     BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
                 };
                 ui.set_meeting_rate_input(format!("{:.0}", rate).into());
@@ -999,10 +1153,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (rate, rate_str) = match p.billing_type {
                     BillingType::Daily => {
                         let r = (p.daily_rate / p.hours_per_day.max(1.0)).round();
-                        (r, format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r))
+                        (
+                            r,
+                            format!("{:.0} {} / 天 (约 {:.0}/h)", p.daily_rate, p.currency, r),
+                        )
                     }
-                    BillingType::Hourly => (p.hourly_rate.round(), format!("{:.0} {} / 小时", p.hourly_rate, p.currency)),
-                    BillingType::FixedCap => (350.0, format!("固定总包 {:.0} {}", p.daily_rate, p.currency)),
+                    BillingType::Hourly => (
+                        p.hourly_rate.round(),
+                        format!("{:.0} {} / 小时", p.hourly_rate, p.currency),
+                    ),
+                    BillingType::FixedCap => (
+                        350.0,
+                        format!("固定总包 {:.0} {}", p.daily_rate, p.currency),
+                    ),
                     BillingType::NonBillable => (0.0, "自用/不计费".to_string()),
                 };
                 ui.set_meeting_rate_input(format!("{:.0}", rate).into());
@@ -1017,8 +1180,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_show_meeting_modal(true);
         }
     });
-
-
 
     // 8.2 录音控制交互回调 (暂停/继续、结束录音)
     let audio_rec_toggle = audio_recorder.clone();
@@ -1048,14 +1209,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if rec.is_recording() {
             match rec.stop_recording() {
                 Ok(path) => {
-                    let file_size_mb = std::fs::metadata(&path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0);
+                    let file_size_mb = std::fs::metadata(&path)
+                        .map(|m| m.len() as f64 / 1_048_576.0)
+                        .unwrap_or(0.0);
                     if let Some((pid, topic, _)) = active_rec_stop_cmd.borrow().as_ref() {
-                        *active_rec_stop_cmd.borrow_mut() = Some((*pid, topic.clone(), path.clone()));
+                        *active_rec_stop_cmd.borrow_mut() =
+                            Some((*pid, topic.clone(), path.clone()));
                     }
                     if let Some(ui) = app_weak_stop_audio.upgrade() {
                         ui.set_is_recording_audio(false);
                         ui.set_active_recording_project_name("".into());
-                        ui.set_toast_message(format!("会议录音已安全归档 ({:.2} MB)", file_size_mb).into());
+                        ui.set_toast_message(
+                            format!("会议录音已安全归档 ({:.2} MB)", file_size_mb).into(),
+                        );
                     }
                 }
                 Err(e) => {
@@ -1124,7 +1290,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let model = ui.get_setting_ai_model().trim().to_string();
 
             if provider == "api" && api_key.is_empty() {
-                ui.set_toast_message("提示：使用自定义 API 时请先在【⚙️ 设置】中配置 API Key".into());
+                ui.set_toast_message(
+                    "提示：使用自定义 API 时请先在【⚙️ 设置】中配置 API Key".into(),
+                );
                 return;
             }
 
@@ -1133,7 +1301,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => return,
             };
 
-            ui.set_toast_message(format!("正在调用 [{}] AI 引擎进行会议语音转写与纪要提炼，请稍候...", provider).into());
+            ui.set_toast_message(
+                format!(
+                    "正在调用 [{}] AI 引擎进行会议语音转写与纪要提炼，请稍候...",
+                    provider
+                )
+                .into(),
+            );
             let app_clone = ui.as_weak();
             let db_clone = db_transcribe.clone();
             let refresh_clone = refresh_entries_transcribe.clone();
@@ -1156,20 +1330,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = std::fs::write(&txt_path, &transcript);
 
                         if let Ok(Some(mut e)) = db_clone.get_time_entry(&entry_id) {
-                            let notes = db_clone.list_quick_notes(&e.project_id).unwrap_or_default();
+                            let notes =
+                                db_clone.list_quick_notes(&e.project_id).unwrap_or_default();
                             let summary_res = summarizer
-                                .summarize_meeting("会议交流与技术决议", e.billable_hours, &notes, Some(&audio_path.display().to_string()), Some(&transcript))
+                                .summarize_meeting(
+                                    "会议交流与技术决议",
+                                    e.billable_hours,
+                                    &notes,
+                                    Some(&audio_path.display().to_string()),
+                                    Some(&transcript),
+                                )
                                 .await;
-                            let minutes = summary_res.unwrap_or_else(|_| "完成会议沟通对接，各方已达成一致决策。".to_string());
+                            let minutes = summary_res.unwrap_or_else(|_| {
+                                "完成会议沟通对接，各方已达成一致决策。".to_string()
+                            });
                             e.summary = Some(minutes.clone());
                             let _ = db_clone.insert_time_entry(&e);
                             refresh_clone();
                             if let Some(ui) = app_clone.upgrade() {
-                                if ui.get_show_detail_modal() && ui.get_detail_entry_id().as_str() == target_entry_id_str.as_str() {
+                                if ui.get_show_detail_modal()
+                                    && ui.get_detail_entry_id().as_str()
+                                        == target_entry_id_str.as_str()
+                                {
                                     ui.set_detail_summary(minutes.into());
                                     ui.set_detail_transcript(transcript.into());
                                 }
-                                ui.set_toast_message(format!("🎉 [{}] 录音语音转写与纪要提炼完成！", provider).into());
+                                ui.set_toast_message(
+                                    format!("🎉 [{}] 录音语音转写与纪要提炼完成！", provider)
+                                        .into(),
+                                );
                             }
                         }
                     }
@@ -1179,7 +1368,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-            }).unwrap();
+            })
+            .unwrap();
         }
     });
 
@@ -1192,24 +1382,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(entry_id) = Uuid::parse_str(entry_id_str.as_str()) {
                 if let Ok(Some(e)) = db_detail.get_time_entry(&entry_id) {
                     let projs = projects_detail.borrow();
-                    let (p_name, currency) = projs.iter()
+                    let (p_name, currency) = projs
+                        .iter()
                         .find(|p| p.id == e.project_id)
                         .map(|p| (p.name.clone(), p.currency.clone()))
                         .unwrap_or_else(|| ("已归档项目".to_string(), "CNY".to_string()));
-                    let notes = db_detail.list_quick_notes(&e.project_id).unwrap_or_default();
+                    let notes = db_detail
+                        .list_quick_notes(&e.project_id)
+                        .unwrap_or_default();
                     let audio_path_str = e.audio_path.clone().unwrap_or_else(|| {
                         extract_wav_path(e.summary.as_deref()).unwrap_or_default()
                     });
-                    let has_audio = !audio_path_str.is_empty() && std::path::Path::new(&audio_path_str).exists();
+                    let has_audio = !audio_path_str.is_empty()
+                        && std::path::Path::new(&audio_path_str).exists();
 
                     let transcript = if has_audio {
-                        let txt_path = std::path::PathBuf::from(&audio_path_str).with_extension("txt");
+                        let txt_path =
+                            std::path::PathBuf::from(&audio_path_str).with_extension("txt");
                         if txt_path.exists() {
                             std::fs::read_to_string(&txt_path).unwrap_or_default()
                         } else {
-                            notes.iter()
+                            notes
+                                .iter()
                                 .find(|n| n.content.starts_with("[录音全文转写]"))
-                                .map(|n| n.content.trim_start_matches("[录音全文转写]").trim().to_string())
+                                .map(|n| {
+                                    n.content
+                                        .trim_start_matches("[录音全文转写]")
+                                        .trim()
+                                        .to_string()
+                                })
                                 .unwrap_or_default()
                         }
                     } else {
@@ -1221,11 +1422,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     ui.set_detail_entry_id(entry_id_str.clone());
                     ui.set_detail_project_name(p_name.into());
-                    ui.set_detail_time_range(format!("{}-{}", start_local.format("%H:%M"), end_local.format("%H:%M")).into());
+                    ui.set_detail_time_range(
+                        format!(
+                            "{}-{}",
+                            start_local.format("%H:%M"),
+                            end_local.format("%H:%M")
+                        )
+                        .into(),
+                    );
                     ui.set_detail_duration(format_duration(e.raw_duration_secs).into());
                     ui.set_detail_days(format!("{:.2} 天", e.billable_days).into());
                     ui.set_detail_amount(format!("{} {:.2}", currency, e.total_amount).into());
-                    ui.set_detail_summary(e.summary.unwrap_or_else(|| "持续代码开发与测试交付".to_string()).into());
+                    ui.set_detail_summary(
+                        e.summary
+                            .unwrap_or_else(|| "持续代码开发与测试交付".to_string())
+                            .into(),
+                    );
                     ui.set_detail_transcript(transcript.into());
                     ui.set_detail_audio_path(audio_path_str.into());
                     ui.set_detail_has_audio(has_audio);
@@ -1294,16 +1506,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(resp) => {
                         if let Some(ui) = app_clone.upgrade() {
                             let preview: String = resp.chars().take(50).collect();
-                            ui.set_toast_message(format!("✅ AI [{}] 通信测试成功: {}", provider, preview).into());
+                            ui.set_toast_message(
+                                format!("✅ AI [{}] 通信测试成功: {}", provider, preview).into(),
+                            );
                         }
                     }
                     Err(e) => {
                         if let Some(ui) = app_clone.upgrade() {
-                            ui.set_toast_message(format!("❌ AI [{}] 测试失败: {}", provider, e).into());
+                            ui.set_toast_message(
+                                format!("❌ AI [{}] 测试失败: {}", provider, e).into(),
+                            );
                         }
                     }
                 }
-            }).unwrap();
+            })
+            .unwrap();
         }
     });
 
@@ -1324,7 +1541,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
-            ui.set_toast_message(format!("正在调用 [{}] AI 引擎分析生成工作日报，请稍候...", provider).into());
+            ui.set_toast_message(
+                format!("正在调用 [{}] AI 引擎分析生成工作日报，请稍候...", provider).into(),
+            );
             let ai_config = AiConfig {
                 provider,
                 api_base,
@@ -1354,7 +1573,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ..Default::default()
                             };
                             let notes = vec![];
-                            if let Ok(summary) = summarizer.summarize_session(&p.name, e.billable_hours, &dummy_git, &notes).await {
+                            if let Ok(summary) = summarizer
+                                .summarize_session(&p.name, e.billable_hours, &dummy_git, &notes)
+                                .await
+                            {
                                 e.summary = Some(summary);
                                 let _ = db_clone.insert_time_entry(e);
                             }
@@ -1366,7 +1588,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ui) = app_clone.upgrade() {
                     ui.set_toast_message("🎉 AI 工作成果与日报分析已全部提炼完成！".into());
                 }
-            }).unwrap();
+            })
+            .unwrap();
         }
     });
 
@@ -1383,7 +1606,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for p in projs.iter() {
                 let elapsed = mgr.get_elapsed(&p.id);
-                let is_running = matches!(mgr.get_status(&p.id), myth_core::timer::TimerStatus::Running { .. });
+                let is_running = matches!(
+                    mgr.get_status(&p.id),
+                    myth_core::timer::TimerStatus::Running { .. }
+                );
                 if is_running {
                     afk_list.push(AfkItem {
                         id: p.id.to_string().into(),
@@ -1414,7 +1640,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for p in projs.iter() {
                     mgr.deduct_from_channel(p.id, deduct_secs);
                 }
-                ui.set_toast_message(format!("已成功从活动项目中扣除 {} 分钟摸鱼/离开时间", away_mins).into());
+                ui.set_toast_message(
+                    format!("已成功从活动项目中扣除 {} 分钟摸鱼/离开时间", away_mins).into(),
+                );
             } else {
                 ui.set_toast_message("已保留全部活动工时（视作有效离线投入）".into());
             }
@@ -1457,7 +1685,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        md.push_str(&format!("\n**今日累计投入**：**{:.2} 人天**，核算价值：**¥ {:.2}**\n", grand_days, grand_amount));
+        md.push_str(&format!(
+            "\n**今日累计投入**：**{:.2} 人天**，核算价值：**¥ {:.2}**\n",
+            grand_days, grand_amount
+        ));
 
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(md);
@@ -1485,7 +1716,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn dirs_or_local_data_dir() -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("mythmanday")
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("mythmanday")
     } else {
         std::path::PathBuf::from("./data")
     }
