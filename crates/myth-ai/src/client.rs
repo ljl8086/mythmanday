@@ -207,6 +207,25 @@ fn find_binary(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+pub fn get_user_home_dir() -> Option<std::path::PathBuf> {
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return Some(std::path::PathBuf::from(home));
+        }
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        if !userprofile.trim().is_empty() {
+            return Some(std::path::PathBuf::from(userprofile));
+        }
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            return Some(std::path::PathBuf::from(appdata));
+        }
+    }
+    None
+}
+
 pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathBuf> {
     if let Some(cp) = custom_path {
         let p = std::path::PathBuf::from(cp);
@@ -214,9 +233,13 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
             return Some(p);
         }
     }
-    let candidates = ["whisper-cli", "whisper", "whisper-cpp", "main"];
-    if let Ok(home) = std::env::var("HOME") {
-        let home_p = std::path::Path::new(&home);
+    let candidates = if cfg!(windows) {
+        vec!["whisper-cli.exe", "whisper.exe", "whisper-cpp.exe", "main.exe", "whisper-cli", "whisper"]
+    } else {
+        vec!["whisper-cli", "whisper", "whisper-cpp", "main"]
+    };
+
+    if let Some(home_p) = get_user_home_dir() {
         // 优先应用配置内置目录 ~/.config/mythmanday/bin/
         for name in &candidates {
             let p = home_p.join(".config").join("mythmanday").join("bin").join(name);
@@ -232,13 +255,17 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
             }
         }
     }
-    // 最后检测系统 PATH
+    // 最后检测系统 PATH (跨平台适配：Windows 使用 where，Unix 使用 which)
+    let lookup_cmd = if cfg!(windows) { "where" } else { "which" };
     for name in &candidates {
-        if let Ok(out) = std::process::Command::new("which").arg(name).output() {
+        if let Ok(out) = std::process::Command::new(lookup_cmd).arg(name).output() {
             if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !s.is_empty() {
-                    return Some(std::path::PathBuf::from(s));
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(first_line) = s.lines().map(|l| l.trim()).find(|l| !l.is_empty()) {
+                    let pb = std::path::PathBuf::from(first_line);
+                    if pb.exists() {
+                        return Some(pb);
+                    }
                 }
             }
         }
@@ -248,11 +275,12 @@ pub fn find_whisper_binary(custom_path: Option<&str>) -> Option<std::path::PathB
 
 pub fn find_whisper_model(custom_model: Option<&str>) -> Option<std::path::PathBuf> {
     let mut search_dirs = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        search_dirs.push(std::path::PathBuf::from(&home).join(".config").join("mythmanday").join("models"));
-        search_dirs.push(std::path::PathBuf::from(&home).join(".local").join("share").join("mythmanday").join("models"));
+    if let Some(home) = get_user_home_dir() {
+        search_dirs.push(home.join(".config").join("mythmanday").join("models"));
+        search_dirs.push(home.join(".local").join("share").join("mythmanday").join("models"));
     }
     search_dirs.push(std::path::PathBuf::from("./models"));
+
 
     if let Some(cm) = custom_model {
         let p = std::path::PathBuf::from(cm);
@@ -777,8 +805,17 @@ impl AiSummarizer {
             return Err(AiError::ParseError(format!("音频文件不存在: {}", input_path.display())));
         }
 
-        // 优先尝试将可能达到数百兆的 WAV 文件利用本地 ffmpeg 压缩转码为小体积 MP3 (通常缩减 95% 以上)
-        let actual_audio_path = if input_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false) {
+        let mode = self.config.asr.mode.trim().to_lowercase();
+        let is_local_mode = mode == "local"
+            || (mode.is_empty()
+                && find_whisper_binary(self.config.asr.local_bin_path.as_deref()).is_some()
+                && find_whisper_model(self.config.asr.local_model.as_deref()).is_some());
+
+        // 原生 whisper.cpp 仅支持 16kHz PCM WAV 格式，切勿转为 MP3！
+        // 仅在非本地模式（云端 Whisper API 或 CLI 智能体上传）时，才尝试将大体积 WAV 压缩转码为 MP3
+        let actual_audio_path = if !is_local_mode
+            && input_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("wav")).unwrap_or(false)
+        {
             let path_buf = input_path.to_path_buf();
             let converted = tokio::task::spawn_blocking(move || {
                 myth_audio::convert_wav_to_mp3(&path_buf)
@@ -791,14 +828,13 @@ impl AiSummarizer {
             input_path.to_path_buf()
         };
 
-        let mode = self.config.asr.mode.trim().to_lowercase();
-
         // 1. 本地 whisper.cpp 极速推理模式 (默认优先)
-        if mode == "local" || (mode.is_empty() && find_whisper_binary(self.config.asr.local_bin_path.as_deref()).is_some() && find_whisper_model(self.config.asr.local_model.as_deref()).is_some()) {
+        if is_local_mode {
             let whisper_bin = find_whisper_binary(self.config.asr.local_bin_path.as_deref());
             let whisper_model = find_whisper_model(self.config.asr.local_model.as_deref());
 
             match (whisper_bin, whisper_model) {
+
                 (Some(bin), Some(model)) => {
                     let audio_str = actual_audio_path.to_string_lossy().to_string();
                     let model_str = model.to_string_lossy().to_string();
@@ -1044,12 +1080,13 @@ pub struct AsrRuntimeStatus {
 }
 
 pub fn get_whisper_models_dir() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config").join("mythmanday").join("models")
+    if let Some(home) = get_user_home_dir() {
+        home.join(".config").join("mythmanday").join("models")
     } else {
         std::path::PathBuf::from("./models")
     }
 }
+
 
 pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
     let bin_path = find_whisper_binary(cfg.asr.local_bin_path.as_deref());

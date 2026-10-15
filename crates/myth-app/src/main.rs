@@ -395,8 +395,8 @@ fn get_daily_groups(
             }
         }
 
-        let audio_path = e.audio_path.clone().unwrap_or_default();
-        let has_audio = !audio_path.is_empty() && std::path::Path::new(&audio_path).exists();
+        let legacy_audio_path = e.audio_path.clone().unwrap_or_default();
+        let legacy_has_audio = !legacy_audio_path.is_empty() && std::path::Path::new(&legacy_audio_path).exists();
 
         let status = if e.summary.as_ref().map(|s| s.contains("【AI提炼中】")).unwrap_or(false) {
             "summarizing".to_string()
@@ -432,6 +432,18 @@ fn get_daily_groups(
             }
         }).collect();
 
+        let has_clip_audio = meeting_dtos.iter().any(|m| m.clips.iter().any(|c| !c.audio_path.is_empty()));
+        let has_audio = legacy_has_audio || has_clip_audio;
+        let audio_path = if !legacy_audio_path.is_empty() {
+            legacy_audio_path
+        } else {
+            meeting_dtos.iter()
+                .flat_map(|m| m.clips.iter())
+                .find(|c| !c.audio_path.is_empty())
+                .map(|c| c.audio_path.clone())
+                .unwrap_or_default()
+        };
+
         let item = EntryDto {
             id: e.id.to_string(),
             project_id: project_id.clone(),
@@ -449,6 +461,7 @@ fn get_daily_groups(
             status,
             meetings: meeting_dtos,
         };
+
         days_map.entry(date_str).or_default().push(item);
     }
 
@@ -474,7 +487,7 @@ fn get_daily_groups(
             let now_local = Local::now();
             let start_time_local = now_local - chrono::Duration::seconds(elapsed_secs as i64);
 
-            let (billable_hours, billable_days, amount) = if let Some(p) = proj {
+            let (_billable_hours, billable_days, amount) = if let Some(p) = proj {
                 let bh = BillingEngine::calculate_billable_hours(elapsed_secs, p.rounding_minutes);
                 let bd = BillingEngine::calculate_billable_days(bh, p.hours_per_day, p.day_calc_mode);
                 let (_, amt) = BillingEngine::calculate_amount(p, bh, bd);
@@ -692,7 +705,7 @@ fn stop_timer(state: State<AppState>, project_id: String) -> Result<String, Stri
             };
 
             let db = state.db.clone();
-            let (entry_id, final_summary) = {
+            let (_entry_id, _final_summary) = {
                 let guard = db.lock().unwrap();
                 let existing_opt = guard.get_entry_for_project_and_date(&pid, &today_str).unwrap_or(None);
                 if let Some(mut existing) = existing_opt {
@@ -820,32 +833,48 @@ fn start_quick_meeting(
     {
         let mut mgr = state.timer_manager.lock().unwrap();
         let status = mgr.get_status(&pid);
-        if matches!(status, myth_core::timer::TimerStatus::Stopped) {
-            let existing_today = state.db.lock().unwrap().get_entry_for_project_and_date(&pid, &today_str).unwrap_or(None);
-            let base_secs = existing_today.as_ref().map(|e| e.raw_duration_secs).unwrap_or(0);
-            mgr.start_channel_with_base(pid, base_secs);
-            let session_start = mgr.get_timer(&pid).and_then(|t| t.session_start_at).unwrap_or(now);
-            let _ = state.db.lock().unwrap().upsert_active_timer(&ActiveTimerRecord {
-                project_id: pid,
-                session_start_at: session_start,
-                current_started_at: Some(now),
-                accumulated_secs: mgr.get_elapsed(&pid),
-                is_paused: false,
-                last_heartbeat: now,
-            });
+        match status {
+            myth_core::timer::TimerStatus::Stopped => {
+                let existing_today = state.db.lock().unwrap().get_entry_for_project_and_date(&pid, &today_str).unwrap_or(None);
+                let base_secs = existing_today.as_ref().map(|e| e.raw_duration_secs).unwrap_or(0);
+                mgr.start_channel_with_base(pid, base_secs);
+                let session_start = mgr.get_timer(&pid).and_then(|t| t.session_start_at).unwrap_or(now);
+                let _ = state.db.lock().unwrap().upsert_active_timer(&ActiveTimerRecord {
+                    project_id: pid,
+                    session_start_at: session_start,
+                    current_started_at: Some(now),
+                    accumulated_secs: mgr.get_elapsed(&pid),
+                    is_paused: false,
+                    last_heartbeat: now,
+                });
+            }
+            myth_core::timer::TimerStatus::Paused { .. } => {
+                mgr.start_channel(pid);
+                let session_start = mgr.get_timer(&pid).and_then(|t| t.session_start_at).unwrap_or(now);
+                let _ = state.db.lock().unwrap().upsert_active_timer(&ActiveTimerRecord {
+                    project_id: pid,
+                    session_start_at: session_start,
+                    current_started_at: Some(now),
+                    accumulated_secs: mgr.get_elapsed(&pid),
+                    is_paused: false,
+                    last_heartbeat: now,
+                });
+            }
+            myth_core::timer::TimerStatus::Running { .. } => {}
         }
     }
 
-    // 3. 创建 Meeting 实体入库
+    // 3. 创建 Meeting 实体入库 (失败时立刻终止启动，防止孤儿录音与外键失效)
     let meeting = Meeting::new(entry_id, pid, topic.clone());
     let meeting_id = meeting.id;
     {
         let guard = state.db.lock().unwrap();
-        let _ = guard.insert_meeting(&meeting);
+        guard.insert_meeting(&meeting).map_err(|e| format!("写入会议数据失败: {}", e))?;
         let _ = guard.set_setting("active_meeting_id", &meeting_id.to_string());
         let _ = guard.set_setting("active_meeting_pid", &pid.to_string());
         let _ = guard.set_setting("active_meeting_topic", &topic);
     }
+
 
     // 4. 若勾选录音，开启首个录音片段
     if record_audio {
@@ -915,7 +944,7 @@ fn start_recording_for_meeting(state: State<AppState>, meeting_id: String) -> Re
 #[tauri::command]
 async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let active = state.active_recording.lock().unwrap().take();
-    let (pid, meeting_id, topic, wav_path, start_time) = active.ok_or_else(|| "当前没有正在进行的录音片段".to_string())?;
+    let (_pid, meeting_id, _topic, wav_path, start_time) = active.ok_or_else(|| "当前没有正在进行的录音片段".to_string())?;
 
     let saved_audio_path = {
         let mut recorder = state.audio_recorder.lock().unwrap();
@@ -1089,7 +1118,9 @@ async fn finish_meeting(
     // 标记会议结束时间与状态
     let now = Utc::now();
     meeting.end_at = Some(now);
-    meeting.duration_secs = now.signed_duration_since(meeting.start_at).num_seconds().max(0) as u64;
+    let duration_secs = now.signed_duration_since(meeting.start_at).num_seconds().max(0) as u64;
+    meeting.duration_secs = duration_secs;
+    let duration_hours = (duration_secs as f64) / 3600.0;
     meeting.status = "summarizing".to_string();
     {
         let guard = db.lock().unwrap();
@@ -1145,12 +1176,12 @@ async fn finish_meeting(
             }
         }
 
-        let summary = match summarizer.summarize_meeting(&topic_clone, 0.5, &notes, None, Some(&combined_transcript)).await {
+        let summary = match summarizer.summarize_meeting(&topic_clone, duration_hours, &notes, None, Some(&combined_transcript)).await {
             Ok(sum) => sum,
             Err(_) => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_clone),
         };
 
-        // 更新会议记录的 meeting_summary（不污染每日工时工作内容 entry.summary）
+        // 更新会议记录的 meeting_summary，并清理每日工时中的【会议进行中 🎙️】临时占位符
         {
             let guard = db_for_async.lock().unwrap();
             if let Ok(Some(mut m)) = guard.get_meeting(&m_id) {
@@ -1158,7 +1189,16 @@ async fn finish_meeting(
                 m.status = "completed".to_string();
                 let _ = guard.insert_meeting(&m);
             }
+            if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
+                if let Some(ref s) = e.summary {
+                    if s.contains("【会议进行中 🎙️】") {
+                        e.summary = None;
+                        let _ = guard.insert_time_entry(&e);
+                    }
+                }
+            }
         }
+
 
         let payload = MeetingSummaryReadyDto {
             project_id: pid.to_string(),
@@ -1347,7 +1387,7 @@ fn update_project(
     git_repo: Option<String>,
 ) -> Result<(), String> {
     let pid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut guard = state.db.lock().unwrap();
+    let guard = state.db.lock().unwrap();
     let mut p = guard.get_project(&pid).map_err(|e| e.to_string())?
         .ok_or_else(|| "项目不存在".to_string())?;
 
@@ -1779,7 +1819,7 @@ fn log_manual_entry(
     let billable_days = BillingEngine::calculate_billable_days(billable_hours, proj.hours_per_day, proj.day_calc_mode);
     let (rate_snapshot, total_amount) = BillingEngine::calculate_amount(&proj, billable_hours, billable_days);
 
-    let mut entry = TimeEntry {
+    let entry = TimeEntry {
         id: Uuid::new_v4(),
         project_id: pid,
         start_time: start_local.with_timezone(&Utc),
@@ -2297,13 +2337,17 @@ async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String)
             }
 
             let topic_for_sum = m.topic.clone();
-            let summary = match summarizer.summarize_meeting(&topic_for_sum, 0.5, &notes, None, Some(&combined_transcript)).await {
+            let duration_hours = if m.duration_secs > 0 { (m.duration_secs as f64) / 3600.0 } else { 0.5 };
+            let summary = match summarizer.summarize_meeting(&topic_for_sum, duration_hours, &notes, None, Some(&combined_transcript)).await {
                 Ok(sum) if !sum.trim().is_empty() => sum,
                 _ => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_for_sum),
             };
 
             m.meeting_summary = Some(summary.clone());
-            m.status = "completed".to_string();
+            // 保持进行中会议的 in_progress 状态不变，允许后续继续追加录音；仅将已结束会议标记为 completed
+            if m.status != "in_progress" {
+                m.status = "completed".to_string();
+            }
             let _ = db.lock().unwrap().insert_meeting(&m);
 
             final_meeting_summary = summary;
@@ -2315,11 +2359,11 @@ async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String)
         return Ok(final_meeting_summary);
     } else {
         let p = std::path::Path::new(&entry_audio_path);
-        let transcript = if p.exists() {
-            summarizer.transcribe_audio(p).await.unwrap_or_default()
-        } else {
-            String::new()
-        };
+        if !p.exists() {
+            return Err(format!("录音文件不存在: {}", entry_audio_path));
+        }
+        let transcript = summarizer.transcribe_audio(p).await.map_err(|e| format!("语音转写失败: {}", e))?;
+
 
         let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &notes, Some(&entry_audio_path), Some(&transcript)).await {
             Ok(sum) if !sum.trim().is_empty() => sum,
@@ -2332,7 +2376,7 @@ async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String)
             format!("{}\n\n【转写全文实录】\n{}", ai_summary, transcript)
         };
 
-        let mut guard = db.lock().unwrap();
+        let guard = db.lock().unwrap();
         if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
             entry.summary = Some(new_summary.clone());
             let _ = guard.insert_time_entry(&entry);

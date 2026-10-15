@@ -2697,7 +2697,7 @@ export function App() {
                                             <div className="space-y-2">
                                               {entry.meetings.map((m, mIdx) => {
                                                 const clipTotalSecs = (m.clips || []).reduce((acc, c) => acc + (c.duration_secs || 0), 0);
-                                                const mDurationText = clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : (m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : "进行中");
+                                                const meetingDurationText = m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : (m.status === "in_progress" ? "进行中" : (clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : "-"));
 
                                                 return (
                                                   <div key={m.id} className="p-2.5 rounded-lg border border-slate-200/80 bg-slate-50/50 space-y-1.5 text-xs">
@@ -2705,7 +2705,7 @@ export function App() {
                                                       <div className="flex items-center gap-2">
                                                         <span className="font-bold text-slate-900">{mIdx + 1}. {m.topic}</span>
                                                         <span className="text-slate-400 font-mono text-[11px]">
-                                                          ({m.start_time}{m.end_time ? ` — ${m.end_time}` : ""} · 时长: {mDurationText})
+                                                          ({m.start_time}{m.end_time ? ` — ${m.end_time}` : ""} · 时长: {meetingDurationText}{clipTotalSecs > 0 ? ` · 录音: ${formatSeconds(clipTotalSecs)}` : ""})
                                                         </span>
                                                         {m.status === "in_progress" && (
                                                           <button
