@@ -42,10 +42,9 @@ import {
   ChevronUp,
   RefreshCw,
   RotateCw,
-  AlertCircle,
   AlertTriangle,
   Loader2,
-  Code2
+  Coffee
 } from "lucide-react";
 
 interface Project {
@@ -188,7 +187,9 @@ interface Note {
 export function App() {
   const [activeTab, setActiveTab] = useState<"workspace" | "stats" | "settings">("workspace");
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
+    return localStorage.getItem("mythmanday_active_project_id") || "";
+  });
   const [dayGroups, setDayGroups] = useState<DayGroup[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [globalStats, setGlobalStats] = useState<GlobalStats>({
@@ -375,7 +376,23 @@ export function App() {
   // Helper to separate concise summary from verbose raw transcript
   const splitSummaryAndTranscript = (fullText: string) => {
     if (!fullText) return { summary: "", transcript: "" };
-    const markers = ["【会议录音全量转写实录】：", "【会议录音全量转写文稿】：", "【转写全文实录】", "【会议转写实录】"];
+    const markers = [
+      "【会议录音全量转写实录】：",
+      "【会议录音全量转写文稿】：",
+      "【会议录音全量转写实录】",
+      "【会议录音全量转写文稿】",
+      "【转写全文实录】",
+      "【会议转写实录】",
+      "## 会议录音全量转写实录",
+      "### 会议录音全量转写实录",
+      "# 会议录音全量转写实录",
+      "## 转写全文实录",
+      "### 转写全文实录",
+      "【逐字转写文稿】",
+      "### 逐字转写",
+      "## 逐字转写",
+      "# 逐字转写",
+    ];
     for (const marker of markers) {
       const idx = fullText.indexOf(marker);
       if (idx !== -1) {
@@ -387,6 +404,7 @@ export function App() {
     }
     return { summary: fullText, transcript: "" };
   };
+
 
   interface ParsedWorkContent {
     userNotes: string;
@@ -476,125 +494,31 @@ export function App() {
     };
   };
 
-  interface EntryTimelineData {
-    windowStartHour: number;
-    windowEndHour: number;
-    totalMins: number;
-    ticks: Array<{ hour: number; label: string; percent: number }>;
-    startMin: number;
-    endMin: number;
-    idleBeforePercent: number;
-    workPercent: number;
-    idleAfterPercent: number;
-    workDurationText: string;
-    idleDurationText: string;
-    meetingDurationText: string;
-    meetingTotalSecs: number;
-    meetings: Array<{
-      id: string;
-      topic: string;
-      startMin: number;
-      durationSecs: number;
-      durationText: string;
-      leftPercent: number;
-      widthPercent: number;
-    }>;
-  }
 
-  const buildEntryTimeline = (
-    timeRange: string,
-    rawSecs: number,
-    meetings: MeetingDetail[] = []
-  ): EntryTimelineData | null => {
-    if (!timeRange) return null;
-    const parts = timeRange.split(/[-~至]/).map((s) => s.trim());
-    const parseMin = (s: string): number | null => {
-      const m = s.match(/(\d{1,2}):(\d{2})/);
-      if (!m) return null;
-      return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-    };
-
-    const startMin = parts[0] ? parseMin(parts[0]) : null;
-    let endMin = parts[1] ? parseMin(parts[1]) : null;
-
-    if (startMin === null) return null;
-
-    // 如果结束时间未填或正在计时中，根据当前时间或 rawSecs 计算
-    if (endMin === null || endMin <= startMin) {
-      if (rawSecs > 0) {
-        endMin = startMin + Math.max(1, Math.round(rawSecs / 60));
-      } else {
-        const now = new Date();
-        endMin = Math.max(startMin + 15, now.getHours() * 60 + now.getMinutes());
-      }
-    }
-
-    // 标尺视窗：基准为 08:00 到 19:00，如果有更早或更晚则自适应扩展
-    const windowStartHour = Math.min(8, Math.floor(startMin / 60));
-    const windowEndHour = Math.max(19, Math.ceil(endMin / 60));
-    const totalMins = Math.max(60, (windowEndHour - windowStartHour) * 60);
-
-    const idleBeforePercent = Math.max(0, ((startMin - windowStartHour * 60) / totalMins) * 100);
-    const workPercent = Math.min(100 - idleBeforePercent, ((endMin - startMin) / totalMins) * 100);
-    const idleAfterPercent = Math.max(0, 100 - idleBeforePercent - workPercent);
-
-    // 刻度线：每 2 小时一个刻度
-    const ticks: Array<{ hour: number; label: string; percent: number }> = [];
-    const step = windowEndHour - windowStartHour >= 14 ? 3 : 2;
-    for (let h = windowStartHour; h <= windowEndHour; h += step) {
-      const pct = ((h * 60 - windowStartHour * 60) / totalMins) * 100;
-      ticks.push({
-        hour: h,
-        label: `${h.toString().padStart(2, "0")}:00`,
-        percent: Math.min(100, Math.max(0, pct)),
-      });
-    }
-
-    // 会议位置映射
-    const parsedMeetings = meetings.map((m) => {
-      const mStart = parseMin(m.start_time) ?? startMin;
-      const clipSecs = (m.clips || []).reduce((acc, c) => acc + (c.duration_secs || 0), 0);
-      const mDurSecs = clipSecs > 0 ? clipSecs : 600;
-      const mDurMins = Math.max(10, Math.round(mDurSecs / 60));
-      const leftPct = Math.min(95, Math.max(0, ((mStart - windowStartHour * 60) / totalMins) * 100));
-      const widthPct = Math.max(3, Math.min(25, (mDurMins / totalMins) * 100));
-
-      return {
-        id: m.id,
-        topic: m.topic,
-        startMin: mStart,
-        durationSecs: clipSecs,
-        durationText: clipSecs > 0 ? formatSeconds(clipSecs) : (m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : "进行中"),
-        leftPercent: leftPct,
-        widthPercent: widthPct,
-      };
-    });
-
-    const meetingTotalSecs = meetings.reduce(
-      (acc, m) => acc + (m.clips || []).reduce((cAcc, c) => cAcc + (c.duration_secs || 0), 0),
-      0
-    );
-
-    const workSecs = Math.max(0, (endMin - startMin) * 60 - meetingTotalSecs);
-    const idleTotalMins = (startMin - windowStartHour * 60) + (windowEndHour * 60 - endMin);
-
-    return {
-      windowStartHour,
-      windowEndHour,
-      totalMins,
-      ticks,
-      startMin,
-      endMin,
-      idleBeforePercent,
-      workPercent,
-      idleAfterPercent,
-      workDurationText: formatSeconds(workSecs),
-      idleDurationText: `${Math.floor(idleTotalMins / 60)}小时${idleTotalMins % 60}分`,
-      meetingDurationText: formatSeconds(meetingTotalSecs),
-      meetingTotalSecs,
-      meetings: parsedMeetings,
-    };
+  const parseTimeStrToMinutes = (s: string): number | null => {
+    if (!s) return null;
+    const m = s.match(/(\d{1,2}):(\d{2})/);
+    if (!m) return null;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
   };
+
+  const formatGapMinutes = (mins: number): string => {
+    if (mins < 60) return `${mins}分钟`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m > 0 ? `${h}小时${m}分` : `${h}小时`;
+  };
+
+  const getEntryMinRange = (entry: Entry): { startMin: number | null; endMin: number | null } => {
+    const parts = (entry.time_range || "").split(/[-~至]/).map((s) => s.trim());
+    const startMin = parts[0] ? parseTimeStrToMinutes(parts[0]) : null;
+    let endMin = parts[1] ? parseTimeStrToMinutes(parts[1]) : null;
+    if (startMin !== null && (endMin === null || endMin <= startMin)) {
+      endMin = entry.raw_secs > 0 ? startMin + Math.max(1, Math.round(entry.raw_secs / 60)) : startMin + 15;
+    }
+    return { startMin, endMin };
+  };
+
 
   // Settings Tab Form
   const [settingAiProvider, setSettingAiProvider] = useState("agy");
@@ -725,11 +649,22 @@ export function App() {
   };
 
 
+  useEffect(() => {
+    if (selectedProjectId) {
+      try {
+        localStorage.setItem("mythmanday_active_project_id", selectedProjectId);
+      } catch {}
+    }
+  }, [selectedProjectId]);
+
   const refreshData = async () => {
     try {
       const projs = await invoke<Project[]>("get_projects");
       setProjects(projs);
-      if (!selectedProjectId && projs.length > 0) {
+      const savedPid = localStorage.getItem("mythmanday_active_project_id");
+      if (savedPid && projs.some((p) => p.id === savedPid)) {
+        setSelectedProjectId(savedPid);
+      } else if (!selectedProjectId && projs.length > 0) {
         setSelectedProjectId(projs[0].id);
       }
       const stats = await invoke<GlobalStats>("get_global_stats");
@@ -2448,623 +2383,518 @@ export function App() {
                     </div>
                   </div>
 
-                  {/* ---------------- 模式 A：流水列表视图 ---------------- */}
+                                    {/* ---------------- 模式 A：流水列表视图 ---------------- */}
                   {viewMode === "list" && (
-                    <div className="space-y-3.5">
+                    <div className="w-full space-y-4">
                       {dayGroups.length === 0 ? (
-                        <div className="bg-white border border-slate-200/90 rounded-xl p-8 text-center space-y-2">
+                        <div className="bg-white border border-slate-200/90 rounded-xl p-8 text-center space-y-2 shadow-2xs">
                           <p className="text-xs text-slate-400 font-medium">
                             【{selectedMonth}】该月份暂无工时记录
                           </p>
                           <button
                             onClick={() => setShowManualEntryModal(true)}
-                            className="text-xs text-indigo-600 hover:underline font-semibold"
+                            className="text-xs text-indigo-600 hover:underline font-semibold cursor-pointer"
                           >
                             + 点击补录该月工时
                           </button>
                         </div>
                       ) : (
-                        dayGroups.map((group) => (
-                          <div
-                            key={group.date_str}
-                            className="bg-white border border-slate-200/80 rounded-xl p-4.5 shadow-sm hover:shadow-md transition-shadow space-y-3"
-                          >
-                            {/* 每日卡片 Header */}
-                            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                              <div className="flex items-center gap-2.5">
-                                <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                                  📅 {group.display_date}
-                                </span>
-                                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[11px] font-medium">
-                                  {group.entries_count} 笔工时记录
-                                </span>
+                        dayGroups.map((group) => {
+                          const totalMeetingsCount = group.entries.reduce((acc, e) => acc + (e.meetings || []).length, 0);
+                          const dayHasMeetings = totalMeetingsCount > 0 || group.entries.some((e) => e.has_audio);
+
+                          return (
+                            <div
+                              key={group.date_str}
+                              className="bg-white rounded-xl border border-slate-200/90 shadow-xs overflow-hidden"
+                            >
+                              {/* 每日头部 (简洁有力，直接列出关键核算指标) */}
+                              <div className="px-5 py-3 bg-slate-50/90 border-b border-slate-200/70 flex items-center justify-between flex-wrap gap-2">
+                                <div className="flex items-center gap-2.5">
+                                  <span className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
+                                    <span>📅</span>
+                                    <span>{group.display_date}</span>
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-600 text-[11px] font-semibold">
+                                    {group.entries_count} 笔连续工时
+                                  </span>
+                                  {dayHasMeetings && (
+                                    <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[11px] font-semibold border border-violet-200/60 flex items-center gap-1">
+                                      <Mic className="w-3 h-3 text-violet-500" />
+                                      <span>含 {totalMeetingsCount > 0 ? `${totalMeetingsCount} 场` : ""}会议沟通</span>
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-4 text-xs">
+                                  <span className="text-slate-500">实际投入: <strong className="text-slate-800 font-bold font-mono">{group.total_duration}</strong></span>
+                                  <span className="text-slate-500">核定折合: <strong className="text-indigo-600 font-bold font-mono">{group.total_days}</strong></span>
+                                  {!hideAmount && (
+                                    <span className="text-slate-500">价值: <strong className="text-emerald-600 font-bold font-mono">{group.total_amount}</strong></span>
+                                  )}
+                                </div>
                               </div>
 
-                              <div className="flex items-center gap-3.5 text-xs">
-                                <span className="text-slate-500">投入: <strong className="text-slate-700 font-medium">{group.total_duration}</strong></span>
-                                <span className="text-slate-500">折合: <strong className="text-slate-700 font-medium">{group.total_days}</strong></span>
-                                {!hideAmount && (
-                                  <span className="text-slate-500">价值: <strong className="text-emerald-600 font-semibold">{group.total_amount}</strong></span>
-                                )}
-                              </div>
-                            </div>
+                              {/* 纯粹文字列表主体 (无嵌套边框卡片，条目自然流转) */}
+                              <div className="p-5 space-y-5">
+                                {group.entries.map((entry, entryIdx) => {
+                                  const isLiveRecording = entry.status === "recording";
+                                  const isSummarizing = entry.status === "summarizing";
+                                  const hasMeetings = (entry.meetings || []).length > 0;
+                                  // 分离精简摘要与长文转写文稿，防止长文本溢出卡片
+                                  const { summary: conciseSummary, transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
+                                  const parsed = parseWorkContent(conciseSummary, hasMeetings);
+                                  const isExpanded = !!expandedSummaryEntryIds[entry.id];
+                                  const hasMeetingClips = (entry.meetings || []).some((m) => (m.clips || []).length > 0);
 
-                            {/* 当日明细项列表 */}
-                            <div className="space-y-2.5">
-                              {group.entries.map((entry) => {
-                                const isLiveRecording = entry.status === "recording";
-                                const isSummarizing = entry.status === "summarizing";
-                                const hasMeetings = (entry.meetings || []).length > 0;
-                                const parsed = parseWorkContent(entry.summary_text, hasMeetings);
-                                const isExpanded = !!expandedSummaryEntryIds[entry.id];
-                                const isLongContent = parsed.userNotes.length > 200 || parsed.userNotes.split("\n").length > 5;
-                                const hasMeetingClips = (entry.meetings || []).some((m) => (m.clips || []).length > 0);
-                                const { transcript: rawTranscript } = splitSummaryAndTranscript(entry.summary_text);
-                                const timeline = buildEntryTimeline(entry.time_range, entry.raw_secs, entry.meetings || []);
+                                  // 计算与上一条记录之间的空闲间歇时间
+                                  let idleGapMins = 0;
+                                  if (entryIdx > 0) {
+                                    const prevRange = getEntryMinRange(group.entries[entryIdx - 1]);
+                                    const curRange = getEntryMinRange(entry);
+                                    if (prevRange.endMin !== null && curRange.startMin !== null && curRange.startMin > prevRange.endMin) {
+                                      idleGapMins = curRange.startMin - prevRange.endMin;
+                                    }
+                                  }
 
-                                return (
-                                <div
-                                  key={entry.id}
-                                  className={`rounded-2xl border shadow-xs transition-all overflow-hidden ${
-                                    isLiveRecording
-                                      ? "bg-rose-50/20 border-rose-200/90 ring-1 ring-rose-300/50"
-                                      : isSummarizing
-                                      ? "bg-amber-50/20 border-amber-200/90 ring-1 ring-amber-300/50"
-                                      : "bg-white border-slate-200/90 hover:border-slate-300 hover:shadow-sm"
-                                  }`}
-                                >
-                                  {/* 维度一：物理工时与工作/空闲时间轴 */}
-                                  <div className="bg-slate-50/80 border-b border-slate-100 p-4 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-3">
-                                        <div className="flex items-center gap-1.5 font-bold text-slate-900 text-sm tracking-tight">
-                                          <Clock className="w-4 h-4 text-indigo-600" />
-                                          <span>{entry.time_range}</span>
+                                  // 智能提取第一行作为主线标题，并在正文中剥离该标题，彻底避免重复大标题
+                                  const rawNoteLines = (parsed.userNotes || "").split("\n");
+                                  let firstLineIdx = -1;
+                                  for (let i = 0; i < rawNoteLines.length; i++) {
+                                    const line = rawNoteLines[i].trim();
+                                    if (line && !line.startsWith("---") && !line.startsWith("===")) {
+                                      firstLineIdx = i;
+                                      break;
+                                    }
+                                  }
+
+                                  let headlineText = "日常研发任务与协同联调";
+                                  let remainingNotes = "";
+
+                                  if (firstLineIdx !== -1) {
+                                    headlineText = rawNoteLines[firstLineIdx].trim().replace(/^#+\s*/, "").replace(/^【(.*?)】$/, "$1");
+                                    let restIdx = firstLineIdx + 1;
+                                    while (restIdx < rawNoteLines.length) {
+                                      const line = rawNoteLines[restIdx].trim();
+                                      if (!line || line.startsWith("---") || line.startsWith("===") || line.startsWith("***")) {
+                                        restIdx++;
+                                      } else {
+                                        break;
+                                      }
+                                    }
+                                    remainingNotes = rawNoteLines.slice(restIdx).join("\n").trim();
+                                  }
+
+                                  const hasAdditionalNotes = remainingNotes.length > 0;
+                                  const isLongContent = remainingNotes.length > 200 || remainingNotes.split("\n").length > 5;
+
+                                  return (
+                                    <div key={entry.id} className="space-y-2.5">
+                                      {/* 空闲间歇节点提示 */}
+                                      {idleGapMins >= 15 && (
+                                        <div className="py-2 flex items-center justify-center gap-3 select-none">
+                                          <div className="h-px bg-slate-200 flex-1" />
+                                          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-medium border border-slate-200 shadow-2xs">
+                                            <Coffee className="w-3.5 h-3.5 text-slate-400" />
+                                            <span>间歇 / 空闲时段: {formatGapMinutes(idleGapMins)}</span>
+                                          </div>
+                                          <div className="h-px bg-slate-200 flex-1" />
                                         </div>
-                                        <span className="text-xs text-slate-500">投入: <strong className="text-slate-800 font-semibold">{entry.duration_text}</strong></span>
-                                        <span className="text-xs text-slate-500">折算: <strong className="text-slate-800 font-semibold">{entry.days_text}</strong></span>
-                                        {!hideAmount && (
-                                          <span className="text-xs text-emerald-600 font-semibold">{entry.amount_text}</span>
-                                        )}
-                                      </div>
+                                      )}
+                                      {entryIdx > 0 && idleGapMins < 15 && (
+                                        <div className="border-t border-slate-100 pt-2" />
+                                      )}
 
-                                      {/* 状态徽章与结算切换 */}
-                                      <div className="flex items-center gap-2">
-                                        {isLiveRecording && (
-                                          <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-300 shadow-2xs">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
-                                            <span>会议录音中</span>
+                                      {/* 1. 时段与研发主线操作标题行 */}
+                                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 flex-wrap gap-2">
+                                        <div className="flex items-center gap-2.5 flex-wrap">
+                                          <div className="flex items-center gap-1.5 font-bold text-slate-900 text-sm font-mono">
+                                            <Clock className="w-4 h-4 text-indigo-600" />
+                                            <span>{entry.time_range}</span>
                                           </div>
-                                        )}
-                                        {isSummarizing && (
-                                          <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs">
-                                            <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
-                                            <span>AI提炼中</span>
-                                          </div>
-                                        )}
-                                        {!isLiveRecording && (
-                                          <button
-                                            onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
-                                            title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
-                                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border transition-all active:scale-95 cursor-pointer ${
-                                              entry.is_invoiced
-                                                ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
-                                                : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
-                                            }`}
-                                          >
-                                            {entry.is_invoiced ? (
-                                              <>
-                                                <CheckCheck className="w-3 h-3 text-emerald-600" />
-                                                已结算
-                                              </>
-                                            ) : (
-                                              <>
-                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                                待结算
-                                              </>
+                                          <span className="text-slate-300">|</span>
+                                          <div className="text-xs text-slate-700 font-medium flex items-center gap-1.5">
+                                            <span>研发主线：</span>
+                                            <strong className="text-slate-900 font-semibold">{headlineText}</strong>
+                                            {parsed.commits.length > 0 && (
+                                              <span className="text-slate-400 font-normal">({parsed.commits.length} 次 Commit)</span>
                                             )}
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
+                                          </div>
+                                          <span className="text-xs text-slate-400 font-mono">({entry.duration_text} · {entry.days_text})</span>
+                                          {!hideAmount && (
+                                            <span className="text-xs text-emerald-600 font-mono font-medium">{entry.amount_text}</span>
+                                          )}
+                                        </div>
 
-                                    {/* 精致时间轴：小时刻度标尺 + 工作与空闲色彩区分 */}
-                                    {timeline ? (
-                                      <div className="space-y-1.5 pt-1">
-                                        {/* 小时刻度标尺 */}
-                                        <div className="relative h-4 text-[10px] text-slate-400 font-mono select-none">
-                                          {timeline.ticks.map((t, idx) => (
+                                        {/* 操作与状态徽标 */}
+                                        <div className="flex items-center gap-1.5">
+                                          {isLiveRecording && (
+                                            <button
+                                              onClick={handleStopMeeting}
+                                              disabled={isStoppingMeeting}
+                                              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white cursor-pointer active:scale-95 transition"
+                                            >
+                                              <Square className="w-2.5 h-2.5 fill-current" />
+                                              <span>结束会议录音</span>
+                                            </button>
+                                          )}
+                                          {isSummarizing && (
+                                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                              <RefreshCw className="w-2.5 h-2.5 text-amber-600 animate-spin" />
+                                              AI提炼中
+                                            </span>
+                                          )}
+                                          {!isLiveRecording && (
+                                            <button
+                                              onClick={() => handleToggleEntryInvoiced(entry.id, entry.is_invoiced)}
+                                              title={entry.is_invoiced ? "点击重置为待结算" : "点击标记为已结算对账"}
+                                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition cursor-pointer ${
+                                                entry.is_invoiced
+                                                  ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                                                  : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
+                                              }`}
+                                            >
+                                              {entry.is_invoiced ? "已结算" : "待结算"}
+                                            </button>
+                                          )}
+                                          {rawTranscript && (
+                                            <button
+                                              onClick={() => setActiveTranscriptModal({
+                                                title: `📅 ${entry.date_str} 会议全量转写实录`,
+                                                transcript: rawTranscript,
+                                              })}
+                                              className="h-6 px-2 rounded-md bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 text-[10px] font-medium flex items-center gap-1 transition cursor-pointer"
+                                              title="查看现场全量逐字转写文稿"
+                                            >
+                                              <FileText className="w-3 h-3 text-violet-500" />
+                                              <span>文稿实录</span>
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => handleTriggerGitExtract(entry)}
+                                            disabled={isExtractingGit}
+                                            className="h-6 px-2 rounded-md text-[11px] font-semibold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 shadow-2xs transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                            title="自动读取关联 Git 仓库中在此时间区间的代码提交"
+                                          >
+                                            <GitBranch className="w-3 h-3 text-indigo-600" />
+                                            <span>从 Git 提取</span>
+                                          </button>
+                                          <button
+                                            onClick={() => setActiveEditSummaryModal({
+                                              entry_id: entry.id,
+                                              title: `📅 ${entry.date_str} 工作内容与交付说明`,
+                                              project_name: entry.project_name || activeProject?.name || "项目交付",
+                                              date_str: entry.date_str,
+                                              summary: entry.summary_text,
+                                              raw_transcript: rawTranscript,
+                                            })}
+                                            className="h-6 px-2 rounded-md text-[11px] font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 shadow-2xs transition flex items-center gap-1 cursor-pointer"
+                                            title="编辑工作内容与说明"
+                                          >
+                                            <Edit3 className="w-3 h-3 text-slate-500" />
+                                            <span>编辑内容</span>
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setSelectedEntry(entry);
+                                              setShowDetailModal(true);
+                                            }}
+                                            className="h-6 px-2 rounded-md bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                                            title="查看详情"
+                                          >
+                                            <FileText className="w-3 h-3 text-slate-400" />
+                                            <span>详情</span>
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {/* 2. Git 提交记录胶囊列表 */}
+                                      {parsed.commits.length > 0 && (
+                                        <div className="space-y-1 pt-0.5">
+                                          {parsed.commits.map((c, idx) => (
                                             <div
                                               key={idx}
-                                              className="absolute -translate-x-1/2 flex flex-col items-center"
-                                              style={{ left: `${t.percent}%` }}
+                                              className="flex items-center justify-between py-1 px-3 rounded-lg bg-slate-50/80 border border-slate-100 text-xs font-mono group hover:bg-indigo-50/40 hover:border-indigo-100 transition-colors"
                                             >
-                                              <span>{t.label}</span>
-                                              <div className="w-px h-1 bg-slate-300 mt-0.5" />
+                                              <div className="flex items-center gap-2 truncate">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                                                {c.hash && (
+                                                  <span className="text-indigo-600 font-bold shrink-0">#{c.hash}</span>
+                                                )}
+                                                <span className="text-slate-800 font-sans truncate text-[11px]">
+                                                  {c.message}
+                                                </span>
+                                              </div>
                                             </div>
                                           ))}
                                         </div>
+                                      )}
 
-                                        {/* 时间轴主轨道 (Track) */}
-                                        <div className="relative h-7 w-full bg-slate-100 rounded-lg overflow-hidden border border-slate-200/90 flex shadow-inner">
-                                          {/* 前置空闲区间 */}
-                                          {timeline.idleBeforePercent > 0 && (
-                                            <div
-                                              className="h-full bg-[repeating-linear-gradient(45deg,#f8fafc,#f8fafc_6px,#f1f5f9_6px,#f1f5f9_12px)] flex items-center justify-center text-[10px] text-slate-400 font-medium select-none"
-                                              style={{ width: `${timeline.idleBeforePercent}%` }}
-                                              title={`空闲区间: ${timeline.windowStartHour}:00 - ${entry.time_range.split(/[-~至]/)[0]}`}
-                                            >
-                                              {timeline.idleBeforePercent > 12 && <span>空闲</span>}
-                                            </div>
-                                          )}
-
-                                          {/* 工作投入区间 (Indigo 渐变色块) */}
+                                      {/* 3. 详细文本说明 (自然文字流，彻底去除重复标题与巨大 H1) */}
+                                      {hasAdditionalNotes && (
+                                        <div className="relative py-0.5">
                                           <div
-                                            className="h-full bg-gradient-to-r from-indigo-500 to-indigo-600 relative flex items-center justify-between px-2 text-white shadow-xs group cursor-default"
-                                            style={{ width: `${timeline.workPercent}%` }}
-                                            title={`工作投入: ${entry.time_range} (${entry.duration_text})`}
-                                          >
-                                            <span className="text-[10px] font-bold text-white tracking-wide truncate flex items-center gap-1">
-                                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse" />
-                                              工作投入
-                                            </span>
-                                            <span className="text-[10px] text-indigo-100 font-mono hidden sm:inline">
-                                              {entry.duration_text}
-                                            </span>
-
-                                            {/* 会议沟通标记块 (Violet 悬浮在工作轴上) */}
-                                            {timeline.meetings.map((m) => {
-                                              const relLeft = Math.max(0, ((m.startMin - timeline.startMin) / (timeline.endMin - timeline.startMin)) * 100);
-                                              return (
-                                                <div
-                                                  key={m.id}
-                                                  className="absolute top-1 bottom-1 bg-violet-600 hover:bg-violet-700 text-white rounded px-1.5 flex items-center gap-1 text-[9px] font-bold shadow-md border border-white/60 z-10 transition-transform active:scale-95"
-                                                  style={{
-                                                    left: `${relLeft}%`,
-                                                    minWidth: "48px",
-                                                  }}
-                                                  title={`会议: ${m.topic} (${m.durationText})`}
-                                                >
-                                                  <Mic className="w-2.5 h-2.5 text-violet-200" />
-                                                  <span className="truncate">{m.topic}</span>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-
-                                          {/* 后置空闲区间 */}
-                                          {timeline.idleAfterPercent > 0 && (
-                                            <div
-                                              className="h-full bg-[repeating-linear-gradient(45deg,#f8fafc,#f8fafc_6px,#f1f5f9_6px,#f1f5f9_12px)] flex items-center justify-center text-[10px] text-slate-400 font-medium select-none"
-                                              style={{ width: `${timeline.idleAfterPercent}%` }}
-                                              title={`空闲区间: ${entry.time_range.split(/[-~至]/)[1] || ""} - ${timeline.windowEndHour}:00`}
-                                            >
-                                              {timeline.idleAfterPercent > 12 && <span>空闲</span>}
+                                            className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal ${
+                                              !isExpanded && isLongContent ? "max-h-24 overflow-hidden mask-gradient-b" : ""
+                                            }`}
+                                            dangerouslySetInnerHTML={{ __html: renderMarkdown(remainingNotes) }}
+                                          />
+                                          {isLongContent && (
+                                            <div className="pt-1 flex items-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => toggleSummaryExpand(entry.id)}
+                                                className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer py-0.5 px-1.5 rounded hover:bg-indigo-50 transition-colors"
+                                              >
+                                                {isExpanded ? (
+                                                  <>
+                                                    <ChevronUp className="w-3.5 h-3.5" />
+                                                    收起说明
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <ChevronDown className="w-3.5 h-3.5" />
+                                                    展开完整说明 ({remainingNotes.length}字)
+                                                  </>
+                                                )}
+                                              </button>
                                             </div>
                                           )}
                                         </div>
+                                      )}
 
-                                        {/* 图例说明与用时统计 */}
-                                        <div className="flex items-center justify-between text-[11px] pt-1 text-slate-500">
-                                          <div className="flex items-center gap-3">
-                                            <span className="flex items-center gap-1 text-indigo-700 font-semibold">
-                                              <span className="w-2 h-2 rounded bg-indigo-500" />
-                                              <span>专注工作: {timeline.workDurationText}</span>
-                                            </span>
-                                            {timeline.meetingTotalSecs > 0 && (
-                                              <span className="flex items-center gap-1 text-violet-700 font-semibold">
-                                                <span className="w-2 h-2 rounded bg-violet-600" />
-                                                <span>会议沟通: {timeline.meetingDurationText}</span>
-                                              </span>
-                                            )}
-                                            <span className="flex items-center gap-1 text-slate-400">
-                                              <span className="w-2 h-2 rounded bg-slate-200 border border-slate-300" />
-                                              <span>非工时空闲: {timeline.idleDurationText}</span>
-                                            </span>
-                                          </div>
-                                          <span className="text-[10px] text-slate-400 hidden md:inline">
-                                            (时间区间重叠已并集核算，不重复计费)
-                                          </span>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center gap-2 text-xs text-slate-500">
-                                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                                        <span>投入工时: {entry.duration_text}</span>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* 维度二：工作内容与代码提交 */}
-                                  <div className="p-4 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
-                                          <Code2 className="w-3.5 h-3.5" />
-                                        </div>
-                                        <div>
-                                          <span className="text-xs font-bold text-slate-800">工作内容与代码提交</span>
-                                          {parsed.commits.length > 0 && (
-                                            <span className="ml-2 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/60 text-[10px] font-semibold">
-                                              {parsed.commits.length} 次 Commit
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-1.5">
-                                        <button
-                                          onClick={() => handleTriggerGitExtract(entry)}
-                                          disabled={isExtractingGit}
-                                          className="px-2.5 py-1 rounded-md text-[11px] font-semibold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 shadow-2xs hover:shadow-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95 disabled:opacity-50"
-                                          title="自动读取关联 Git 仓库中在此时间区间的代码提交"
-                                        >
-                                          <GitBranch className="w-3 h-3 text-indigo-600" />
-                                          <span>从 Git 提取</span>
-                                        </button>
-                                        <button
-                                          onClick={() => setActiveEditSummaryModal({
-                                            entry_id: entry.id,
-                                            title: `📅 ${entry.date_str} 工作内容与交付说明`,
-                                            project_name: entry.project_name || activeProject?.name || "项目交付",
-                                            date_str: entry.date_str,
-                                            summary: entry.summary_text,
-                                            raw_transcript: rawTranscript,
-                                          })}
-                                          className="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 shadow-2xs transition-all flex items-center gap-1 cursor-pointer active:scale-95"
-                                          title="编辑工作内容与说明"
-                                        >
-                                          <Edit3 className="w-3 h-3 text-slate-500" />
-                                          <span>编辑内容</span>
-                                        </button>
-                                      </div>
-                                    </div>
-
-                                    {/* 用户自定义说明与笔记 */}
-                                    {parsed.userNotes && (
-                                      <div className="relative bg-slate-50/60 rounded-lg p-3 border border-slate-100">
-                                        <div
-                                          className={`markdown-body text-xs text-slate-700 leading-relaxed font-normal ${
-                                            !isExpanded && isLongContent ? "max-h-24 overflow-hidden mask-gradient-b" : ""
-                                          }`}
-                                          dangerouslySetInnerHTML={{ __html: renderMarkdown(parsed.userNotes) }}
-                                        />
-                                        {isLongContent && (
-                                          <div className="pt-2 flex items-center">
-                                            <button
-                                              type="button"
-                                              onClick={() => toggleSummaryExpand(entry.id)}
-                                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer py-0.5 px-1.5 rounded hover:bg-indigo-50 transition-colors"
-                                            >
-                                              {isExpanded ? (
-                                                <>
-                                                  <ChevronUp className="w-3.5 h-3.5" />
-                                                  收起说明
-                                                </>
-                                              ) : (
-                                                <>
-                                                  <ChevronDown className="w-3.5 h-3.5" />
-                                                  展开完整说明 ({parsed.userNotes.length}字)
-                                                </>
-                                              )}
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {/* 空状态提示 */}
-                                    {!parsed.userNotes && parsed.commits.length === 0 && (
-                                      <div className="py-3 px-3.5 rounded-lg bg-slate-50/60 border border-dashed border-slate-200 flex items-center justify-between text-xs text-slate-400">
-                                        <span className="flex items-center gap-1.5">
-                                          <Layers className="w-3.5 h-3.5 text-slate-300" />
-                                          暂无详细工作描述与提交记录
-                                        </span>
-                                        <button
-                                          onClick={() => handleTriggerGitExtract(entry)}
-                                          className="text-[11px] text-indigo-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                                        >
-                                          <GitBranch className="w-3 h-3" />
-                                          一键从 Git 自动提取
-                                        </button>
-                                      </div>
-                                    )}
-
-                                    {/* Git 结构化提交记录 (GitHub/Linear 极简时间轴列表) */}
-                                    {parsed.commits.length > 0 && (
-                                      <div className="border-l-2 border-indigo-100 ml-3 pl-3.5 space-y-2 py-0.5">
-                                        {parsed.commits.map((c, idx) => (
-                                          <div key={idx} className="relative flex items-baseline gap-2 text-xs group">
-                                            <span className="absolute -left-[19px] top-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 ring-2 ring-white" />
-                                            {c.hash && (
-                                              <span className="shrink-0 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px] font-semibold border border-slate-200 group-hover:bg-indigo-50 group-hover:text-indigo-700 group-hover:border-indigo-200 transition-colors">
-                                                {c.hash}
-                                              </span>
-                                            )}
-                                            <span className="text-slate-700 leading-snug group-hover:text-slate-900 transition-colors break-all">
-                                              {c.message}
-                                            </span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* 维度三：会议沟通与决议 */}
-                                  {((entry.meetings && entry.meetings.length > 0) || entry.has_audio || isLiveRecording) && (
-                                    <div className="px-4 pb-4">
-                                      <div className="bg-violet-50/40 rounded-xl border border-violet-100/80 p-3.5 space-y-3">
-                                        <div className="flex items-center justify-between">
-                                          <div className="flex items-center gap-2">
-                                            <div className="w-6 h-6 rounded-lg bg-violet-100 text-violet-700 flex items-center justify-center font-bold">
-                                              <Mic className="w-3.5 h-3.5" />
-                                            </div>
-                                            <div>
-                                              <span className="text-xs font-bold text-slate-800">会议沟通与决议</span>
+                                      {/* 4. 会议沟通与决议清单 (自然缩进与结构化文字，纯文字列表) */}
+                                      {((entry.meetings && entry.meetings.length > 0) || entry.has_audio || isLiveRecording) && (
+                                        <div className="space-y-1.5 pt-1">
+                                          <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                                            <div className="flex items-center gap-2">
+                                              <Mic className="w-3.5 h-3.5 text-violet-600" />
+                                              <span className="text-xs font-bold text-slate-900 uppercase">关联会议沟通与决议记录</span>
                                               {entry.meetings && entry.meetings.length > 0 && (
-                                                <span className="ml-2 px-2 py-0.5 rounded-full bg-violet-100/80 text-violet-700 text-[10px] font-semibold">
-                                                  {entry.meetings.length} 场沟通
+                                                <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 text-[10px] font-bold">
+                                                  {entry.meetings.length} 场会议
                                                 </span>
                                               )}
                                             </div>
+
+                                            {(hasMeetingClips || entry.has_audio || !!rawTranscript) && !isLiveRecording && (
+                                              <button
+                                                onClick={() => setConfirmResummarizeModal({
+                                                  entry,
+                                                  topic: (entry.meetings && entry.meetings[0]?.topic) || undefined,
+                                                })}
+                                                className="h-6 px-2.5 rounded-md text-[11px] font-semibold text-violet-700 bg-white hover:bg-violet-50 border border-violet-200 shadow-2xs transition flex items-center gap-1 cursor-pointer active:scale-95"
+                                                title="基于录音片段与实录文稿重新提炼结构化会议纪要"
+                                              >
+                                                <Sparkles className="w-3 h-3 text-violet-600" />
+                                                <span>重新提炼纪要</span>
+                                              </button>
+                                            )}
                                           </div>
 
-                                          {(hasMeetingClips || entry.has_audio || !!rawTranscript) && !isLiveRecording && (
-                                            <button
-                                              onClick={() => setConfirmResummarizeModal({
-                                                entry,
-                                                topic: (entry.meetings && entry.meetings[0]?.topic) || undefined,
-                                              })}
-                                              className="px-2.5 py-1 rounded-md text-[11px] font-semibold text-violet-700 bg-white hover:bg-violet-50 border border-violet-200 shadow-2xs transition-all flex items-center gap-1 cursor-pointer active:scale-95"
-                                              title="基于录音片段与实录文稿重新提炼结构化会议纪要"
-                                            >
-                                              <Sparkles className="w-3 h-3 text-violet-600" />
-                                              <span>重新提炼纪要</span>
-                                            </button>
-                                          )}
-                                        </div>
+                                          {/* 会议条目列表 */}
+                                          {entry.meetings && entry.meetings.length > 0 ? (
+                                            <div className="space-y-2">
+                                              {entry.meetings.map((m, mIdx) => {
+                                                const clipTotalSecs = (m.clips || []).reduce((acc, c) => acc + (c.duration_secs || 0), 0);
+                                                const mDurationText = clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : (m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : "进行中");
 
-                                        {/* 会议卡片列表 */}
-                                        {entry.meetings && entry.meetings.length > 0 ? (
-                                          <div className="space-y-2.5">
-                                            {entry.meetings.map((m) => {
-                                              const clipTotalSecs = (m.clips || []).reduce((acc, c) => acc + (c.duration_secs || 0), 0);
-                                              const mDurationText = clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : (m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : "进行中");
-
-                                              return (
-                                                <div key={m.id} className="bg-white rounded-lg border border-violet-200/60 p-3 space-y-2.5 shadow-2xs">
-                                                  <div className="flex items-center justify-between">
-                                                    <div className="flex items-center gap-2">
-                                                      <span className="w-2 h-2 rounded-full bg-violet-500" />
-                                                      <span className="font-bold text-slate-800 text-xs">{m.topic}</span>
-                                                      <span className="text-[11px] text-slate-400 font-mono">
-                                                        ({m.start_time}{m.end_time ? ` - ${m.end_time}` : ""} · 时长: {mDurationText})
-                                                      </span>
-                                                    </div>
-                                                    {m.status === "in_progress" && (
-                                                      <button
-                                                        onClick={() => handleStartClipForMeeting(m.id)}
-                                                        className="px-2 py-0.5 bg-violet-50 hover:bg-violet-100 text-violet-700 rounded text-[10px] font-bold cursor-pointer transition-colors"
-                                                      >
-                                                        + 追加录音
-                                                      </button>
-                                                    )}
-                                                  </div>
-
-                                                  {/* 录音片段胶囊列表 */}
-                                                  {m.clips && m.clips.length > 0 && (
-                                                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                                                      <span className="text-[10px] font-semibold text-slate-400">录音片段:</span>
-                                                      {m.clips.map((clip) => {
-                                                        const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
-                                                        const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
-                                                        const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
-                                                        const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
-
-                                                        return (
-                                                          <div
-                                                            key={clip.id}
-                                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] border transition-all ${
-                                                              isFailed
-                                                                ? "bg-rose-50 border-rose-200 text-rose-700 shadow-2xs"
-                                                                : isPending
-                                                                ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
-                                                                : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                                                            }`}
+                                                return (
+                                                  <div key={m.id} className="p-2.5 rounded-lg border border-slate-200/80 bg-slate-50/50 space-y-1.5 text-xs">
+                                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                                      <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-slate-900">{mIdx + 1}. {m.topic}</span>
+                                                        <span className="text-slate-400 font-mono text-[11px]">
+                                                          ({m.start_time}{m.end_time ? ` — ${m.end_time}` : ""} · 时长: {mDurationText})
+                                                        </span>
+                                                        {m.status === "in_progress" && (
+                                                          <button
+                                                            onClick={() => handleStartClipForMeeting(m.id)}
+                                                            className="px-2 py-0.5 bg-violet-100 hover:bg-violet-200 text-violet-800 rounded text-[10px] font-bold cursor-pointer transition-colors"
                                                           >
-                                                            <button
-                                                              onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
-                                                              className="font-semibold flex items-center gap-1 hover:underline cursor-pointer"
-                                                              title="播放该录音片段"
-                                                            >
-                                                              <Volume2 className="w-3 h-3 text-slate-500" />
-                                                              <span>片段 {clip.clip_order} ({clip.duration_text})</span>
-                                                            </button>
+                                                            + 追加录音
+                                                          </button>
+                                                        )}
+                                                      </div>
 
-                                                            {isTranscribed && (
-                                                              <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5 ml-0.5">
-                                                                {clip.transcript && (
+                                                      {/* 录音片段胶囊列表 */}
+                                                      {m.clips && m.clips.length > 0 && (
+                                                        <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                                                          <span className="text-slate-400 text-[10px]">录音:</span>
+                                                          {m.clips.map((clip) => {
+                                                            const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
+                                                            const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
+                                                            const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
+                                                            const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
+
+                                                            return (
+                                                              <div
+                                                                key={clip.id}
+                                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border transition-all ${
+                                                                  isFailed
+                                                                    ? "bg-rose-50 border-rose-200 text-rose-700"
+                                                                    : isPending
+                                                                    ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
+                                                                    : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
+                                                                }`}
+                                                              >
+                                                                <button
+                                                                  onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
+                                                                  className="font-medium flex items-center gap-1 hover:underline cursor-pointer"
+                                                                  title="播放该录音片段"
+                                                                >
+                                                                  <Volume2 className="w-2.5 h-2.5 text-slate-500" />
+                                                                  <span>片段 {clip.clip_order} ({clip.duration_text})</span>
+                                                                </button>
+
+                                                                {isTranscribed && (
+                                                                  <div className="flex items-center gap-1 border-l border-slate-200 pl-1 ml-0.5">
+                                                                    {clip.transcript && (
+                                                                      <button
+                                                                        onClick={() => setActiveTranscriptModal({
+                                                                          title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
+                                                                          transcript: clip.transcript!,
+                                                                        })}
+                                                                        className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5"
+                                                                        title="查看转写文稿"
+                                                                      >
+                                                                        <FileText className="w-2.5 h-2.5" />
+                                                                        <span>文稿</span>
+                                                                      </button>
+                                                                    )}
+                                                                    <button
+                                                                      onClick={() => setConfirmRetryClipModal({
+                                                                        clipId: clip.id,
+                                                                        clipOrder: clip.clip_order,
+                                                                        durationText: clip.duration_text,
+                                                                        topic: m.topic,
+                                                                        hasTranscript: !!clip.transcript,
+                                                                      })}
+                                                                      className="text-slate-400 hover:text-indigo-600 px-0.5 cursor-pointer flex items-center"
+                                                                      title="重新转写此片段"
+                                                                    >
+                                                                      <RotateCw className="w-2.5 h-2.5" />
+                                                                    </button>
+                                                                  </div>
+                                                                )}
+
+                                                                {isPending && (
+                                                                  <span className="flex items-center gap-0.5 text-amber-600 font-medium pl-1">
+                                                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                    <span>转写中</span>
+                                                                  </span>
+                                                                )}
+
+                                                                {isFailed && (
                                                                   <button
-                                                                    onClick={() => setActiveTranscriptModal({
-                                                                      title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
-                                                                      transcript: clip.transcript!,
+                                                                    onClick={() => setConfirmRetryClipModal({
+                                                                      clipId: clip.id,
+                                                                      clipOrder: clip.clip_order,
+                                                                      durationText: clip.duration_text,
+                                                                      topic: m.topic,
+                                                                      hasTranscript: !!clip.transcript,
                                                                     })}
-                                                                    className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5 font-medium"
-                                                                    title="查看该片段逐字转写"
+                                                                    className="px-1 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] cursor-pointer"
+                                                                    title="重试转写"
                                                                   >
-                                                                    <FileText className="w-2.5 h-2.5" />
-                                                                    <span>文稿</span>
+                                                                    重试
                                                                   </button>
                                                                 )}
-                                                                <button
-                                                                  onClick={() => setConfirmRetryClipModal({
-                                                                    clipId: clip.id,
-                                                                    clipOrder: clip.clip_order,
-                                                                    durationText: clip.duration_text,
-                                                                    topic: m.topic,
-                                                                    hasTranscript: !!clip.transcript,
-                                                                  })}
-                                                                  className="text-slate-400 hover:text-indigo-600 px-1 py-0.5 rounded cursor-pointer flex items-center gap-0.5 font-medium transition-colors"
-                                                                  title="重新转写此片段"
-                                                                >
-                                                                  <RotateCw className="w-2.5 h-2.5" />
-                                                                  <span>重新转写</span>
-                                                                </button>
                                                               </div>
-                                                            )}
-
-                                                            {isPending && (
-                                                              <span className="flex items-center gap-1 text-amber-600 font-medium border-l border-amber-200 pl-1.5 ml-0.5">
-                                                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                                                <span>转写中...</span>
-                                                              </span>
-                                                            )}
-
-                                                            {isFailed && (
-                                                              <div className="flex items-center gap-1 border-l border-rose-200 pl-1.5 ml-0.5">
-                                                                <span className="flex items-center gap-0.5 text-rose-600 font-semibold">
-                                                                  <AlertCircle className="w-2.5 h-2.5" />
-                                                                  <span>转写失败</span>
-                                                                </span>
-                                                                <button
-                                                                  onClick={() => setConfirmRetryClipModal({
-                                                                    clipId: clip.id,
-                                                                    clipOrder: clip.clip_order,
-                                                                    durationText: clip.duration_text,
-                                                                    topic: m.topic,
-                                                                    hasTranscript: !!clip.transcript,
-                                                                  })}
-                                                                  className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] flex items-center gap-0.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
-                                                                >
-                                                                  <RotateCw className="w-2.5 h-2.5" />
-                                                                  <span>重新转写</span>
-                                                                </button>
-                                                            </div>
-                                                          )}
+                                                            );
+                                                          })}
                                                         </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                )}
-
-                                                {/* 会议达成共识与决议 callout */}
-                                                {m.summary && (
-                                                  <div className="bg-slate-50/70 rounded-lg p-3 text-xs text-slate-700 border-l-2 border-violet-400 space-y-1.5">
-                                                    <div className="text-[11px] font-bold text-violet-700 flex items-center gap-1.5">
-                                                      <Sparkles className="w-3.5 h-3.5 text-violet-600" />
-                                                      <span>达成共识与技术决议</span>
+                                                      )}
                                                     </div>
-                                                    <div
-                                                      className="markdown-body leading-relaxed text-xs text-slate-700 font-normal pl-0.5"
-                                                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.summary) }}
-                                                    />
+
+                                                    {/* 会议达成共识与决议：自然文本列表，优雅边框缩进 */}
+                                                    {m.summary && (
+                                                      <div
+                                                        className="markdown-body pl-3.5 border-l-2 border-violet-200 text-[11px] leading-relaxed text-slate-700 space-y-1 pt-0.5"
+                                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(m.summary) }}
+                                                      />
+                                                    )}
                                                   </div>
-                                                )}
+                                                );
+                                              })}
+                                            </div>
+                                          ) : entry.has_audio && !hasMeetingClips ? (
+                                            <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/50 flex items-center justify-between text-xs">
+                                              <div className="flex items-center gap-2 text-slate-700">
+                                                <Volume2 className="w-4 h-4 text-violet-600" />
+                                                <span>现场会议录音凭证</span>
                                               </div>
-                                            );
-                                          })}
+                                              <button
+                                                onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
+                                                className="px-2.5 py-1 rounded bg-violet-50 text-violet-700 hover:bg-violet-100 text-xs font-semibold flex items-center gap-1 border border-violet-200 transition-colors cursor-pointer"
+                                              >
+                                                <Volume2 className="w-3 h-3" />
+                                                <span>播放录音</span>
+                                              </button>
+                                            </div>
+                                          ) : null}
                                         </div>
-                                      ) : entry.has_audio && !hasMeetingClips ? (
-                                        <div className="bg-white rounded-lg border border-violet-200/60 p-3 flex items-center justify-between">
-                                          <div className="flex items-center gap-2 text-xs text-slate-700">
-                                            <Volume2 className="w-4 h-4 text-violet-600" />
-                                            <span>现场会议录音凭证</span>
-                                          </div>
-                                          <button
-                                            onClick={() => handleOpenAudioPlayer(entry.audio_path, `${entry.date_str} 会议录音凭证`)}
-                                            className="px-2.5 py-1 rounded bg-violet-50 text-violet-700 hover:bg-violet-100 text-xs font-semibold flex items-center gap-1 border border-violet-200 transition-colors cursor-pointer"
-                                          >
-                                            <Volume2 className="w-3 h-3" />
-                                            <span>播放录音</span>
-                                          </button>
-                                        </div>
-                                      ) : null}
+                                      )}
                                     </div>
-                                  </div>
-                                )}
+                                  );
+                                })}
+                              </div>
 
-                                {/* 底部操作工具栏 */}
-                                <div className="px-4 py-2.5 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between text-xs">
-                                  <div className="flex items-center gap-2">
-                                    {isLiveRecording && (
-                                      <button
-                                        onClick={handleStopMeeting}
-                                        disabled={isStoppingMeeting}
-                                        className="h-7 px-3 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs active:scale-95"
-                                      >
-                                        <Square className="w-3 h-3 fill-current" />
-                                        <span>结束会议并提炼纪要</span>
-                                      </button>
-                                    )}
-                                    {rawTranscript && (
-                                      <button
-                                        onClick={() => setActiveTranscriptModal({
-                                          title: `📅 ${entry.date_str} 会议全量转写实录`,
-                                          transcript: rawTranscript,
-                                        })}
-                                        className="h-7 px-2.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 text-[11px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                                        title="在独立弹窗中查看完整逐字转写文稿"
-                                      >
-                                        <FileText className="w-3 h-3 text-slate-500" />
-                                        <span>查看转写实录 ({rawTranscript.length}字)</span>
-                                      </button>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center gap-2">
-                                    {!isLiveRecording && (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            const textToCopy = entry.summary_text || "";
-                                            navigator.clipboard.writeText(textToCopy);
-                                            showToast("📋 工作说明已复制到剪贴板！");
-                                          }}
-                                          className="h-7 px-2.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                          title="复制工作内容与交付说明"
-                                        >
-                                          <Copy className="w-3 h-3 text-slate-500" />
-                                          <span>复制说明</span>
-                                        </button>
-                                        <button
-                                          disabled={isExportingPdf}
-                                          onClick={() => handleExportPdf({
-                                            title: `【${entry.project_name || activeProject?.name || "项目"}】工作交付说明与决议`,
-                                            projectName: entry.project_name || activeProject?.name || "技术项目",
-                                            dateStr: entry.date_str,
-                                            summaryContent: entry.summary_text,
-                                          })}
-                                          className="h-7 px-2.5 rounded-md bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                                          title="导出为精美商务 PDF 文档"
-                                        >
-                                          <FileDown className="w-3 h-3 text-emerald-600" />
-                                          <span>导出PDF</span>
-                                        </button>
-                                      </>
-                                    )}
-                                    <button
-                                      onClick={() => {
-                                        setSelectedEntry(entry);
+                              {/* 卡片底部动作组 (每天卡片底部唯一定位，避免每笔条目重复堆叠底栏) */}
+                              <div className="px-5 py-2.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
+                                <span className="text-[11px]">加密归档至本地 SQLite 数据库</span>
+                                
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={() => {
+                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+                                      navigator.clipboard.writeText(allSummaries);
+                                      showToast("📋 当日完整工作交付说明已复制！");
+                                    }}
+                                    className="h-6 px-2.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-medium flex items-center gap-1 shadow-2xs transition cursor-pointer"
+                                    title="复制当日所有工时交付说明"
+                                  >
+                                    <Copy className="w-3 h-3 text-slate-500" />
+                                    <span>复制说明</span>
+                                  </button>
+                                  <button
+                                    disabled={isExportingPdf}
+                                    onClick={() => {
+                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+                                      handleExportPdf({
+                                        title: `【${activeProject?.name || "技术项目"}】${group.date_str} 工作交付说明与决议`,
+                                        projectName: activeProject?.name || "技术项目",
+                                        dateStr: group.date_str,
+                                        summaryContent: allSummaries,
+                                      });
+                                    }}
+                                    className="h-6 px-2.5 rounded-md bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition cursor-pointer disabled:opacity-50"
+                                    title="导出当日工作交付说明 PDF"
+                                  >
+                                    <FileDown className="w-3 h-3 text-emerald-600" />
+                                    <span>导出PDF</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (group.entries[0]) {
+                                        setSelectedEntry(group.entries[0]);
                                         setShowDetailModal(true);
-                                      }}
-                                      className="h-7 px-2.5 rounded-md bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
-                                    >
-                                      <FileText className="w-3 h-3 text-slate-400" />
-                                      <span>查看详情</span>
-                                    </button>
-                                  </div>
+                                      }
+                                    }}
+                                    className="h-6 px-2.5 rounded-md bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-[11px] font-medium flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                                  >
+                                    <FileText className="w-3 h-3 text-slate-400" />
+                                    <span>查看详情</span>
+                                  </button>
                                 </div>
                               </div>
-                              );
-                              })}
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   )}
-
-                  {/* ---------------- 模式 B：月历视图 (Calendar View) ---------------- */}
+{/* ---------------- 模式 B：月历视图 (Calendar View) ---------------- */}
                   {viewMode === "calendar" && (() => {
                     const [yearNum, monthNum] = selectedMonth.split("-").map(Number);
                     const firstDayOfWeek = new Date(yearNum, monthNum - 1, 1).getDay(); // 0 is Sunday

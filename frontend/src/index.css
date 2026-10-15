@@ -25,14 +25,22 @@
   color: #0f172a;
 }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
-  font-weight: 800;
+  font-weight: 700;
   color: #0f172a;
-  margin-top: 0.6rem;
-  margin-bottom: 0.35rem;
+  margin-top: 0.4rem;
+  margin-bottom: 0.25rem;
+  border-bottom: none !important;
 }
-.markdown-body h1 { font-size: 1.1rem; }
-.markdown-body h2 { font-size: 0.95rem; }
-.markdown-body h3 { font-size: 0.875rem; }
+.markdown-body h1 { font-size: 0.875rem !important; }
+.markdown-body h2 { font-size: 0.8125rem !important; }
+.markdown-body h3 { font-size: 0.75rem !important; }
+.markdown-body hr {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+}
+
 .markdown-body ul, .markdown-body ol {
   padding-left: 1.25rem;
   margin-bottom: 0.5rem;

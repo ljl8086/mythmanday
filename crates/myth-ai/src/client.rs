@@ -643,7 +643,7 @@ impl AiSummarizer {
             .map_err(|e| AiError::ParseError(format!("解析批量智能总结 JSON 数组失败: {} (raw: {})", e, json_str)))
     }
 
-    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼商业级会议纪要
+    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼真实客观的会议纪要
     pub async fn summarize_meeting(
         &self,
         meeting_topic: &str,
@@ -661,10 +661,13 @@ impl AiSummarizer {
             prompt_content.push_str(&format!("【音频留存凭证】：{}\n\n", audio_info));
         }
 
-        if let Some(transcript) = audio_transcript {
-            if !transcript.trim().is_empty() {
-                prompt_content.push_str(&format!("【会议录音全量转写文稿】：\n{}\n\n", transcript));
-            }
+        let clean_transcript = audio_transcript
+            .map(|t| clean_repetitive_text(t))
+            .unwrap_or_default();
+
+        let has_transcript = !clean_transcript.trim().is_empty();
+        if has_transcript {
+            prompt_content.push_str(&format!("【现场录音文字转写】：\n{}\n\n", clean_transcript.trim()));
         }
 
         if !notes.is_empty() {
@@ -675,7 +678,21 @@ impl AiSummarizer {
             prompt_content.push('\n');
         }
 
-        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、内容详实、格局高远的商业交付级会议纪要。\n要求：\n1. 结构严格采用分层条目式：\n   一、【核心议题与沟通背景】（提炼本次会议讨论的核心背景与功能诉求）\n   二、【达成共识与技术决议】（条目式列出每一条落地的业务/技术架构决议，如菜单设计、表单归属、线下签字闭环、数据隔离等）\n   三、【后续推进与工程待办】（条目式列出具体待办事项）\n2. 内容要充分依据录音中讨论的实际细节进行真实提炼，严禁泛泛而谈或空话套话；\n3. 语言干练严谨、体现高维价值，适合直接呈报给客户或团队作为工时与技术交付凭据。\n4. 若会议未附带录音文稿或文字速记，请基于议题与企业级工程最佳实践直接梳理出标准纪要框架与重点跟进待办，严禁输出任何索要录音转写、询问用户或对话聊天式语句。";
+        if !has_transcript && notes.is_empty() {
+            return Ok(format!(
+                "【会议纪要：{}】\n本次会议时长 {:.2} 小时。未检测到录音转写文稿或速记要点，建议相关人员手动补充会议结论与待办事项。",
+                meeting_topic, duration_hours
+            ));
+        }
+
+        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、真实严谨的会议纪要。\n\
+        严格遵循以下原则：\n\
+        1. 真实客观第一原则：必须完全且仅基于实际会议讨论内容与录音文稿进行提炼，严禁凭空捏造、臆想或补充未在讨论中出现的任何业务功能、架构决议或流程！\n\
+        2. 若录音文稿较为零散、主要为口语闲聊或缺乏实质技术细节，请实事求是地归纳讨论触及的初步议题，并明确标注“待进一步明确”，严禁编造看似专业的虚假技术决议或虚假表格！\n\
+        3. 结构采用条目式：\n\
+           一、【核心议题与沟通背景】（真实归纳会议讨论的核心事项）\n\
+           二、【达成共识与讨论要点】（仅列出会议中实际达成一致或明确提到的要点）\n\
+           三、【后续推进与待办事项】（仅列出会议中实际明确的分工与下一步计划，若未提及则如实写“待后续对齐”）";
 
         self.execute_completion(system_prompt, &prompt_content).await
     }
@@ -796,7 +813,12 @@ impl AiSummarizer {
                            .arg("-l").arg(&lang)
                            .arg("-nt")
                            .arg("--no-prints")
-                           .arg("-t").arg("4");
+                           .arg("-t").arg("4")
+                           .arg("-sns")
+                           .arg("-et").arg("2.4")
+                           .arg("-nth").arg("0.6")
+                           .arg("-nf")
+                           .arg("-mc").arg("64");
                         if let Some(ref p) = prompt_opt {
                             if !p.trim().is_empty() {
                                 cmd.arg("--prompt").arg(p.trim());
@@ -808,8 +830,9 @@ impl AiSummarizer {
                     if let Ok(Ok(out)) = res {
                         if out.status.success() {
                             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                            if !text.is_empty() {
-                                return Ok(text);
+                            let cleaned = clean_repetitive_text(&text);
+                            if !cleaned.is_empty() {
+                                return Ok(cleaned);
                             }
                         } else {
                             let err = String::from_utf8_lossy(&out.stderr);
@@ -833,7 +856,8 @@ impl AiSummarizer {
         if mode == "agent" {
             let provider = self.config.provider.trim().to_lowercase();
             let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
-            return self.transcribe_with_cli_agent(&actual_audio_path, &provider, proxy_opt).await;
+            let res = self.transcribe_with_cli_agent(&actual_audio_path, &provider, proxy_opt).await?;
+            return Ok(clean_repetitive_text(&res));
         }
 
         // 3. 云端兼容 Whisper 标准的 HTTP API (/audio/transcriptions)
@@ -906,8 +930,90 @@ impl AiSummarizer {
         }
 
         let text = resp.text().await.map_err(AiError::Reqwest)?;
-        Ok(text.trim().to_string())
+        Ok(clean_repetitive_text(&text))
     }
+}
+
+/// 对语音识别 (Whisper 等) 可能产生的恶性循环重复短语、静音幻觉文本进行清理与去重折叠
+pub fn clean_repetitive_text(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // 1. 过滤常见的静音低信噪比固定幻觉短语及循环复读词
+    let filter_hallucinations = [
+        "( 字幕:J Chong )",
+        "字幕:J Chong",
+        "请不吝赐教",
+        "感谢观看",
+        "谢谢大家观看",
+        "谢谢收看",
+        "优酷网",
+        "YouTube",
+        "点赞关注",
+    ];
+    let mut text = trimmed.to_string();
+    for h in filter_hallucinations {
+        text = text.replace(h, "");
+    }
+
+    // 过滤 Whisper 中文死循环幻觉（如“你不认识我吗”循环）
+    let loop_patterns = ["你不认识我吗", "我认识我吗", "你不认识我", "不认识我吗", "认识我吗"];
+    for lp in loop_patterns {
+        if text.matches(lp).count() >= 2 {
+            text = text.replace(lp, "");
+        }
+    }
+
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n < 4 {
+        return text.to_string();
+    }
+
+    // 2. 连续重复子串折叠（支持短语长度从 30 字符到 1 字符）
+    // 若某个长度为 L 的子串连续重复 >= 3 次，将其折叠为最多 1~2 次
+    let mut result_chars: Vec<char> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        let mut matched = false;
+        let max_plen = 30.min((n - i) / 3);
+        for plen in (1..=max_plen).rev() {
+            let pattern = &chars[i..i + plen];
+            if pattern.iter().all(|c| c.is_whitespace()) {
+                continue;
+            }
+            let mut repeat_count = 1;
+            while i + (repeat_count + 1) * plen <= n 
+                && &chars[i + repeat_count * plen..i + (repeat_count + 1) * plen] == pattern 
+            {
+                repeat_count += 1;
+            }
+
+            if repeat_count >= 3 {
+                let keep_count = if plen <= 2 { 2 } else { 1 };
+                for _ in 0..keep_count {
+                    result_chars.extend_from_slice(pattern);
+                }
+                i += repeat_count * plen;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            result_chars.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    let cleaned: String = result_chars.into_iter().collect();
+    cleaned.trim().to_string()
 }
 
 use futures_util::StreamExt;
@@ -1146,6 +1252,15 @@ mod tests {
     fn test_find_whisper_helpers() {
         let _ = find_whisper_binary(None);
         let _ = find_whisper_model(None);
+    }
+
+    #[test]
+    fn test_clean_repetitive_text() {
+        let input = "喂大家上午好对你你你你你你你你你你不认识我吗你不认识我吗你不认识我吗你不认识我吗( 字幕:J Chong )";
+        let cleaned = clean_repetitive_text(input);
+        assert!(cleaned.starts_with("喂大家上午好对你你你不认识我吗") || cleaned.contains("喂大家上午好"));
+        assert!(!cleaned.contains("( 字幕:J Chong )"));
+        assert!(!cleaned.contains("你不认识我吗你不认识我吗你不认识我吗"));
     }
 }
 

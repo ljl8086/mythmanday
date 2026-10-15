@@ -1150,22 +1150,13 @@ async fn finish_meeting(
             Err(_) => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_clone),
         };
 
-        // 更新会议记录与每日工时主记录的 summary
+        // 更新会议记录的 meeting_summary（不污染每日工时工作内容 entry.summary）
         {
             let guard = db_for_async.lock().unwrap();
             if let Ok(Some(mut m)) = guard.get_meeting(&m_id) {
                 m.meeting_summary = Some(summary.clone());
                 m.status = "completed".to_string();
                 let _ = guard.insert_meeting(&m);
-            }
-            if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
-                let entry_summary = if combined_transcript.trim().is_empty() {
-                    format!("【会议纪要：{}】\n{}", topic_clone, summary)
-                } else {
-                    format!("【会议纪要：{}】\n{}\n\n---\n【现场录音实录】：\n{}", topic_clone, summary, combined_transcript.trim())
-                };
-                e.summary = Some(entry_summary);
-                let _ = guard.insert_time_entry(&e);
             }
         }
 
@@ -2252,7 +2243,7 @@ async fn transcribe_entry_audio(state: State<'_, AppState>, entry_id: String, au
         _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
     };
 
-    let mut guard = db.lock().unwrap();
+    let guard = db.lock().unwrap();
     if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
         let prev = entry.summary.unwrap_or_default();
         let new_summary = if prev.is_empty() {
@@ -2293,10 +2284,8 @@ async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String)
     if !meetings.is_empty() {
         let mut final_meeting_summary = String::new();
         let mut all_combined_transcripts = String::new();
-        let mut last_topic = "会议纪要".to_string();
 
         for mut m in meetings {
-            last_topic = m.topic.clone();
             let clips = db.lock().unwrap().list_audio_clips_for_meeting(&m.id).unwrap_or_default();
             let mut combined_transcript = String::new();
             for c in &clips {
@@ -2323,19 +2312,7 @@ async fn resummarize_meeting_entry(state: State<'_, AppState>, entry_id: String)
             }
         }
 
-        let entry_summary = if all_combined_transcripts.trim().is_empty() {
-            format!("【会议纪要：{}】\n{}", last_topic, final_meeting_summary)
-        } else {
-            format!("【会议纪要：{}】\n{}\n\n---\n【现场录音实录】：\n{}", last_topic, final_meeting_summary, all_combined_transcripts.trim())
-        };
-
-        let mut guard = db.lock().unwrap();
-        if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
-            entry.summary = Some(entry_summary.clone());
-            let _ = guard.insert_time_entry(&entry);
-        }
-
-        return Ok(entry_summary);
+        return Ok(final_meeting_summary);
     } else {
         let p = std::path::Path::new(&entry_audio_path);
         let transcript = if p.exists() {
