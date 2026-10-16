@@ -4093,6 +4093,32 @@ async fn export_meeting_pdf(
     color: inherit;
     padding: 0;
   }}
+  .content-area table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    page-break-inside: auto;
+  }}
+  .content-area tr {{
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }}
+  .content-area th, .content-area td {{
+    border: 1px solid #cbd5e1;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+  }}
+  .content-area th {{
+    background-color: #f1f5f9;
+    color: #0f172a;
+    font-weight: 700;
+  }}
+  .content-area tr:nth-child(even) td {{
+    background-color: #f8fafc;
+  }}
   .footer-bar {{
     margin-top: 40px;
     padding-top: 14px;

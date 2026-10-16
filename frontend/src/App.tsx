@@ -433,7 +433,6 @@ export function App() {
     return { summary: fullText, transcript: "" };
   };
 
-
   interface ParsedWorkContent {
     userNotes: string;
     commits: Array<{ message: string; hash?: string }>;
@@ -520,6 +519,63 @@ export function App() {
       commits: commitLines,
       rawText: cleaned,
     };
+  };
+
+  // 拼接单日完整交付说明：聚合日常研发工作主线、Git提交记录与关联会议沟通纪要/决议
+  const buildCompleteDayDeliverableSummary = (group: DayGroup): string => {
+    const sections: string[] = [];
+
+    for (const entry of group.entries) {
+      const { summary: conciseSummary } = splitSummaryAndTranscript(entry.summary_text || "");
+      const hasMeetings = (entry.meetings || []).length > 0;
+      const parsed = parseWorkContent(conciseSummary, hasMeetings);
+
+      const entryParts: string[] = [];
+      const headline = parsed.userNotes
+        ? parsed.userNotes.trim()
+        : (conciseSummary.replace(/【会议进行中 🎙️】/g, "").trim() || "日常研发任务与协同联调");
+
+      // 1. 研发主线与工作任务内容
+      if (headline && !headline.startsWith("【会议进行中 🎙️】")) {
+        entryParts.push(headline);
+      }
+
+      // 2. Git 提交记录
+      if (parsed.commits.length > 0) {
+        const commitText = parsed.commits
+          .map((c) => `- ${c.hash ? `[${c.hash}] ` : ""}${c.message}`)
+          .join("\n");
+        entryParts.push(`**代码研发与提交 (${parsed.commits.length} 次)：**\n${commitText}`);
+      }
+
+      // 3. 关联会议的完整纪要与技术决议
+      if (entry.meetings && entry.meetings.length > 0) {
+        const meetingParts: string[] = [];
+        for (const m of entry.meetings) {
+          if (m.summary && m.summary.trim()) {
+            meetingParts.push(`### 议题：${m.topic}\n\n${m.summary.trim()}`);
+          }
+        }
+        if (meetingParts.length > 0) {
+          entryParts.push(`## 关联会议沟通与决议清单\n\n${meetingParts.join("\n\n---\n\n")}`);
+        }
+      }
+
+      const combinedEntryText = entryParts.filter(Boolean).join("\n\n");
+      if (combinedEntryText.trim()) {
+        if (group.entries.length > 1) {
+          sections.push(`## 【时段 ${entry.time_range}】\n\n${combinedEntryText.trim()}`);
+        } else {
+          sections.push(combinedEntryText.trim());
+        }
+      }
+    }
+
+    if (sections.length === 0) {
+      return group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+    }
+
+    return sections.join("\n\n---\n\n");
   };
 
 
@@ -3239,12 +3295,12 @@ export function App() {
                                 <div className="flex items-center gap-1.5">
                                   <button
                                     onClick={() => {
-                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
-                                      navigator.clipboard.writeText(allSummaries);
-                                      showToast("📋 当日完整工作交付说明已复制！");
+                                      const fullDaySummary = buildCompleteDayDeliverableSummary(group);
+                                      navigator.clipboard.writeText(fullDaySummary);
+                                      showToast("📋 当日完整工作交付说明与会议决议已全量复制！");
                                     }}
                                     className="h-6 px-2.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-medium flex items-center gap-1 shadow-2xs transition cursor-pointer"
-                                    title="复制当日所有工时交付说明"
+                                    title="复制当日所有工时交付说明与会议沟通决议清单"
                                   >
                                     <Copy className="w-3 h-3 text-slate-500" />
                                     <span>复制说明</span>
@@ -3252,12 +3308,12 @@ export function App() {
                                   <button
                                     disabled={isExportingPdf}
                                     onClick={() => {
-                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+                                      const fullDaySummary = buildCompleteDayDeliverableSummary(group);
                                       handleExportPdf({
                                         title: `【${activeProject?.name || "技术项目"}】${group.date_str} 工作交付说明与决议`,
                                         projectName: activeProject?.name || "技术项目",
                                         dateStr: group.date_str,
-                                        summaryContent: allSummaries,
+                                        summaryContent: fullDaySummary,
                                       });
                                     }}
                                     className="h-6 px-2.5 rounded-md bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition cursor-pointer disabled:opacity-50"
