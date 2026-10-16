@@ -1445,7 +1445,24 @@ export function App() {
   // 点击按钮直接读取系统剪贴板并关联至指定会议
   const handlePasteFromClipboard = async (meetingId: string) => {
     try {
-      // 1. 尝试使用 navigator.clipboard.read() 读取图片或文件
+      // 1. 优先调用 Tauri 后端命令读取系统底层剪贴板 (完美支持 Linux Wayland wl-paste 与 X11 xclip)
+      const sysClip = await invoke<{ content_type: string; data: string; file_name: string }>("get_system_clipboard");
+      if (sysClip && sysClip.content_type === "image" && sysClip.data) {
+        await invoke("upload_meeting_material", {
+          meetingId,
+          fileName: sysClip.file_name,
+          base64Data: sysClip.data,
+        });
+        refreshData();
+        if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+        showToast("📋 成功读取系统剪贴板截图并作为会议参考资料关联！");
+        return;
+      } else if (sysClip && sysClip.content_type === "text" && sysClip.data) {
+        await handleUploadTextSnippet(meetingId, sysClip.data);
+        return;
+      }
+
+      // 2. 备用浏览器 navigator.clipboard API
       if (navigator.clipboard && navigator.clipboard.read) {
         const items = await navigator.clipboard.read();
         for (const item of items) {
@@ -1477,7 +1494,6 @@ export function App() {
         }
       }
 
-      // 2. 如果没有图片，尝试读取文本
       if (navigator.clipboard && navigator.clipboard.readText) {
         const text = await navigator.clipboard.readText();
         if (text && text.trim().length > 0) {
@@ -1489,7 +1505,7 @@ export function App() {
       showToast("剪贴板中未找到图片或文本内容，请先截图(PrintScreen/Win+Shift+S)或复制文本！");
     } catch (err: any) {
       console.warn("读取剪贴板异常:", err);
-      showToast("请直接在会议卡片上使用键盘快捷键 Ctrl+V 粘贴截图或文本！");
+      showToast("读取剪贴板失败，也可以直接在卡片上按下 Ctrl+V 尝试粘贴！");
     }
   };
 

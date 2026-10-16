@@ -1881,6 +1881,120 @@ async fn get_material_data_url(
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+#[derive(serde::Serialize)]
+struct SystemClipboardDto {
+    content_type: String, // "image" or "text" or "empty"
+    data: String,         // base64 data URL for image or plain text
+    file_name: String,
+}
+
+#[tauri::command]
+async fn get_system_clipboard() -> Result<SystemClipboardDto, String> {
+    tokio::task::spawn_blocking(|| {
+        let date_str = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+
+        // 1. 尝试 Wayland wl-paste
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .arg("--list-types")
+            .output()
+        {
+            if output.status.success() {
+                let types_str = String::from_utf8_lossy(&output.stdout);
+                let types: Vec<&str> = types_str.lines().map(|s| s.trim()).collect();
+                
+                // 优先检查图片
+                for t in &types {
+                    if t.starts_with("image/") {
+                        if let Ok(img_output) = std::process::Command::new("wl-paste")
+                            .arg("--type")
+                            .arg(t)
+                            .output()
+                        {
+                            if img_output.status.success() && !img_output.stdout.is_empty() {
+                                use base64::Engine;
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&img_output.stdout);
+                                let ext = t.split('/').nth(1).unwrap_or("png");
+                                return Ok(SystemClipboardDto {
+                                    content_type: "image".to_string(),
+                                    data: format!("data:{};base64,{}", t, b64),
+                                    file_name: format!("clipboard_{}.{}", date_str, ext),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // 其次检查文本
+                if let Ok(text_output) = std::process::Command::new("wl-paste")
+                    .arg("--no-newline")
+                    .output()
+                {
+                    if text_output.status.success() && !text_output.stdout.is_empty() {
+                        let text = String::from_utf8_lossy(&text_output.stdout).to_string();
+                        if !text.trim().is_empty() {
+                            return Ok(SystemClipboardDto {
+                                content_type: "text".to_string(),
+                                data: text,
+                                file_name: format!("clipboard_text_{}.txt", date_str),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 尝试 X11 xclip
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(&["-selection", "clipboard", "-t", "TARGETS", "-o"])
+            .output()
+        {
+            if output.status.success() {
+                let targets = String::from_utf8_lossy(&output.stdout);
+                if targets.contains("image/png") {
+                    if let Ok(img) = std::process::Command::new("xclip")
+                        .args(&["-selection", "clipboard", "-t", "image/png", "-o"])
+                        .output()
+                    {
+                        if img.status.success() && !img.stdout.is_empty() {
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&img.stdout);
+                            return Ok(SystemClipboardDto {
+                                content_type: "image".to_string(),
+                                data: format!("data:image/png;base64,{}", b64),
+                                file_name: format!("clipboard_{}.png", date_str),
+                            });
+                        }
+                    }
+                }
+
+                if let Ok(txt) = std::process::Command::new("xclip")
+                    .args(&["-selection", "clipboard", "-o"])
+                    .output()
+                {
+                    if txt.status.success() && !txt.stdout.is_empty() {
+                        let text = String::from_utf8_lossy(&txt.stdout).to_string();
+                        if !text.trim().is_empty() {
+                            return Ok(SystemClipboardDto {
+                                content_type: "text".to_string(),
+                                data: text,
+                                file_name: format!("clipboard_text_{}.txt", date_str),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SystemClipboardDto {
+            content_type: "empty".to_string(),
+            data: "".to_string(),
+            file_name: "".to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("读取剪贴板线程执行失败: {}", e))?
+}
+
 #[tauri::command]
 fn open_material_file(
     state: State<'_, AppState>,
@@ -4368,7 +4482,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             delete_meeting_material,
             list_meeting_materials,
             get_material_data_url,
-            open_material_file
+            open_material_file,
+            get_system_clipboard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
