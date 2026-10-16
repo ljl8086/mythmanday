@@ -1542,6 +1542,31 @@ export function App() {
 
       if (!targetMeetingId) return;
 
+      // 优先直接调用系统原生剪贴板能力 (Linux Wayland / X11 兼容)
+      try {
+        const sysClip = await invoke<{ content_type: string; data: string; file_name: string }>("get_system_clipboard");
+        if (sysClip && sysClip.content_type === "image" && sysClip.data) {
+          e.preventDefault();
+          await invoke("upload_meeting_material", {
+            meetingId: targetMeetingId,
+            fileName: sysClip.file_name,
+            base64Data: sysClip.data,
+          });
+          refreshData();
+          if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+          showToast("📋 已自动将剪贴板截图作为会议参考资料关联！");
+          return;
+        } else if (sysClip && sysClip.content_type === "text" && sysClip.data) {
+          if (sysClip.data.trim().length >= 10) {
+            e.preventDefault();
+            await handleUploadTextSnippet(targetMeetingId, sysClip.data);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("原生剪贴板获取跳过，回退至 WebKit 剪贴板事件", err);
+      }
+
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -1583,8 +1608,41 @@ export function App() {
       }
     };
 
+    // 键盘快捷键监听：当用户按下 Ctrl+V 时，即使浏览器未分发标准 paste 事件，也主动调用原生剪贴板读取
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || (activeEl as HTMLElement).isContentEditable)) {
+          return;
+        }
+        let targetMeetingId = hoveredMeetingId || selectedMeetingId || globalStats.active_meeting_id;
+        if (!targetMeetingId) {
+          const allMeetings: string[] = [];
+          for (const dg of dayGroups) {
+            for (const ent of dg.entries) {
+              if (ent.meetings) {
+                for (const m of ent.meetings) {
+                  allMeetings.push(m.id);
+                }
+              }
+            }
+          }
+          if (allMeetings.length === 1) {
+            targetMeetingId = allMeetings[0];
+          }
+        }
+        if (targetMeetingId) {
+          await handlePasteFromClipboard(targetMeetingId);
+        }
+      }
+    };
+
     window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, [hoveredMeetingId, selectedMeetingId, globalStats.active_meeting_id, dayGroups, selectedProjectId, selectedMonth]);
 
   const handleOpenAudioPlayer = async (audioPath: string, title: string = "会议录音凭证") => {
@@ -3158,15 +3216,19 @@ export function App() {
                                                                       </button>
                                                                     )}
                                                                     <button
-                                                                      onClick={() => setConfirmRetryClipModal({
-                                                                        clipId: clip.id,
-                                                                        clipOrder: clip.clip_order,
-                                                                        durationText: clip.duration_text,
-                                                                        topic: m.topic,
-                                                                        hasTranscript: !!clip.transcript,
-                                                                      })}
-                                                                      className="text-slate-400 hover:text-indigo-600 px-0.5 cursor-pointer flex items-center"
-                                                                      title="重新转写此片段"
+                                                                      type="button"
+                                                                      onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setConfirmRetryClipModal({
+                                                                          clipId: clip.id,
+                                                                          clipOrder: clip.clip_order,
+                                                                          durationText: clip.duration_text,
+                                                                          topic: m.topic,
+                                                                          hasTranscript: !!clip.transcript,
+                                                                        });
+                                                                      }}
+                                                                      className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
+                                                                      title="重新转写此片段语音"
                                                                     >
                                                                       <RotateCw className="w-2.5 h-2.5" />
                                                                     </button>
