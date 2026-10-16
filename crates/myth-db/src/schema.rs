@@ -104,10 +104,23 @@ CREATE TABLE IF NOT EXISTS meeting_audio_clips (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS meeting_materials (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    file_type TEXT NOT NULL DEFAULT 'document',
+    file_path TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    extracted_text TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_time_entries_project_start ON time_entries (project_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_work_spans_entry_id ON work_spans (entry_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_entry_id ON meetings (entry_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_project_id ON meetings (project_id);
 CREATE INDEX IF NOT EXISTS idx_meeting_clips_meeting_id ON meeting_audio_clips (meeting_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_materials_meeting_id ON meeting_materials (meeting_id);
 CREATE INDEX IF NOT EXISTS idx_quick_notes_project_id ON quick_notes (project_id);
 "#;
+

@@ -294,3 +294,42 @@ impl QuickNote {
         }
     }
 }
+
+/// 会议关联参考资料实体（支持客户发送的文档与图片）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingMaterial {
+    pub id: Uuid,
+    pub meeting_id: Uuid,
+    pub file_name: String,
+    /// 资料类型: "image" | "document"
+    pub file_type: String,
+    /// 本地存储绝对路径
+    pub file_path: String,
+    /// 文件字节大小
+    pub file_size: u64,
+    /// 从文档解析出的文本摘要或提取内容
+    pub extracted_text: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl MeetingMaterial {
+    pub fn new(
+        meeting_id: Uuid,
+        file_name: impl Into<String>,
+        file_type: impl Into<String>,
+        file_path: impl Into<String>,
+        file_size: u64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            meeting_id,
+            file_name: file_name.into(),
+            file_type: file_type.into(),
+            file_path: file_path.into(),
+            file_size,
+            extracted_text: None,
+            created_at: Utc::now(),
+        }
+    }
+}
+

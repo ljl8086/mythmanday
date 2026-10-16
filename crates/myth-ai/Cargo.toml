@@ -17,6 +17,9 @@ thiserror.workspace = true
 tracing.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "socks", "stream"] }
 futures-util = "0.3"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+base64 = "0.22"
 
 
 [dev-dependencies]

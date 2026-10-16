@@ -7,8 +7,8 @@
 use crate::schema::CREATE_TABLES_SQL;
 use chrono::{DateTime, Utc};
 use myth_core::models::{
-    BillingType, Client, DayCalcMode, Meeting, MeetingAudioClip, Project, QuickNote, TimeEntry,
-    WorkSpan,
+    BillingType, Client, DayCalcMode, Meeting, MeetingAudioClip, MeetingMaterial, Project,
+    QuickNote, TimeEntry, WorkSpan,
 };
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
@@ -852,6 +852,99 @@ impl Database {
         Ok(())
     }
 
+    // --- 会议参考资料 (Meeting Materials) CRUD ---
+    pub fn insert_material(&self, mat: &MeetingMaterial) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO meeting_materials (
+                id, meeting_id, file_name, file_type, file_path, file_size, extracted_text, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                meeting_id = excluded.meeting_id,
+                file_name = excluded.file_name,
+                file_type = excluded.file_type,
+                file_path = excluded.file_path,
+                file_size = excluded.file_size,
+                extracted_text = excluded.extracted_text"#,
+            params![
+                mat.id.to_string(),
+                mat.meeting_id.to_string(),
+                mat.file_name,
+                mat.file_type,
+                mat.file_path,
+                mat.file_size as i64,
+                mat.extracted_text,
+                mat.created_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_material(&self, id: &Uuid) -> Result<Option<MeetingMaterial>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, meeting_id, file_name, file_type, file_path, file_size, extracted_text, created_at
+               FROM meeting_materials WHERE id = ?1"#,
+        )?;
+        let mut rows = stmt.query(params![id.to_string()])?;
+        if let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let f_size: i64 = row.get(5)?;
+            let c_str: String = row.get(7)?;
+            Ok(Some(MeetingMaterial {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                file_name: row.get(2)?,
+                file_type: row.get(3)?,
+                file_path: row.get(4)?,
+                file_size: f_size.max(0) as u64,
+                extracted_text: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_materials_for_meeting(&self, meeting_id: &Uuid) -> Result<Vec<MeetingMaterial>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, meeting_id, file_name, file_type, file_path, file_size, extracted_text, created_at
+               FROM meeting_materials WHERE meeting_id = ?1 ORDER BY created_at ASC"#,
+        )?;
+        let rows = stmt.query_map(params![meeting_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let f_size: i64 = row.get(5)?;
+            let c_str: String = row.get(7)?;
+            Ok(MeetingMaterial {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                file_name: row.get(2)?,
+                file_type: row.get(3)?,
+                file_path: row.get(4)?,
+                file_size: f_size.max(0) as u64,
+                extracted_text: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        let mut materials = Vec::new();
+        for r in rows {
+            materials.push(r?);
+        }
+        Ok(materials)
+    }
+
+    pub fn delete_material(&self, id: &Uuid) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM meeting_materials WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        Ok(())
+    }
+
     // --- 便签 CRUD ---
     pub fn insert_quick_note(&self, note: &QuickNote) -> Result<()> {
         self.conn.execute(
@@ -1191,4 +1284,74 @@ mod tests {
             "AudioClip 不应被 Meeting 的更新操作级联删除！"
         );
     }
+
+    #[test]
+    fn test_meeting_materials_crud_and_cascade() {
+        let db = Database::open(":memory:").unwrap();
+        let project = Project::new("测试资料项目");
+        db.insert_project(&project).unwrap();
+
+        let now = Utc::now();
+        let entry = TimeEntry {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            start_time: now,
+            end_time: now,
+            raw_duration_secs: 3600,
+            billable_hours: 1.0,
+            billable_days: 0.12,
+            rate_at_moment: 350.0,
+            total_amount: 350.0,
+            summary: None,
+            audio_path: None,
+            is_invoiced: false,
+            created_at: now,
+        };
+        db.insert_time_entry(&entry).unwrap();
+
+        let meeting = Meeting::new(entry.id, project.id, "客户PRD需求评审");
+        db.insert_meeting(&meeting).unwrap();
+
+        let mut mat1 = MeetingMaterial::new(
+            meeting.id,
+            "需求规格说明书.pdf",
+            "document",
+            "/path/to/spec.pdf",
+            1024 * 1024,
+        );
+        mat1.extracted_text = Some("这是客户发来的系统架构与API需求说明".to_string());
+        db.insert_material(&mat1).unwrap();
+
+        let mat2 = MeetingMaterial::new(
+            meeting.id,
+            "报错截图.png",
+            "image",
+            "/path/to/error.png",
+            500 * 1024,
+        );
+        db.insert_material(&mat2).unwrap();
+
+        // 验证查询
+        let list = db.list_materials_for_meeting(&meeting.id).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].file_name, "需求规格说明书.pdf");
+        assert_eq!(list[0].extracted_text.as_deref(), Some("这是客户发来的系统架构与API需求说明"));
+        assert_eq!(list[1].file_type, "image");
+
+        // 验证单条获取
+        let fetched = db.get_material(&mat1.id).unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().file_name, "需求规格说明书.pdf");
+
+        // 验证单条删除
+        db.delete_material(&mat2.id).unwrap();
+        let list_after_del = db.list_materials_for_meeting(&meeting.id).unwrap();
+        assert_eq!(list_after_del.len(), 1);
+
+        // 验证级联删除：删除 Project 导致 Meeting 删除，进而自动级联删除 MeetingMaterial
+        db.delete_project(&project.id).unwrap();
+        let empty_list = db.list_materials_for_meeting(&meeting.id).unwrap();
+        assert_eq!(empty_list.len(), 0);
+    }
 }
+
