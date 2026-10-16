@@ -4,7 +4,7 @@
 // Version: V1.0
 // Description: Multi-channel concurrent time-tracking & man-day billing engine.
 
-use myth_core::models::QuickNote;
+use myth_core::models::{MeetingMaterial, QuickNote};
 use myth_git::GitActivitySummary;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -158,9 +158,42 @@ pub struct AiWorkEvaluationResult {
 }
 
 #[derive(Serialize)]
-struct ChatMessage {
+pub struct ChatMessage {
     role: String,
-    content: String,
+    content: MessageContent,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlPayload },
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ImageUrlPayload {
+    pub url: String,
 }
 
 #[derive(Serialize)]
@@ -360,16 +393,23 @@ impl AiSummarizer {
         Self { config, client }
     }
 
-    /// 统一调用 AI 提供商 (支持 agy CLI / codex CLI / 兼容 HTTP API)
-    pub async fn execute_completion(
+    /// 统一调用 AI 提供商（支持多模态参考图片输入）
+    pub async fn execute_completion_multimodal(
         &self,
         system_prompt: &str,
         user_content: &str,
+        image_paths: &[&std::path::Path],
     ) -> Result<String, AiError> {
         let provider = self.config.provider.trim().to_lowercase();
         let proxy_opt = self.config.proxy.clone().filter(|p| !p.trim().is_empty());
         if provider == "agy" {
-            let full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
+            let mut full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
+            if !image_paths.is_empty() {
+                full_prompt.push_str("\n\n【关联图片资料本地存储绝对路径（请直接查看解析图纸/截图）】：\n");
+                for p in image_paths {
+                    full_prompt.push_str(&format!("- {}\n", p.display()));
+                }
+            }
             let bin = find_binary("agy");
             let output = tokio::task::spawn_blocking(move || {
                 let mut cmd = std::process::Command::new(bin);
@@ -395,12 +435,19 @@ impl AiSummarizer {
                 return Err(AiError::ParseError(format!("agy 执行异常: {}", err)));
             }
             let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if res.is_empty() {
+            let cleaned = clean_repetitive_text(&res);
+            if cleaned.is_empty() {
                 return Err(AiError::ParseError("agy 返回结果为空".into()));
             }
-            return Ok(res);
+            return Ok(cleaned);
         } else if provider == "codex" {
-            let full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
+            let mut full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
+            if !image_paths.is_empty() {
+                full_prompt.push_str("\n\n【关联图片资料本地路径】：\n");
+                for p in image_paths {
+                    full_prompt.push_str(&format!("- {}\n", p.display()));
+                }
+            }
             let bin = find_binary("codex");
             let output = tokio::task::spawn_blocking(move || {
                 let mut cmd = std::process::Command::new(bin);
@@ -424,10 +471,14 @@ impl AiSummarizer {
                 return Err(AiError::ParseError(format!("codex 执行异常: {}", err)));
             }
             let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return Ok(res);
+            let cleaned = clean_repetitive_text(&res);
+            if cleaned.is_empty() {
+                return Err(AiError::ParseError("codex 返回结果为空".into()));
+            }
+            return Ok(cleaned);
         }
 
-        // 默认走 OpenAI 兼容 HTTP API (原生支持 OpenAI gpt-4o / gpt-4o-mini / codex，并兼容自定义端点)
+        // 默认走 OpenAI 兼容 HTTP API (原生支持 OpenAI gpt-4o / gpt-4o-mini / Vision)
         let api_key = if self.config.api_key.trim().is_empty() {
             std::env::var("OPENAI_API_KEY").unwrap_or_default()
         } else {
@@ -437,20 +488,55 @@ impl AiSummarizer {
             "{}/chat/completions",
             self.config.api_base.trim_end_matches('/')
         );
+
+        let user_content_payload = if image_paths.is_empty() {
+            MessageContent::Text(user_content.to_string())
+        } else {
+            let mut parts = vec![ContentPart::Text {
+                text: user_content.to_string(),
+            }];
+            for img_p in image_paths {
+                if let Ok(bytes) = std::fs::read(img_p) {
+                    if bytes.len() <= 10 * 1024 * 1024 {
+                        use base64::Engine;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let ext = img_p
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("png")
+                            .to_lowercase();
+                        let mime = match ext.as_str() {
+                            "jpg" | "jpeg" => "image/jpeg",
+                            "png" => "image/png",
+                            "webp" => "image/webp",
+                            "gif" => "image/gif",
+                            _ => "image/png",
+                        };
+                        parts.push(ContentPart::ImageUrl {
+                            image_url: ImageUrlPayload {
+                                url: format!("data:{};base64,{}", mime, b64),
+                            },
+                        });
+                    }
+                }
+            }
+            MessageContent::Parts(parts)
+        };
+
         let request_body = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: system_prompt.to_string(),
+                    content: MessageContent::Text(system_prompt.to_string()),
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: user_content.to_string(),
+                    content: user_content_payload,
                 },
             ],
             temperature: 0.3,
-            max_tokens: 500,
+            max_tokens: 3000,
             response_format: None,
         };
 
@@ -472,10 +558,19 @@ impl AiSummarizer {
         let result = parsed
             .choices
             .first()
-            .map(|c| c.message.content.trim().to_string())
+            .map(|c| clean_repetitive_text(&c.message.content))
             .unwrap_or_else(|| "完成相关模块开发与需求对接。".to_string());
 
         Ok(result)
+    }
+
+    /// 保持向前兼容的纯文本执行接口
+    pub async fn execute_completion(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+    ) -> Result<String, AiError> {
+        self.execute_completion_multimodal(system_prompt, user_content, &[]).await
     }
 
     /// 测试 AI 连通性
@@ -724,12 +819,13 @@ impl AiSummarizer {
         })
     }
 
-    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点及录音留存信息，提炼真实客观的会议纪要
+    /// 针对会议/技术对齐/客户沟通，结合会议议题、讨论要点、现场录音及客户参考资料（文档+图片），提炼真实客观的会议纪要
     pub async fn summarize_meeting(
         &self,
         meeting_topic: &str,
         duration_hours: f64,
         notes: &[QuickNote],
+        materials: &[MeetingMaterial],
         audio_file_info: Option<&str>,
         audio_transcript: Option<&str>,
     ) -> Result<String, AiError> {
@@ -762,23 +858,48 @@ impl AiSummarizer {
             prompt_content.push('\n');
         }
 
-        if !has_transcript && notes.is_empty() {
+        let mut image_paths: Vec<&std::path::Path> = Vec::new();
+        if !materials.is_empty() {
+            prompt_content.push_str("【客户提供的参考文档与图片资料】：\n");
+            for m in materials {
+                if m.file_type == "image" {
+                    let p = std::path::Path::new(&m.file_path);
+                    if p.exists() {
+                        image_paths.push(p);
+                    }
+                    prompt_content.push_str(&format!("- 附图资料：《{}》（客户现场发送的图纸/截图/白板图）\n", m.file_name));
+                } else {
+                    prompt_content.push_str(&format!("- 文档资料：《{}》\n", m.file_name));
+                    if let Some(ref txt) = m.extracted_text {
+                        if !txt.trim().is_empty() {
+                            prompt_content.push_str(&format!("  [提取内容摘要/正文]：\n{}\n\n", txt.trim()));
+                        }
+                    }
+                }
+            }
+            prompt_content.push('\n');
+        }
+
+        if !has_transcript && notes.is_empty() && materials.is_empty() {
             return Ok(format!(
-                "【会议纪要：{}】\n本次会议时长 {:.2} 小时。未检测到录音转写文稿或速记要点，建议相关人员手动补充会议结论与待办事项。",
+                "【会议纪要：{}】\n本次会议时长 {:.2} 小时。未检测到录音转写文稿、速记要点或参考资料，建议相关人员手动补充会议结论与待办事项。",
                 meeting_topic, duration_hours
             ));
         }
 
-        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点及现场录音转写文稿，撰写一份条理清晰、真实严谨的会议纪要。\n\
+        let system_prompt = "你是一名资深的技术架构师与项目管理专家。请根据本次会议的议题、沟通时长、速记要点、现场录音转写文稿，以及客户在会议期间发送的参考文档与图片资料，撰写一份条理清晰、真实严谨的高质量会议纪要。\n\
         严格遵循以下原则：\n\
-        1. 真实客观第一原则：必须完全且仅基于实际会议讨论内容与录音文稿进行提炼，严禁凭空捏造、臆想或补充未在讨论中出现的任何业务功能、架构决议或流程！\n\
-        2. 若录音文稿较为零散、主要为口语闲聊或缺乏实质技术细节，请实事求是地归纳讨论触及的初步议题，并明确标注“待进一步明确”，严禁编造看似专业的虚假技术决议或虚假表格！\n\
-        3. 结构采用条目式：\n\
-           一、【核心议题与沟通背景】（真实归纳会议讨论的核心事项）\n\
-           二、【达成共识与讨论要点】（仅列出会议中实际达成一致或明确提到的要点）\n\
-           三、【后续推进与待办事项】（仅列出会议中实际明确的分工与下一步计划，若未提及则如实写“待后续对齐”）";
+        1. 结合参考资料与录音交叉核实：重点参考客户提供的文档规范、系统截图与图纸，对录音中提及的技术名词、模块代号、数据指标、业务流程进行精准校对与补全，纠正口语转写的同音错别字，消除口语指代模糊（如“看这个图”、“按刚才发的文件”）。\n\
+        2. 真实客观第一原则：必须完全且仅基于实际会议讨论内容、录音文稿与客户参考资料进行提炼，严禁凭空捏造未在讨论或资料中出现的任何业务功能、架构决议或流程！\n\
+        3. 智能术语与同音字纠偏：结合软件系统开发、数据管理、主从设备与业务功能上下文，自动纠正同音字与口语倒装，准确还原实际技术共识！\n\
+        4. 若录音文稿较为零散或缺乏实质技术细节，请实事求是地归纳讨论触及的初步议题，并明确标注“待进一步明确”；\n\
+        5. 结构采用条目式：\n\
+           一、【核心议题与沟通背景】（结合议题与参考资料背景，真实归纳讨论的核心事项）\n\
+           二、【达成共识与讨论要点】（逐项列出结合参考资料确认的业务/技术要点及决议）\n\
+           三、【客户资料要点与关联分析】（归纳客户发来文档/图片的核心诉求与对应结论；若无资料则此项可略）\n\
+           四、【后续推进与待办事项】（明确列出责任分工与下一步计划，若未提及则如实写“待后续对齐”）";
 
-        self.execute_completion(system_prompt, &prompt_content)
+        self.execute_completion_multimodal(system_prompt, &prompt_content, &image_paths)
             .await
     }
 
@@ -860,6 +981,15 @@ impl AiSummarizer {
 
     /// 语音转文字处理（支持模块化多模路由：本地 whisper.cpp 极速推理 / 云端标准 Whisper API / CLI 智能体）
     pub async fn transcribe_audio(&self, input_path: &std::path::Path) -> Result<String, AiError> {
+        self.transcribe_audio_with_prompt(input_path, None).await
+    }
+
+    /// 语音转文字处理（支持传入与会议资料相关的动态专有名词 Prompt，增强专有名词识别准确率）
+    pub async fn transcribe_audio_with_prompt(
+        &self,
+        input_path: &std::path::Path,
+        dynamic_prompt: Option<&str>,
+    ) -> Result<String, AiError> {
         if !input_path.exists() {
             return Err(AiError::ParseError(format!(
                 "音频文件不存在: {}",
@@ -894,6 +1024,15 @@ impl AiSummarizer {
             input_path.to_path_buf()
         };
 
+        let effective_prompt: Option<String> = match (&self.config.asr.prompt, dynamic_prompt) {
+            (Some(p), Some(dp)) if !p.trim().is_empty() && !dp.trim().is_empty() => {
+                Some(format!("{}, {}", p.trim(), dp.trim()))
+            }
+            (Some(p), _) if !p.trim().is_empty() => Some(p.trim().to_string()),
+            (_, Some(dp)) if !dp.trim().is_empty() => Some(dp.trim().to_string()),
+            _ => None,
+        };
+
         // 1. 本地 whisper.cpp 极速推理模式 (默认优先)
         if is_local_mode {
             let whisper_bin = find_whisper_binary(self.config.asr.local_bin_path.as_deref());
@@ -921,7 +1060,7 @@ impl AiSummarizer {
                         .as_deref()
                         .unwrap_or("zh")
                         .to_string();
-                    let prompt_opt = self.config.asr.prompt.clone();
+                    let prompt_opt = effective_prompt.clone();
 
                     let res = tokio::task::spawn_blocking(move || {
                         let mut cmd = std::process::Command::new(&bin_str);
@@ -934,7 +1073,7 @@ impl AiSummarizer {
                             .arg("-nt")
                             .arg("--no-prints")
                             .arg("-t")
-                            .arg("4")
+                            .arg("8")
                             .arg("-sns")
                             .arg("-et")
                             .arg("2.4")
@@ -979,7 +1118,7 @@ impl AiSummarizer {
                     return Err(AiError::ParseError("未检测到本地 whisper-cli 运行时程序。请在【系统设置 -> 录音转写引擎】中查看或切换为云端API。".into()));
                 }
                 (_, None) if mode == "local" => {
-                    return Err(AiError::ParseError("未检测到本地 Whisper 模型文件（如 ggml-base.bin）。请在【系统设置 -> 录音转写引擎】中一键下载推荐模型或切换为云端API。".into()));
+                    return Err(AiError::ParseError("未检测到本地 Whisper 模型文件（如 ggml-large-v3-turbo.bin）。请在【系统设置 -> 录音转写引擎】中一键下载推荐模型或切换为云端API。".into()));
                 }
                 _ => {}
             }
@@ -1060,6 +1199,12 @@ impl AiSummarizer {
             }
         }
 
+        if let Some(ref p) = effective_prompt {
+            if !p.trim().is_empty() {
+                form = form.text("prompt", p.clone());
+            }
+        }
+
         let url = format!(
             "{}/audio/transcriptions",
             asr_api_base.trim_end_matches('/')
@@ -1107,6 +1252,15 @@ pub fn clean_repetitive_text(input: &str) -> String {
         "点赞关注",
     ];
     let mut text = trimmed.to_string();
+    if text.starts_with("thought\n") {
+        text = text["thought\n".len()..].trim().to_string();
+    }
+    if let Some(end_idx) = text.find("</thought>") {
+        text = text[end_idx + "</thought>".len()..].trim().to_string();
+    }
+    if let Some(err_idx) = text.find("This request was blocked by Gemini's filters") {
+        text = text[..err_idx].trim().to_string();
+    }
     for h in filter_hallucinations {
         text = text.replace(h, "");
     }
@@ -1242,6 +1396,11 @@ pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
 
     let preset_models = vec![
         (
+            "ggml-large-v3-turbo.bin",
+            "1.5 GB",
+            "旗舰极速版 (强烈推荐)，中文识别精准度极高，无网络审查与拦截",
+        ),
+        (
             "ggml-tiny.bin",
             "75 MB",
             "极速轻量，内存开销极小，适合简单对话",
@@ -1278,7 +1437,7 @@ pub fn get_asr_runtime_status(cfg: &AiConfig) -> AsrRuntimeStatus {
             .asr
             .local_model
             .clone()
-            .unwrap_or_else(|| "ggml-base.bin".to_string()),
+            .unwrap_or_else(|| "ggml-large-v3-turbo.bin".to_string()),
     }
 }
 
@@ -1297,6 +1456,10 @@ where
     let target_path = target_dir.join(model_name);
 
     let urls = [
+        format!(
+            "https://www.modelscope.cn/models/iceCream2025/whisper.cpp/resolve/master/{}",
+            model_name
+        ),
         format!(
             "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/{}",
             model_name

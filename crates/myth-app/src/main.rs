@@ -13,7 +13,7 @@ use myth_ai::{
 use myth_audio::{AudioPlayer, AudioRecorder};
 use myth_core::billing::BillingEngine;
 use myth_core::models::{
-    BillingType, DayCalcMode, Meeting, MeetingAudioClip, Project, QuickNote, TimeEntry, WorkSpan,
+    BillingType, DayCalcMode, Meeting, MeetingAudioClip, MeetingMaterial, Project, QuickNote, TimeEntry, WorkSpan,
 };
 use myth_core::timer::MultiChannelManager;
 use myth_db::{ActiveTimerRecord, Database};
@@ -200,6 +200,19 @@ pub struct AudioClipDto {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MeetingMaterialDto {
+    pub id: String,
+    pub meeting_id: String,
+    pub file_name: String,
+    pub file_type: String,
+    pub file_size: u64,
+    pub file_size_text: String,
+    pub is_image: bool,
+    pub has_text: bool,
+    pub created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MeetingDetailDto {
     pub id: String,
     pub topic: String,
@@ -210,6 +223,8 @@ pub struct MeetingDetailDto {
     pub summary: Option<String>,
     pub quick_notes: Option<String>,
     pub clips: Vec<AudioClipDto>,
+    #[serde(default)]
+    pub materials: Vec<MeetingMaterialDto>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -251,6 +266,8 @@ pub struct GlobalStatsDto {
     pub is_recording_audio: bool,
     pub active_recording_project_id: Option<String>,
     pub active_recording_project_name: String,
+    #[serde(default)]
+    pub active_meeting_id: Option<String>,
     pub is_audio_paused: bool,
 }
 
@@ -364,6 +381,31 @@ fn dirs_or_local_data_dir() -> std::path::PathBuf {
         home.join(".config").join("mythmanday")
     } else {
         std::path::PathBuf::from("./data")
+    }
+}
+
+fn get_materials_dir(meeting_id: &Uuid) -> std::path::PathBuf {
+    dirs_or_local_data_dir().join("materials").join(meeting_id.to_string())
+}
+
+fn map_material_to_dto(mat: &MeetingMaterial) -> MeetingMaterialDto {
+    let size_text = if mat.file_size < 1024 {
+        format!("{} B", mat.file_size)
+    } else if mat.file_size < 1024 * 1024 {
+        format!("{:.1} KB", mat.file_size as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", mat.file_size as f64 / (1024.0 * 1024.0))
+    };
+    MeetingMaterialDto {
+        id: mat.id.to_string(),
+        meeting_id: mat.meeting_id.to_string(),
+        file_name: mat.file_name.clone(),
+        file_type: mat.file_type.clone(),
+        file_size: mat.file_size,
+        file_size_text: size_text,
+        is_image: mat.file_type == "image",
+        has_text: mat.extracted_text.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false),
+        created_at: mat.created_at.with_timezone(&Local).format("%H:%M").to_string(),
     }
 }
 
@@ -536,6 +578,17 @@ fn get_daily_groups(
                     })
                     .collect();
 
+                let materials = state
+                    .db
+                    .lock()
+                    .unwrap()
+                    .list_materials_for_meeting(&m.id)
+                    .unwrap_or_default();
+                let material_dtos: Vec<MeetingMaterialDto> = materials
+                    .iter()
+                    .map(map_material_to_dto)
+                    .collect();
+
                 let m_start_local = m.start_at.with_timezone(&Local);
                 let m_end_local = m.end_at.map(|d| d.with_timezone(&Local));
                 MeetingDetailDto {
@@ -548,6 +601,7 @@ fn get_daily_groups(
                     summary: m.meeting_summary,
                     quick_notes: m.quick_notes,
                     clips: clip_dtos,
+                    materials: material_dtos,
                 }
             })
             .collect();
@@ -736,10 +790,10 @@ fn get_global_stats(state: State<AppState>) -> Result<GlobalStatsDto, String> {
     let has_active_rec = active_rec.is_some();
     let is_recording_audio = audio_rec.is_recording() || has_active_rec;
     let is_audio_paused = audio_rec.is_paused();
-    let (active_recording_project_id, active_recording_project_name) = active_rec
+    let (active_recording_project_id, active_meeting_id, active_recording_project_name) = active_rec
         .as_ref()
-        .map(|(pid, _mid, topic, _, _)| (Some(pid.to_string()), topic.clone()))
-        .unwrap_or((None, String::new()));
+        .map(|(pid, mid, topic, _, _)| (Some(pid.to_string()), Some(mid.to_string()), topic.clone()))
+        .unwrap_or((None, None, String::new()));
 
     Ok(GlobalStatsDto {
         total_days: format!("{:.2} 人天", total_days),
@@ -748,6 +802,7 @@ fn get_global_stats(state: State<AppState>) -> Result<GlobalStatsDto, String> {
         is_recording_audio,
         active_recording_project_id,
         active_recording_project_name,
+        active_meeting_id,
         is_audio_paused,
     })
 }
@@ -1273,11 +1328,27 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
             load_ai_config(&guard)
         };
 
+        let dynamic_prompt = {
+            let guard = db_for_async.lock().unwrap();
+            let mats = guard.list_materials_for_meeting(&meeting_id).unwrap_or_default();
+            if mats.is_empty() {
+                None
+            } else {
+                let file_names: Vec<&str> = mats.iter().map(|m| m.file_name.as_str()).collect();
+                let doc_texts: Vec<&str> = mats
+                    .iter()
+                    .filter_map(|m| m.extracted_text.as_deref())
+                    .collect();
+                let gloss = myth_ai::extract_glossary_for_asr(&file_names, &doc_texts);
+                if gloss.is_empty() { None } else { Some(gloss) }
+            }
+        };
+
         let summarizer = AiSummarizer::new(ai_config);
         if audio_file_clone.exists() {
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(300),
-                summarizer.transcribe_audio(&audio_file_clone),
+                std::time::Duration::from_secs(600),
+                summarizer.transcribe_audio_with_prompt(&audio_file_clone, dynamic_prompt.as_deref()),
             )
             .await;
             match res {
@@ -1371,11 +1442,27 @@ async fn retry_transcribe_audio_clip(
             load_ai_config(&guard)
         };
 
+        let dynamic_prompt = {
+            let guard = db_for_async.lock().unwrap();
+            let mats = guard.list_materials_for_meeting(&meeting_id).unwrap_or_default();
+            if mats.is_empty() {
+                None
+            } else {
+                let file_names: Vec<&str> = mats.iter().map(|m| m.file_name.as_str()).collect();
+                let doc_texts: Vec<&str> = mats
+                    .iter()
+                    .filter_map(|m| m.extracted_text.as_deref())
+                    .collect();
+                let gloss = myth_ai::extract_glossary_for_asr(&file_names, &doc_texts);
+                if gloss.is_empty() { None } else { Some(gloss) }
+            }
+        };
+
         let summarizer = AiSummarizer::new(ai_config);
         if audio_file.exists() {
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(300),
-                summarizer.transcribe_audio(&audio_file),
+                std::time::Duration::from_secs(600),
+                summarizer.transcribe_audio_with_prompt(&audio_file, dynamic_prompt.as_deref()),
             )
             .await;
             match res {
@@ -1550,7 +1637,13 @@ async fn finish_meeting(
             }
         }
 
-        let summary = match summarizer.summarize_meeting(&topic_clone, duration_hours, &notes, None, Some(&combined_transcript)).await {
+        let materials = db_for_async
+            .lock()
+            .unwrap()
+            .list_materials_for_meeting(&m_id)
+            .unwrap_or_default();
+
+        let summary = match summarizer.summarize_meeting(&topic_clone, duration_hours, &notes, &materials, None, Some(&combined_transcript)).await {
             Ok(sum) => sum,
             Err(_) => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_clone),
         };
@@ -1630,6 +1723,296 @@ fn save_meeting_summary_to_project(
     db.insert_quick_note(&note).map_err(|e| e.to_string())?;
 
     Ok("会议纪要已成功保存至项目备忘与交付档案中！".to_string())
+}
+
+#[tauri::command]
+async fn upload_meeting_material(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    file_name: String,
+    base64_data: String,
+) -> Result<MeetingMaterialDto, String> {
+    let mid = Uuid::parse_str(&meeting_id).map_err(|e| format!("会议ID格式错误: {}", e))?;
+    let raw_b64 = if let Some(idx) = base64_data.find(";base64,") {
+        &base64_data[idx + 8..]
+    } else {
+        &base64_data
+    };
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw_b64.trim())
+        .map_err(|e| format!("Base64 解码失败: {}", e))?;
+
+    let target_dir = get_materials_dir(&mid);
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| format!("创建参考资料目录失败: {}", e))?;
+
+    // 防止同名文件覆盖：若存在同名文件，追加短 uuid
+    let mut safe_filename = file_name.trim().to_string();
+    if safe_filename.is_empty() {
+        safe_filename = format!("material_{}.png", &Uuid::new_v4().to_string()[..8]);
+    }
+    let mut target_path = target_dir.join(&safe_filename);
+    if target_path.exists() {
+        let stem = std::path::Path::new(&safe_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file");
+        let ext = std::path::Path::new(&safe_filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let new_name = if ext.is_empty() {
+            format!("{}_{}", stem, &Uuid::new_v4().to_string()[..6])
+        } else {
+            format!("{}_{}.{}", stem, &Uuid::new_v4().to_string()[..6], ext)
+        };
+        safe_filename = new_name;
+        target_path = target_dir.join(&safe_filename);
+    }
+
+    tokio::fs::write(&target_path, &bytes)
+        .await
+        .map_err(|e| format!("保存文件失败: {}", e))?;
+
+    let is_img = myth_ai::is_image_file(&target_path);
+    let extracted_text = if !is_img && myth_ai::is_document_file(&target_path) {
+        let p_clone = target_path.clone();
+        tokio::task::spawn_blocking(move || myth_ai::extract_document_text(&p_clone))
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
+
+    let _ext = target_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let file_type = if is_img {
+        "image".to_string()
+    } else {
+        "document".to_string()
+    };
+
+    let material = MeetingMaterial {
+        id: Uuid::new_v4(),
+        meeting_id: mid,
+        file_name: safe_filename,
+        file_path: target_path.to_string_lossy().to_string(),
+        file_type,
+        file_size: bytes.len() as u64,
+        extracted_text,
+        created_at: Utc::now(),
+    };
+
+    {
+        let db = state.db.lock().unwrap();
+        db.insert_material(&material)
+            .map_err(|e| format!("数据库保存参考资料失败: {}", e))?;
+    }
+
+    Ok(map_material_to_dto(&material))
+}
+
+#[tauri::command]
+fn delete_meeting_material(
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<(), String> {
+    let mat_id = Uuid::parse_str(&material_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+    if let Ok(Some(mat)) = db.get_material(&mat_id) {
+        let path = std::path::PathBuf::from(&mat.file_path);
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+        db.delete_material(&mat_id).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_meeting_materials(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<MeetingMaterialDto>, String> {
+    let mid = Uuid::parse_str(&meeting_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+    let mats = db.list_materials_for_meeting(&mid).map_err(|e| e.to_string())?;
+    Ok(mats.iter().map(map_material_to_dto).collect())
+}
+
+#[tauri::command]
+async fn get_material_data_url(
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<String, String> {
+    let mat_id = Uuid::parse_str(&material_id).map_err(|e| e.to_string())?;
+    let mat = {
+        let db = state.db.lock().unwrap();
+        db.get_material(&mat_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "未找到参考资料".to_string())?
+    };
+    let path = std::path::PathBuf::from(&mat.file_path);
+    if !path.exists() {
+        return Err("资料文件在磁盘上不存在".to_string());
+    }
+    let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    };
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[derive(serde::Serialize)]
+struct SystemClipboardDto {
+    content_type: String, // "image" or "text" or "empty"
+    data: String,         // base64 data URL for image or plain text
+    file_name: String,
+}
+
+#[tauri::command]
+async fn get_system_clipboard() -> Result<SystemClipboardDto, String> {
+    tokio::task::spawn_blocking(|| {
+        let date_str = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+
+        // 1. 尝试 Wayland wl-paste
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .arg("--list-types")
+            .output()
+        {
+            if output.status.success() {
+                let types_str = String::from_utf8_lossy(&output.stdout);
+                let types: Vec<&str> = types_str.lines().map(|s| s.trim()).collect();
+                
+                // 优先检查图片
+                for t in &types {
+                    if t.starts_with("image/") {
+                        if let Ok(img_output) = std::process::Command::new("wl-paste")
+                            .arg("--type")
+                            .arg(t)
+                            .output()
+                        {
+                            if img_output.status.success() && !img_output.stdout.is_empty() {
+                                use base64::Engine;
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&img_output.stdout);
+                                let ext = t.split('/').nth(1).unwrap_or("png");
+                                return Ok(SystemClipboardDto {
+                                    content_type: "image".to_string(),
+                                    data: format!("data:{};base64,{}", t, b64),
+                                    file_name: format!("clipboard_{}.{}", date_str, ext),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // 其次检查文本
+                if let Ok(text_output) = std::process::Command::new("wl-paste")
+                    .arg("--no-newline")
+                    .output()
+                {
+                    if text_output.status.success() && !text_output.stdout.is_empty() {
+                        let text = String::from_utf8_lossy(&text_output.stdout).to_string();
+                        if !text.trim().is_empty() {
+                            return Ok(SystemClipboardDto {
+                                content_type: "text".to_string(),
+                                data: text,
+                                file_name: format!("clipboard_text_{}.txt", date_str),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 尝试 X11 xclip
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(&["-selection", "clipboard", "-t", "TARGETS", "-o"])
+            .output()
+        {
+            if output.status.success() {
+                let targets = String::from_utf8_lossy(&output.stdout);
+                if targets.contains("image/png") {
+                    if let Ok(img) = std::process::Command::new("xclip")
+                        .args(&["-selection", "clipboard", "-t", "image/png", "-o"])
+                        .output()
+                    {
+                        if img.status.success() && !img.stdout.is_empty() {
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&img.stdout);
+                            return Ok(SystemClipboardDto {
+                                content_type: "image".to_string(),
+                                data: format!("data:image/png;base64,{}", b64),
+                                file_name: format!("clipboard_{}.png", date_str),
+                            });
+                        }
+                    }
+                }
+
+                if let Ok(txt) = std::process::Command::new("xclip")
+                    .args(&["-selection", "clipboard", "-o"])
+                    .output()
+                {
+                    if txt.status.success() && !txt.stdout.is_empty() {
+                        let text = String::from_utf8_lossy(&txt.stdout).to_string();
+                        if !text.trim().is_empty() {
+                            return Ok(SystemClipboardDto {
+                                content_type: "text".to_string(),
+                                data: text,
+                                file_name: format!("clipboard_text_{}.txt", date_str),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SystemClipboardDto {
+            content_type: "empty".to_string(),
+            data: "".to_string(),
+            file_name: "".to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("读取剪贴板线程执行失败: {}", e))?
+}
+
+#[tauri::command]
+fn open_material_file(
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<(), String> {
+    let mat_id = Uuid::parse_str(&material_id).map_err(|e| e.to_string())?;
+    let mat = {
+        let db = state.db.lock().unwrap();
+        db.get_material(&mat_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "未找到参考资料".to_string())?
+    };
+    let path = std::path::PathBuf::from(&mat.file_path);
+    if !path.exists() {
+        return Err("资料文件在磁盘上不存在".to_string());
+    }
+    let _ = system_open_path(&path).map_err(|e| format!("打开文件失败: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2830,7 +3213,7 @@ async fn transcribe_entry_audio(
         .map_err(|e| e.to_string())?;
 
     // AI 结构化精炼提取（基于转写文本提取核心议题、技术决议与交付待办）
-    let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &[], Some(&audio_path), Some(&transcript)).await {
+    let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &[], &[], Some(&audio_path), Some(&transcript)).await {
         Ok(sum) if !sum.trim().is_empty() => sum,
         _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
     };
@@ -2915,7 +3298,12 @@ async fn resummarize_meeting_entry(
             } else {
                 0.5
             };
-            let summary = match summarizer.summarize_meeting(&topic_for_sum, duration_hours, &notes, None, Some(&combined_transcript)).await {
+            let materials = db
+                .lock()
+                .unwrap()
+                .list_materials_for_meeting(&m.id)
+                .unwrap_or_default();
+            let summary = match summarizer.summarize_meeting(&topic_for_sum, duration_hours, &notes, &materials, None, Some(&combined_transcript)).await {
                 Ok(sum) if !sum.trim().is_empty() => sum,
                 _ => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_for_sum),
             };
@@ -2949,7 +3337,7 @@ async fn resummarize_meeting_entry(
             .await
             .map_err(|e| format!("语音转写失败: {}", e))?;
 
-        let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &notes, Some(&entry_audio_path), Some(&transcript)).await {
+        let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &notes, &[], Some(&entry_audio_path), Some(&transcript)).await {
             Ok(sum) if !sum.trim().is_empty() => sum,
             _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
         };
@@ -3819,6 +4207,32 @@ async fn export_meeting_pdf(
     color: inherit;
     padding: 0;
   }}
+  .content-area table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    page-break-inside: auto;
+  }}
+  .content-area tr {{
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }}
+  .content-area th, .content-area td {{
+    border: 1px solid #cbd5e1;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+  }}
+  .content-area th {{
+    background-color: #f1f5f9;
+    color: #0f172a;
+    font-weight: 700;
+  }}
+  .content-area tr:nth-child(even) td {{
+    background-color: #f8fafc;
+  }}
   .footer-bar {{
     margin-top: 40px;
     padding-top: 14px;
@@ -4063,7 +4477,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             save_and_open_excel,
             save_multiple_excel_files,
             open_file_or_dir,
-            export_meeting_pdf
+            export_meeting_pdf,
+            upload_meeting_material,
+            delete_meeting_material,
+            list_meeting_materials,
+            get_material_data_url,
+            open_material_file,
+            get_system_clipboard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

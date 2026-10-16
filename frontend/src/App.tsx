@@ -21,6 +21,7 @@ import {
   BarChart3,
   Layers,
   Copy,
+  Clipboard,
   Calendar,
   ChevronLeft,
   ChevronRight,
@@ -45,7 +46,9 @@ import {
   RotateCw,
   AlertTriangle,
   Loader2,
-  Coffee
+  Coffee,
+  Paperclip,
+  Image as ImageIcon
 } from "lucide-react";
 
 interface Project {
@@ -118,6 +121,18 @@ interface AudioClip {
   status: string;
 }
 
+interface MeetingMaterial {
+  id: string;
+  meeting_id: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  file_size_text: string;
+  is_image: boolean;
+  has_text: boolean;
+  created_at: string;
+}
+
 interface MeetingDetail {
   id: string;
   topic: string;
@@ -128,6 +143,7 @@ interface MeetingDetail {
   summary?: string;
   quick_notes?: string;
   clips: AudioClip[];
+  materials?: MeetingMaterial[];
 }
 
 interface Entry {
@@ -165,6 +181,7 @@ interface GlobalStats {
   is_recording_audio: boolean;
   active_recording_project_id?: string;
   active_recording_project_name: string;
+  active_meeting_id?: string;
   is_audio_paused: boolean;
 }
 
@@ -367,6 +384,16 @@ export function App() {
   } | null>(null);
   const [isResummarizing, setIsResummarizing] = useState(false);
 
+  // Meeting Materials State
+  const [previewImageModal, setPreviewImageModal] = useState<{
+    title: string;
+    dataUrl: string;
+    materialId: string;
+  } | null>(null);
+  const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+  const [hoveredMeetingId, setHoveredMeetingId] = useState<string | null>(null);
+
   const toggleSummaryExpand = (entryId: string) => {
     setExpandedSummaryEntryIds((prev) => ({
       ...prev,
@@ -405,7 +432,6 @@ export function App() {
     }
     return { summary: fullText, transcript: "" };
   };
-
 
   interface ParsedWorkContent {
     userNotes: string;
@@ -493,6 +519,63 @@ export function App() {
       commits: commitLines,
       rawText: cleaned,
     };
+  };
+
+  // 拼接单日完整交付说明：聚合日常研发工作主线、Git提交记录与关联会议沟通纪要/决议
+  const buildCompleteDayDeliverableSummary = (group: DayGroup): string => {
+    const sections: string[] = [];
+
+    for (const entry of group.entries) {
+      const { summary: conciseSummary } = splitSummaryAndTranscript(entry.summary_text || "");
+      const hasMeetings = (entry.meetings || []).length > 0;
+      const parsed = parseWorkContent(conciseSummary, hasMeetings);
+
+      const entryParts: string[] = [];
+      const headline = parsed.userNotes
+        ? parsed.userNotes.trim()
+        : (conciseSummary.replace(/【会议进行中 🎙️】/g, "").trim() || "日常研发任务与协同联调");
+
+      // 1. 研发主线与工作任务内容
+      if (headline && !headline.startsWith("【会议进行中 🎙️】")) {
+        entryParts.push(headline);
+      }
+
+      // 2. Git 提交记录
+      if (parsed.commits.length > 0) {
+        const commitText = parsed.commits
+          .map((c) => `- ${c.hash ? `[${c.hash}] ` : ""}${c.message}`)
+          .join("\n");
+        entryParts.push(`**代码研发与提交 (${parsed.commits.length} 次)：**\n${commitText}`);
+      }
+
+      // 3. 关联会议的完整纪要与技术决议
+      if (entry.meetings && entry.meetings.length > 0) {
+        const meetingParts: string[] = [];
+        for (const m of entry.meetings) {
+          if (m.summary && m.summary.trim()) {
+            meetingParts.push(`### 议题：${m.topic}\n\n${m.summary.trim()}`);
+          }
+        }
+        if (meetingParts.length > 0) {
+          entryParts.push(`## 关联会议沟通与决议清单\n\n${meetingParts.join("\n\n---\n\n")}`);
+        }
+      }
+
+      const combinedEntryText = entryParts.filter(Boolean).join("\n\n");
+      if (combinedEntryText.trim()) {
+        if (group.entries.length > 1) {
+          sections.push(`## 【时段 ${entry.time_range}】\n\n${combinedEntryText.trim()}`);
+        } else {
+          sections.push(combinedEntryText.trim());
+        }
+      }
+    }
+
+    if (sections.length === 0) {
+      return group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+    }
+
+    return sections.join("\n\n---\n\n");
   };
 
 
@@ -1270,6 +1353,297 @@ export function App() {
       setConfirmResummarizeModal(null);
     }
   };
+
+  const handleUploadMaterialFiles = async (meetingId: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsUploadingMaterial(true);
+    let count = 0;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const reader = new FileReader();
+        await new Promise<void>((resolve, reject) => {
+          reader.onload = async () => {
+            try {
+              const b64 = reader.result as string;
+              await invoke("upload_meeting_material", {
+                meetingId,
+                fileName: file.name,
+                base64Data: b64,
+              });
+              count++;
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+      showToast(`📎 成功关联 ${count} 个会议参考资料！AI 提炼与转写将自动参考。`);
+    } catch (err: any) {
+      console.error(err);
+      showToast(`上传资料失败: ${err?.message || err}`);
+    } finally {
+      setIsUploadingMaterial(false);
+    }
+  };
+
+  const handleDeleteMaterial = async (materialId: string) => {
+    if (!confirm("确认删除该会议参考资料吗？")) return;
+    try {
+      await invoke("delete_meeting_material", { materialId });
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+      showToast("已删除参考资料");
+    } catch (err: any) {
+      showToast(`删除失败: ${err?.message || err}`);
+    }
+  };
+
+  const handlePreviewMaterialImage = async (materialId: string, title: string) => {
+    try {
+      const dataUrl = await invoke<string>("get_material_data_url", { materialId });
+      setPreviewImageModal({ title, dataUrl, materialId });
+    } catch (err: any) {
+      showToast(`加载图片失败: ${err?.message || err}`);
+    }
+  };
+
+  const handleOpenMaterialFile = async (materialId: string) => {
+    try {
+      await invoke("open_material_file", { materialId });
+    } catch (err: any) {
+      showToast(`打开文件失败: ${err?.message || err}`);
+    }
+  };
+
+  // 辅助函数：将纯文本上传为会议资料
+  const handleUploadTextSnippet = async (meetingId: string, text: string) => {
+    if (!text.trim()) return;
+    const dateStr = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14);
+    const fileName = `paste_snippet_${dateStr}.txt`;
+    const b64 = "data:text/plain;charset=utf-8;base64," + btoa(unescape(encodeURIComponent(text)));
+    try {
+      await invoke("upload_meeting_material", {
+        meetingId,
+        fileName,
+        base64Data: b64,
+      });
+      refreshData();
+      if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+      showToast("📋 已成功将剪贴板文本作为会议参考资料关联！");
+    } catch (err: any) {
+      console.error("上传文本片段失败:", err);
+      showToast(`关联文本失败: ${err?.message || err}`);
+    }
+  };
+
+  // 点击按钮直接读取系统剪贴板并关联至指定会议
+  const handlePasteFromClipboard = async (meetingId: string) => {
+    try {
+      // 1. 优先调用 Tauri 后端命令读取系统底层剪贴板 (完美支持 Linux Wayland wl-paste 与 X11 xclip)
+      const sysClip = await invoke<{ content_type: string; data: string; file_name: string }>("get_system_clipboard");
+      if (sysClip && sysClip.content_type === "image" && sysClip.data) {
+        await invoke("upload_meeting_material", {
+          meetingId,
+          fileName: sysClip.file_name,
+          base64Data: sysClip.data,
+        });
+        refreshData();
+        if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+        showToast("📋 成功读取系统剪贴板截图并作为会议参考资料关联！");
+        return;
+      } else if (sysClip && sysClip.content_type === "text" && sysClip.data) {
+        await handleUploadTextSnippet(meetingId, sysClip.data);
+        return;
+      }
+
+      // 2. 备用浏览器 navigator.clipboard API
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            const ext = imageType.split("/")[1] || "png";
+            const dateStr = new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14);
+            const fileName = `clipboard_${dateStr}.${ext}`;
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const b64 = reader.result as string;
+              try {
+                await invoke("upload_meeting_material", {
+                  meetingId,
+                  fileName,
+                  base64Data: b64,
+                });
+                refreshData();
+                if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+                showToast("📋 已成功将剪贴板截图作为会议参考资料关联！");
+              } catch (err: any) {
+                showToast(`关联截图失败: ${err?.message || err}`);
+              }
+            };
+            reader.readAsDataURL(blob);
+            return;
+          }
+        }
+      }
+
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim().length > 0) {
+          await handleUploadTextSnippet(meetingId, text);
+          return;
+        }
+      }
+
+      showToast("剪贴板中未找到图片或文本内容，请先截图(PrintScreen/Win+Shift+S)或复制文本！");
+    } catch (err: any) {
+      console.warn("读取剪贴板异常:", err);
+      showToast("读取剪贴板失败，也可以直接在卡片上按下 Ctrl+V 尝试粘贴！");
+    }
+  };
+
+  // 监听全局 Ctrl+V 粘贴：支持进行中或已结束选中的会议卡片
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      // 如果焦点在输入框或文本域中，不拦截普通输入粘贴
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || (activeEl as HTMLElement).isContentEditable)) {
+        return;
+      }
+
+      // 目标会议解析优先级：
+      // 1. 鼠标悬停的会议 (hoveredMeetingId)
+      // 2. 用户点击选中的会议 (selectedMeetingId)
+      // 3. 当前正在录音的会议 (active_meeting_id)
+      // 4. 当前页面唯一的会议条目
+      let targetMeetingId = hoveredMeetingId || selectedMeetingId || globalStats.active_meeting_id;
+      if (!targetMeetingId) {
+        const allMeetings: string[] = [];
+        for (const dg of dayGroups) {
+          for (const ent of dg.entries) {
+            if (ent.meetings) {
+              for (const m of ent.meetings) {
+                allMeetings.push(m.id);
+              }
+            }
+          }
+        }
+        if (allMeetings.length === 1) {
+          targetMeetingId = allMeetings[0];
+        }
+      }
+
+      if (!targetMeetingId) return;
+
+      // 优先直接调用系统原生剪贴板能力 (Linux Wayland / X11 兼容)
+      try {
+        const sysClip = await invoke<{ content_type: string; data: string; file_name: string }>("get_system_clipboard");
+        if (sysClip && sysClip.content_type === "image" && sysClip.data) {
+          e.preventDefault();
+          await invoke("upload_meeting_material", {
+            meetingId: targetMeetingId,
+            fileName: sysClip.file_name,
+            base64Data: sysClip.data,
+          });
+          refreshData();
+          if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+          showToast("📋 已自动将剪贴板截图作为会议参考资料关联！");
+          return;
+        } else if (sysClip && sysClip.content_type === "text" && sysClip.data) {
+          if (sysClip.data.trim().length >= 10) {
+            e.preventDefault();
+            await handleUploadTextSnippet(targetMeetingId, sysClip.data);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("原生剪贴板获取跳过，回退至 WebKit 剪贴板事件", err);
+      }
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      // 检查是否有图片
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const b64 = reader.result as string;
+              const fileName = `clipboard_${new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14)}.png`;
+              try {
+                await invoke("upload_meeting_material", {
+                  meetingId: targetMeetingId!,
+                  fileName,
+                  base64Data: b64,
+                });
+                refreshData();
+                if (selectedProjectId) refreshProjectDetails(selectedProjectId, selectedMonth);
+                showToast("📋 已自动将剪贴板截图作为会议参考资料关联！");
+              } catch (err: any) {
+                console.error("上传剪贴板截图失败:", err);
+                showToast(`自动关联截图失败: ${err?.message || err}`);
+              }
+            };
+            reader.readAsDataURL(file);
+            return;
+          }
+        }
+      }
+
+      // 检查是否有长文本内容（非输入框状态下的粘贴）
+      const text = e.clipboardData?.getData("text/plain");
+      if (text && text.trim().length >= 10) {
+        e.preventDefault();
+        await handleUploadTextSnippet(targetMeetingId, text);
+      }
+    };
+
+    // 键盘快捷键监听：当用户按下 Ctrl+V 时，即使浏览器未分发标准 paste 事件，也主动调用原生剪贴板读取
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || (activeEl as HTMLElement).isContentEditable)) {
+          return;
+        }
+        let targetMeetingId = hoveredMeetingId || selectedMeetingId || globalStats.active_meeting_id;
+        if (!targetMeetingId) {
+          const allMeetings: string[] = [];
+          for (const dg of dayGroups) {
+            for (const ent of dg.entries) {
+              if (ent.meetings) {
+                for (const m of ent.meetings) {
+                  allMeetings.push(m.id);
+                }
+              }
+            }
+          }
+          if (allMeetings.length === 1) {
+            targetMeetingId = allMeetings[0];
+          }
+        }
+        if (targetMeetingId) {
+          await handlePasteFromClipboard(targetMeetingId);
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [hoveredMeetingId, selectedMeetingId, globalStats.active_meeting_id, dayGroups, selectedProjectId, selectedMonth]);
 
   const handleOpenAudioPlayer = async (audioPath: string, title: string = "会议录音凭证") => {
     setActivePlayerAudio({
@@ -2052,6 +2426,26 @@ export function App() {
               >
                 {globalStats.is_audio_paused ? "▶ 继续录音" : "⏸ 暂停录音"}
               </button>
+              <label
+                className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 text-amber-950 rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs border border-amber-300"
+                title="上传客户发送的参考文档(PDF/DOCX/TXT/MD)或截图图片，AI 提炼纪要与识别专有名词时将自动参考"
+              >
+                <Paperclip className="w-3 h-3 text-amber-800" />
+                <span>{isUploadingMaterial ? "上传中..." : "📎 传参考资料"}</span>
+                <input
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (globalStats.active_meeting_id) {
+                      handleUploadMaterialFiles(globalStats.active_meeting_id, e.target.files);
+                      e.target.value = "";
+                    } else {
+                      showToast("暂未检测到活跃会议ID，可直接在下方会议卡片点击「+ 传资料」");
+                    }
+                  }}
+                />
+              </label>
               <button
                 onClick={handleStopClip}
                 className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
@@ -2741,7 +3135,25 @@ export function App() {
                                                 const meetingDurationText = m.duration_text && m.duration_text !== "00:00:00" ? m.duration_text : (m.status === "in_progress" ? "进行中" : (clipTotalSecs > 0 ? formatSeconds(clipTotalSecs) : "-"));
 
                                                 return (
-                                                  <div key={m.id} className="p-2.5 rounded-lg border border-slate-200/80 bg-slate-50/50 space-y-1.5 text-xs">
+                                                  <div
+                                                    key={m.id}
+                                                    onClick={() => setSelectedMeetingId(m.id)}
+                                                    onMouseEnter={() => setHoveredMeetingId(m.id)}
+                                                    onMouseLeave={() => setHoveredMeetingId((prev) => (prev === m.id ? null : prev))}
+                                                    onDragOver={(e) => e.preventDefault()}
+                                                    onDrop={(e) => {
+                                                      e.preventDefault();
+                                                      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                                                        handleUploadMaterialFiles(m.id, e.dataTransfer.files);
+                                                      }
+                                                    }}
+                                                    className={`p-2.5 rounded-lg border space-y-1.5 text-xs transition-all ${
+                                                      selectedMeetingId === m.id
+                                                        ? "border-indigo-400 bg-indigo-50/30 ring-2 ring-indigo-400/40 shadow-xs"
+                                                        : "border-slate-200/80 bg-slate-50/50 hover:border-slate-300 hover:bg-slate-50"
+                                                    }`}
+                                                    title="点击可选中此会议卡片，直接按 Ctrl+V 即可快速粘贴剪贴板截图或文字"
+                                                  >
                                                     <div className="flex items-center justify-between flex-wrap gap-2">
                                                       <div className="flex items-center gap-2">
                                                         <span className="font-bold text-slate-900">{mIdx + 1}. {m.topic}</span>
@@ -2804,15 +3216,19 @@ export function App() {
                                                                       </button>
                                                                     )}
                                                                     <button
-                                                                      onClick={() => setConfirmRetryClipModal({
-                                                                        clipId: clip.id,
-                                                                        clipOrder: clip.clip_order,
-                                                                        durationText: clip.duration_text,
-                                                                        topic: m.topic,
-                                                                        hasTranscript: !!clip.transcript,
-                                                                      })}
-                                                                      className="text-slate-400 hover:text-indigo-600 px-0.5 cursor-pointer flex items-center"
-                                                                      title="重新转写此片段"
+                                                                      type="button"
+                                                                      onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setConfirmRetryClipModal({
+                                                                          clipId: clip.id,
+                                                                          clipOrder: clip.clip_order,
+                                                                          durationText: clip.duration_text,
+                                                                          topic: m.topic,
+                                                                          hasTranscript: !!clip.transcript,
+                                                                        });
+                                                                      }}
+                                                                      className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
+                                                                      title="重新转写此片段语音"
                                                                     >
                                                                       <RotateCw className="w-2.5 h-2.5" />
                                                                     </button>
@@ -2846,6 +3262,75 @@ export function App() {
                                                           })}
                                                         </div>
                                                       )}
+                                                    </div>
+
+                                                    {/* 会议参考资料（文档与图片） */}
+                                                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/50">
+                                                      <span className="text-slate-400 text-[10px] flex items-center gap-0.5">
+                                                        <Paperclip className="w-2.5 h-2.5" /> 资料:
+                                                      </span>
+                                                      {m.materials && m.materials.map((mat) => (
+                                                        <div
+                                                          key={mat.id}
+                                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 transition-colors shadow-2xs"
+                                                        >
+                                                          {mat.is_image ? (
+                                                            <button
+                                                              onClick={() => handlePreviewMaterialImage(mat.id, mat.file_name)}
+                                                              className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+                                                              title="点击查看全尺寸图片"
+                                                            >
+                                                              <ImageIcon className="w-2.5 h-2.5 text-indigo-500" />
+                                                              <span className="max-w-[110px] truncate">{mat.file_name}</span>
+                                                            </button>
+                                                          ) : (
+                                                            <button
+                                                              onClick={() => handleOpenMaterialFile(mat.id)}
+                                                              className="flex items-center gap-1 text-slate-700 hover:text-indigo-700 font-medium cursor-pointer"
+                                                              title="点击调用系统默认软件打开文件"
+                                                            >
+                                                              <FileText className="w-2.5 h-2.5 text-emerald-600" />
+                                                              <span className="max-w-[110px] truncate">{mat.file_name}</span>
+                                                              <span className="text-[9px] text-slate-400">({mat.file_size_text})</span>
+                                                            </button>
+                                                          )}
+                                                          <button
+                                                            onClick={() => handleDeleteMaterial(mat.id)}
+                                                            className="text-slate-300 hover:text-rose-600 ml-0.5 cursor-pointer"
+                                                            title="删除此参考资料"
+                                                          >
+                                                            <Trash2 className="w-2.5 h-2.5" />
+                                                          </button>
+                                                        </div>
+                                                      ))}
+                                                      <label
+                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95"
+                                                        title="点击上传或直接拖拽文件到此会议卡片，支持 PDF/Word/TXT/MD 或截图图片"
+                                                      >
+                                                        <Paperclip className="w-2.5 h-2.5 text-indigo-600" />
+                                                        <span>{isUploadingMaterial ? "上传中..." : "+ 添加参考资料 (Word/PDF/截图)"}</span>
+                                                        <input
+                                                          type="file"
+                                                          multiple
+                                                          className="hidden"
+                                                          onChange={(e) => {
+                                                            handleUploadMaterialFiles(m.id, e.target.files);
+                                                            e.target.value = "";
+                                                          }}
+                                                        />
+                                                      </label>
+                                                      <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          handlePasteFromClipboard(m.id);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95"
+                                                        title="直接读取系统剪贴板中的截图或文本内容关联至此会议（也可以选中此卡片后直接按 Ctrl+V）"
+                                                      >
+                                                        <Clipboard className="w-2.5 h-2.5 text-emerald-600" />
+                                                        <span>📋 粘贴 (Ctrl+V)</span>
+                                                      </button>
                                                     </div>
 
                                                     {/* 会议达成共识与决议：自然文本列表，优雅边框缩进 */}
@@ -2888,12 +3373,12 @@ export function App() {
                                 <div className="flex items-center gap-1.5">
                                   <button
                                     onClick={() => {
-                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
-                                      navigator.clipboard.writeText(allSummaries);
-                                      showToast("📋 当日完整工作交付说明已复制！");
+                                      const fullDaySummary = buildCompleteDayDeliverableSummary(group);
+                                      navigator.clipboard.writeText(fullDaySummary);
+                                      showToast("📋 当日完整工作交付说明与会议决议已全量复制！");
                                     }}
                                     className="h-6 px-2.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-medium flex items-center gap-1 shadow-2xs transition cursor-pointer"
-                                    title="复制当日所有工时交付说明"
+                                    title="复制当日所有工时交付说明与会议沟通决议清单"
                                   >
                                     <Copy className="w-3 h-3 text-slate-500" />
                                     <span>复制说明</span>
@@ -2901,12 +3386,12 @@ export function App() {
                                   <button
                                     disabled={isExportingPdf}
                                     onClick={() => {
-                                      const allSummaries = group.entries.map((e) => e.summary_text).filter(Boolean).join("\n\n---\n\n");
+                                      const fullDaySummary = buildCompleteDayDeliverableSummary(group);
                                       handleExportPdf({
                                         title: `【${activeProject?.name || "技术项目"}】${group.date_str} 工作交付说明与决议`,
                                         projectName: activeProject?.name || "技术项目",
                                         dateStr: group.date_str,
-                                        summaryContent: allSummaries,
+                                        summaryContent: fullDaySummary,
                                       });
                                     }}
                                     className="h-6 px-2.5 rounded-md bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition cursor-pointer disabled:opacity-50"
@@ -4477,6 +4962,68 @@ export function App() {
                   <Volume2 className="w-3.5 h-3.5" />
                   播放录音
                 </button>
+              </div>
+            )}
+
+            {/* 会议沟通与参考资料 */}
+            {selectedEntry.meetings && selectedEntry.meetings.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Mic className="w-3.5 h-3.5 text-violet-600" /> 关联会议与参考资料
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-medium">共 {selectedEntry.meetings.length} 场会议</span>
+                </div>
+                <div className="space-y-2">
+                  {selectedEntry.meetings.map((m, mIdx) => (
+                    <div key={m.id} className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">{mIdx + 1}. {m.topic}</span>
+                        <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 cursor-pointer transition-all font-semibold shadow-2xs">
+                          <Paperclip className="w-2.5 h-2.5" />
+                          <span>+ 添加资料</span>
+                          <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              handleUploadMaterialFiles(m.id, e.target.files);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {m.materials && m.materials.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {m.materials.map((mat) => (
+                            <div key={mat.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-white border border-slate-200 text-slate-700">
+                              {mat.is_image ? (
+                                <button
+                                  onClick={() => handlePreviewMaterialImage(mat.id, mat.file_name)}
+                                  className="flex items-center gap-1 text-indigo-600 hover:underline cursor-pointer"
+                                >
+                                  <ImageIcon className="w-2.5 h-2.5 text-indigo-500" />
+                                  <span className="max-w-[120px] truncate">{mat.file_name}</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleOpenMaterialFile(mat.id)}
+                                  className="flex items-center gap-1 text-slate-700 hover:underline cursor-pointer"
+                                >
+                                  <FileText className="w-2.5 h-2.5 text-emerald-600" />
+                                  <span className="max-w-[120px] truncate">{mat.file_name}</span>
+                                </button>
+                              )}
+                              <button onClick={() => handleDeleteMaterial(mat.id)} className="text-slate-300 hover:text-rose-600">
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -6070,6 +6617,48 @@ export function App() {
               >
                 关闭播放器
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 客户参考图片全屏大图预览 (Lightbox) ---------------- */}
+      {previewImageModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* 顶栏 */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/90 text-white">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs font-bold truncate max-w-md">{previewImageModal.title}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenMaterialFile(previewImageModal.materialId)}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                  title="使用系统默认看图软件打开"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>系统打开</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewImageModal(null)}
+                  className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* 大图展示区 */}
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950/50 min-h-[300px]">
+              <img
+                src={previewImageModal.dataUrl}
+                alt={previewImageModal.title}
+                className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-md"
+              />
             </div>
           </div>
         </div>

@@ -5,6 +5,7 @@
 // Description: Multi-channel concurrent time-tracking & man-day billing engine.
 
 pub mod client;
+pub mod doc_parser;
 
 pub use client::{
     download_whisper_model_file, find_whisper_binary, find_whisper_model, get_asr_runtime_status,
@@ -12,3 +13,7 @@ pub use client::{
     AiWorkEvaluationRequest, AiWorkEvaluationResult, AsrConfig, AsrRuntimeStatus,
     AvailableModelInfo, StructuredDeliverableReport, WhisperModelInfo, WorkCategory,
 };
+pub use doc_parser::{
+    extract_document_text, extract_glossary_for_asr, is_document_file, is_image_file,
+};
+
