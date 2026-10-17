@@ -1559,12 +1559,7 @@ async fn finish_meeting(
     meeting_id: Option<String>,
     stop_project_timer: bool,
 ) -> Result<StopMeetingResultDto, String> {
-    // 1. 如果当前还有正在录制的片段，先停止它
-    if state.active_recording.lock().unwrap().is_some() {
-        let _ = stop_recording_clip(app.clone(), state.clone()).await;
-    }
-
-    // 2. 找到目标会议
+    // 1. 找到目标会议
     let db = state.db.clone();
     let meeting_opt = {
         let guard = db.lock().unwrap();
@@ -1580,11 +1575,31 @@ async fn finish_meeting(
         mid.and_then(|id| guard.get_meeting(&id).ok().flatten())
     };
 
-    let mut meeting = meeting_opt.ok_or_else(|| "未找到活跃会议".to_string())?;
+    let mut meeting = meeting_opt.ok_or_else(|| "未找到指定会议记录".to_string())?;
+    if meeting.status != "in_progress" {
+        return Err(format!(
+            "该会议当前状态为【{}】，仅处于进行中 (in_progress) 的会议可以执行结束操作！",
+            meeting.status
+        ));
+    }
+
     let m_id = meeting.id;
     let pid = meeting.project_id;
     let entry_id = meeting.entry_id;
     let topic = meeting.topic.clone();
+
+    // 2. 检查是否有属于【本场会议】的活跃录音切片，只有匹配时才停止并清理全局活跃会议状态
+    let is_this_meeting_recording = {
+        let active_rec = state.active_recording.lock().unwrap();
+        active_rec
+            .as_ref()
+            .map(|(_, active_mid, _, _, _)| *active_mid == m_id)
+            .unwrap_or(false)
+    };
+
+    if is_this_meeting_recording {
+        let _ = stop_recording_clip(app.clone(), state.clone()).await;
+    }
 
     // 标记会议结束时间与状态
     let now = Utc::now();
@@ -1599,10 +1614,15 @@ async fn finish_meeting(
     {
         let guard = db.lock().unwrap();
         let _ = guard.insert_meeting(&meeting);
-        let _ = guard.set_setting("active_meeting_id", "");
-        let _ = guard.set_setting("active_meeting_pid", "");
-        let _ = guard.set_setting("active_meeting_topic", "");
-        let _ = guard.set_setting("active_meeting_path", "");
+
+        // 仅当全局保存的 active_meeting_id 正是本场会议时才清除
+        let current_active_mid = guard.get_setting("active_meeting_id").ok().flatten();
+        if current_active_mid.as_deref() == Some(&m_id.to_string()) {
+            let _ = guard.set_setting("active_meeting_id", "");
+            let _ = guard.set_setting("active_meeting_pid", "");
+            let _ = guard.set_setting("active_meeting_topic", "");
+            let _ = guard.set_setting("active_meeting_path", "");
+        }
     }
 
     // 3. 处理是否同时停止工时 (方案2：双选项)
@@ -2174,7 +2194,10 @@ async fn pick_repo_parent_folder(
                     if let Ok(rel) = picked_path.strip_prefix(&root_path) {
                         return Ok(Some(rel.to_string_lossy().to_string()));
                     } else {
-                        return Ok(Some(picked_str));
+                        return Err(format!(
+                            "选择的目录 '{}' 位于当前 Git 仓库根目录之外，请在当前项目仓库内部选择归档父目录！",
+                            picked_path.display()
+                        ));
                     }
                 }
             } else if output.status.code() == Some(1) {
@@ -2196,7 +2219,10 @@ async fn pick_repo_parent_folder(
                     if let Ok(rel) = picked_path.strip_prefix(&root_path) {
                         return Ok(Some(rel.to_string_lossy().to_string()));
                     } else {
-                        return Ok(Some(picked_str));
+                        return Err(format!(
+                            "选择的目录 '{}' 位于当前 Git 仓库根目录之外，请在当前项目仓库内部选择归档父目录！",
+                            picked_path.display()
+                        ));
                     }
                 }
             } else if output.status.code() == Some(1) {
@@ -2218,7 +2244,10 @@ async fn pick_repo_parent_folder(
             if let Ok(rel) = picked_path.strip_prefix(&root_path) {
                 return Ok(Some(rel.to_string_lossy().to_string()));
             } else {
-                return Ok(Some(picked_path.to_string_lossy().to_string()));
+                return Err(format!(
+                    "选择的目录 '{}' 位于当前 Git 仓库根目录之外，请在当前项目仓库内部选择归档父目录！",
+                    picked_path.display()
+                ));
             }
         }
 

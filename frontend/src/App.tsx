@@ -331,6 +331,7 @@ export function App() {
   // Meeting Summary Modal (Stop Meeting & AI Generated Minutes)
   const [showMeetingSummaryModal, setShowMeetingSummaryModal] = useState(false);
   const [isStoppingMeeting, setIsStoppingMeeting] = useState(false);
+  const [finishingMeetingIds, setFinishingMeetingIds] = useState<Set<string>>(new Set());
   const [meetingSummaryData, setMeetingSummaryData] = useState<{
     meeting_id?: string;
     project_id: string;
@@ -1152,6 +1153,9 @@ export function App() {
   // 结束会议（方案2双选项：参数 stopProjectTimer 决定是否同步停止主工时）
   const handleFinishMeeting = async (stopProjectTimer: boolean = false, meetingId?: string) => {
     setIsStoppingMeeting(true);
+    if (meetingId) {
+      setFinishingMeetingIds((prev) => new Set(prev).add(meetingId));
+    }
     showToast(stopProjectTimer ? "⏹ 正在结束会议并封包今日工时..." : "⏹ 正在结束会议（工时继续保持计时）...");
     try {
       const res = await invoke<StopMeetingResult>("finish_meeting", {
@@ -1160,15 +1164,23 @@ export function App() {
       });
       if (res && res.success) {
         showToast("🎉 " + res.message);
-        refreshData();
+        const refreshTasks: Promise<any>[] = [refreshData()];
         if (selectedProjectId) {
-          refreshProjectDetails(selectedProjectId, selectedMonth);
+          refreshTasks.push(refreshProjectDetails(selectedProjectId, selectedMonth));
         }
+        await Promise.all(refreshTasks);
       }
     } catch (e: any) {
       showToast("结束会议失败: " + e.toString());
     } finally {
       setIsStoppingMeeting(false);
+      if (meetingId) {
+        setFinishingMeetingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(meetingId);
+          return next;
+        });
+      }
     }
   };
 
@@ -3421,19 +3433,19 @@ export function App() {
                                                           <div className="flex items-center gap-1.5">
                                                             <button
                                                               type="button"
-                                                              disabled={isStoppingMeeting}
+                                                              disabled={isStoppingMeeting || finishingMeetingIds.has(m.id)}
                                                               onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 handleFinishMeeting(false, m.id);
                                                               }}
                                                               className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold transition-all shadow-2xs ${
-                                                                isStoppingMeeting
+                                                                isStoppingMeeting || finishingMeetingIds.has(m.id)
                                                                   ? "bg-slate-700 text-slate-300 cursor-wait opacity-80"
                                                                   : "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer active:scale-95"
                                                               }`}
                                                               title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
                                                             >
-                                                              {isStoppingMeeting ? (
+                                                              {isStoppingMeeting || finishingMeetingIds.has(m.id) ? (
                                                                 <>
                                                                   <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
                                                                   <span>正在提炼...</span>
