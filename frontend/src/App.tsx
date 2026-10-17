@@ -3408,12 +3408,36 @@ export function App() {
                                                             )}
                                                           </button>
                                                         ) : (
-                                                          <span
-                                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
-                                                            title="会议尚未结束或纪要正在生成，请在会议完成后归档"
-                                                          >
-                                                            会议进行中
-                                                          </span>
+                                                          <div className="flex items-center gap-1.5">
+                                                            <button
+                                                              type="button"
+                                                              disabled={isStoppingMeeting}
+                                                              onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleFinishMeeting(false, m.id);
+                                                              }}
+                                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-semibold transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                                                              title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
+                                                            >
+                                                              {isStoppingMeeting ? (
+                                                                <>
+                                                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                  <span>正在提炼...</span>
+                                                                </>
+                                                              ) : (
+                                                                <>
+                                                                  <Square className="w-2.5 h-2.5 fill-current" />
+                                                                  <span>结束会议</span>
+                                                                </>
+                                                              )}
+                                                            </button>
+                                                            <span
+                                                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
+                                                              title="会议尚未结束或纪要正在生成中"
+                                                            >
+                                                              {m.status === "summarizing" ? "纪要提炼中..." : "进行中"}
+                                                            </span>
+                                                          </div>
                                                         )}
                                                       </div>
                                                     </div>
