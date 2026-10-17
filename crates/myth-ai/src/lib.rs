@@ -16,4 +16,3 @@ pub use client::{
 pub use doc_parser::{
     extract_document_text, extract_glossary_for_asr, is_document_file, is_image_file,
 };
-

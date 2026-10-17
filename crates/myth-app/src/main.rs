@@ -13,7 +13,8 @@ use myth_ai::{
 use myth_audio::{AudioPlayer, AudioRecorder};
 use myth_core::billing::BillingEngine;
 use myth_core::models::{
-    BillingType, DayCalcMode, Meeting, MeetingAudioClip, MeetingMaterial, Project, QuickNote, TimeEntry, WorkSpan,
+    BillingType, DayCalcMode, Meeting, MeetingAudioClip, MeetingMaterial, Project, QuickNote,
+    TimeEntry, WorkSpan,
 };
 use myth_core::timer::MultiChannelManager;
 use myth_db::{ActiveTimerRecord, Database};
@@ -389,7 +390,9 @@ fn dirs_or_local_data_dir() -> std::path::PathBuf {
 }
 
 fn get_materials_dir(meeting_id: &Uuid) -> std::path::PathBuf {
-    dirs_or_local_data_dir().join("materials").join(meeting_id.to_string())
+    dirs_or_local_data_dir()
+        .join("materials")
+        .join(meeting_id.to_string())
 }
 
 fn map_material_to_dto(mat: &MeetingMaterial) -> MeetingMaterialDto {
@@ -408,8 +411,16 @@ fn map_material_to_dto(mat: &MeetingMaterial) -> MeetingMaterialDto {
         file_size: mat.file_size,
         file_size_text: size_text,
         is_image: mat.file_type == "image",
-        has_text: mat.extracted_text.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false),
-        created_at: mat.created_at.with_timezone(&Local).format("%H:%M").to_string(),
+        has_text: mat
+            .extracted_text
+            .as_ref()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false),
+        created_at: mat
+            .created_at
+            .with_timezone(&Local)
+            .format("%H:%M")
+            .to_string(),
     }
 }
 
@@ -588,10 +599,8 @@ fn get_daily_groups(
                     .unwrap()
                     .list_materials_for_meeting(&m.id)
                     .unwrap_or_default();
-                let material_dtos: Vec<MeetingMaterialDto> = materials
-                    .iter()
-                    .map(map_material_to_dto)
-                    .collect();
+                let material_dtos: Vec<MeetingMaterialDto> =
+                    materials.iter().map(map_material_to_dto).collect();
 
                 let m_start_local = m.start_at.with_timezone(&Local);
                 let m_end_local = m.end_at.map(|d| d.with_timezone(&Local));
@@ -795,10 +804,13 @@ fn get_global_stats(state: State<AppState>) -> Result<GlobalStatsDto, String> {
     let has_active_rec = active_rec.is_some();
     let is_recording_audio = audio_rec.is_recording() || has_active_rec;
     let is_audio_paused = audio_rec.is_paused();
-    let (active_recording_project_id, active_meeting_id, active_recording_project_name) = active_rec
-        .as_ref()
-        .map(|(pid, mid, topic, _, _)| (Some(pid.to_string()), Some(mid.to_string()), topic.clone()))
-        .unwrap_or((None, None, String::new()));
+    let (active_recording_project_id, active_meeting_id, active_recording_project_name) =
+        active_rec
+            .as_ref()
+            .map(|(pid, mid, topic, _, _)| {
+                (Some(pid.to_string()), Some(mid.to_string()), topic.clone())
+            })
+            .unwrap_or((None, None, String::new()));
 
     Ok(GlobalStatsDto {
         total_days: format!("{:.2} 人天", total_days),
@@ -1335,7 +1347,9 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
 
         let dynamic_prompt = {
             let guard = db_for_async.lock().unwrap();
-            let mats = guard.list_materials_for_meeting(&meeting_id).unwrap_or_default();
+            let mats = guard
+                .list_materials_for_meeting(&meeting_id)
+                .unwrap_or_default();
             if mats.is_empty() {
                 None
             } else {
@@ -1345,7 +1359,11 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
                     .filter_map(|m| m.extracted_text.as_deref())
                     .collect();
                 let gloss = myth_ai::extract_glossary_for_asr(&file_names, &doc_texts);
-                if gloss.is_empty() { None } else { Some(gloss) }
+                if gloss.is_empty() {
+                    None
+                } else {
+                    Some(gloss)
+                }
             }
         };
 
@@ -1353,7 +1371,8 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
         if audio_file_clone.exists() {
             let res = tokio::time::timeout(
                 std::time::Duration::from_secs(600),
-                summarizer.transcribe_audio_with_prompt(&audio_file_clone, dynamic_prompt.as_deref()),
+                summarizer
+                    .transcribe_audio_with_prompt(&audio_file_clone, dynamic_prompt.as_deref()),
             )
             .await;
             match res {
@@ -1449,7 +1468,9 @@ async fn retry_transcribe_audio_clip(
 
         let dynamic_prompt = {
             let guard = db_for_async.lock().unwrap();
-            let mats = guard.list_materials_for_meeting(&meeting_id).unwrap_or_default();
+            let mats = guard
+                .list_materials_for_meeting(&meeting_id)
+                .unwrap_or_default();
             if mats.is_empty() {
                 None
             } else {
@@ -1459,7 +1480,11 @@ async fn retry_transcribe_audio_clip(
                     .filter_map(|m| m.extracted_text.as_deref())
                     .collect();
                 let gloss = myth_ai::extract_glossary_for_asr(&file_names, &doc_texts);
-                if gloss.is_empty() { None } else { Some(gloss) }
+                if gloss.is_empty() {
+                    None
+                } else {
+                    Some(gloss)
+                }
             }
         };
 
@@ -1825,10 +1850,7 @@ async fn upload_meeting_material(
 }
 
 #[tauri::command]
-fn delete_meeting_material(
-    state: State<'_, AppState>,
-    material_id: String,
-) -> Result<(), String> {
+fn delete_meeting_material(state: State<'_, AppState>, material_id: String) -> Result<(), String> {
     let mat_id = Uuid::parse_str(&material_id).map_err(|e| e.to_string())?;
     let db = state.db.lock().unwrap();
     if let Ok(Some(mat)) = db.get_material(&mat_id) {
@@ -1848,7 +1870,9 @@ fn list_meeting_materials(
 ) -> Result<Vec<MeetingMaterialDto>, String> {
     let mid = Uuid::parse_str(&meeting_id).map_err(|e| e.to_string())?;
     let db = state.db.lock().unwrap();
-    let mats = db.list_materials_for_meeting(&mid).map_err(|e| e.to_string())?;
+    let mats = db
+        .list_materials_for_meeting(&mid)
+        .map_err(|e| e.to_string())?;
     Ok(mats.iter().map(map_material_to_dto).collect())
 }
 
@@ -1928,7 +1952,12 @@ fn sanitize_folder_name(name: &str) -> String {
 fn scan_repository_directory_tree(repo_root: &std::path::Path) -> Vec<String> {
     let mut results = Vec::new();
 
-    fn walk(root: &std::path::Path, current: &std::path::Path, depth: usize, out: &mut Vec<String>) {
+    fn walk(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) {
         if depth > 3 {
             return;
         }
@@ -1937,7 +1966,12 @@ fn scan_repository_directory_tree(repo_root: &std::path::Path) -> Vec<String> {
                 if let Ok(ft) = entry.file_type() {
                     if ft.is_dir() {
                         let name = entry.file_name().to_string_lossy().to_string();
-                        if name.starts_with('.') || name == "target" || name == "node_modules" || name == "dist" || name == "vendor" {
+                        if name.starts_with('.')
+                            || name == "target"
+                            || name == "node_modules"
+                            || name == "dist"
+                            || name == "vendor"
+                        {
                             continue;
                         }
                         let path = entry.path();
@@ -1996,13 +2030,16 @@ async fn get_meeting_repo_target_info(
         (project, remembered, sum_text, ai_conf)
     };
 
-    let git_repo_path_str = project
-        .git_repo_path
-        .ok_or_else(|| "该项目尚未关联本地 Git 仓库路径，请先在项目设置中配置仓库路径！".to_string())?;
+    let git_repo_path_str = project.git_repo_path.ok_or_else(|| {
+        "该项目尚未关联本地 Git 仓库路径，请先在项目设置中配置仓库路径！".to_string()
+    })?;
 
     let repo_root = std::path::PathBuf::from(&git_repo_path_str);
     if !repo_root.is_dir() {
-        return Err(format!("项目配置的 Git 路径不存在或不是文件夹: {}", git_repo_path_str));
+        return Err(format!(
+            "项目配置的 Git 路径不存在或不是文件夹: {}",
+            git_repo_path_str
+        ));
     }
 
     // 会议详情、材料与录音数量
@@ -2044,7 +2081,14 @@ async fn get_meeting_repo_target_info(
     // 筛选适合在 UI 快捷展示的常见文档与模块目录
     let mut available_dirs: Vec<String> = all_dirs
         .iter()
-        .filter(|d| d.starts_with("doc") || d.starts_with("wiki") || d.contains("meeting") || d.contains("spec") || d.contains("proposal") || d.contains("design"))
+        .filter(|d| {
+            d.starts_with("doc")
+                || d.starts_with("wiki")
+                || d.contains("meeting")
+                || d.contains("spec")
+                || d.contains("proposal")
+                || d.contains("design")
+        })
         .cloned()
         .collect();
     if available_dirs.is_empty() {
@@ -2056,7 +2100,10 @@ async fn get_meeting_repo_target_info(
     } else {
         // 未曾选择过：真实调用 AI 智能分析该会议与仓库哪个目录最匹配！
         let summarizer = myth_ai::AiSummarizer::new(ai_config);
-        match summarizer.suggest_meeting_repo_dir(&m_topic, &summary_snippet, &all_dirs).await {
+        match summarizer
+            .suggest_meeting_repo_dir(&m_topic, &summary_snippet, &all_dirs)
+            .await
+        {
             Ok((ai_dir, reason)) => {
                 let final_dir = if ai_dir.is_empty() {
                     "docs/meetings".to_string()
@@ -2068,8 +2115,15 @@ async fn get_meeting_repo_target_info(
             Err(e) => {
                 tracing::warn!("调用大模型推荐目录失败: {}", e);
                 // 失败回退方案
-                let fallback = available_dirs.first().cloned().unwrap_or_else(|| "docs/meetings".to_string());
-                (fallback, false, Some(format!("AI 分析暂时不可用，默认定位到通用文档目录 ({})", e)))
+                let fallback = available_dirs
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "docs/meetings".to_string());
+                (
+                    fallback,
+                    false,
+                    Some(format!("AI 分析暂时不可用，默认定位到通用文档目录 ({})", e)),
+                )
             }
         }
     };
@@ -2117,14 +2171,15 @@ async fn pick_repo_parent_folder(
                 let picked_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !picked_str.is_empty() {
                     let picked_path = std::path::PathBuf::from(&picked_str);
-                    // 计算相对于仓库根目录的相对路径
                     if let Ok(rel) = picked_path.strip_prefix(&root_path) {
                         return Ok(Some(rel.to_string_lossy().to_string()));
                     } else {
-                        // 如果选到了仓库外，则仍返回该选中的绝对路径
                         return Ok(Some(picked_str));
                     }
                 }
+            } else if output.status.code() == Some(1) {
+                // 用户主动点击取消或关闭窗口，直接退出选择，不要穿透打开后续对话框
+                return Ok(None);
             }
         }
 
@@ -2144,12 +2199,20 @@ async fn pick_repo_parent_folder(
                         return Ok(Some(picked_str));
                     }
                 }
+            } else if output.status.code() == Some(1) {
+                // 用户主动取消
+                return Ok(None);
             }
         }
 
         // 3. 跨平台兜底 (Windows / macOS / 无上述工具的 Linux)：使用 tauri-plugin-dialog
         use tauri_plugin_dialog::DialogExt;
-        let picked = app.dialog().file().set_directory(&init_dir).set_title("选择保存会议纪要的父目录").blocking_pick_folder();
+        let picked = app
+            .dialog()
+            .file()
+            .set_directory(&init_dir)
+            .set_title("选择保存会议纪要的父目录")
+            .blocking_pick_folder();
         if let Some(folder_path) = picked {
             let picked_path = folder_path.into_path().map_err(|e| e.to_string())?;
             if let Ok(rel) = picked_path.strip_prefix(&root_path) {
@@ -2219,7 +2282,10 @@ async fn write_meeting_to_git_repo(
             format!("{}-{}", time_code, sanitize_folder_name(&topic))
         });
 
-    let rel_parent = parent_dir.trim().trim_start_matches('/').trim_end_matches('/');
+    let rel_parent = parent_dir
+        .trim()
+        .trim_start_matches('/')
+        .trim_end_matches('/');
 
     // 严格安全检查：严禁将目标目录指向 .git 元数据目录或其子目录
     let normalized_parent = rel_parent.replace('\\', "/");
@@ -2241,7 +2307,9 @@ async fn write_meeting_to_git_repo(
     };
 
     // 确保目标路径位于 repo_root 内部，防止路径遍历 (Path traversal)
-    let canonical_root = repo_root.canonicalize().unwrap_or_else(|_| repo_root.clone());
+    let canonical_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.clone());
     let target_parent_to_check = target_meeting_dir.parent().unwrap_or(&repo_root);
     if let Ok(canon_parent) = target_parent_to_check.canonicalize() {
         if !canon_parent.starts_with(&canonical_root) {
@@ -2298,7 +2366,10 @@ async fn write_meeting_to_git_repo(
 
     // 生成 Markdown 纪要
     let mut md_content = format!("# 会议纪要：{}\n\n", topic);
-    md_content.push_str(&format!("- **归档时间**：{}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
+    md_content.push_str(&format!(
+        "- **归档时间**：{}\n",
+        Local::now().format("%Y-%m-%d %H:%M:%S")
+    ));
     md_content.push_str(&format!("- **关联项目**：{}\n\n", project.name));
     md_content.push_str("## 📝 纪要正文与核心决议\n\n");
     md_content.push_str(summary.trim());
@@ -2320,7 +2391,10 @@ async fn write_meeting_to_git_repo(
     if !clips_copied.is_empty() {
         md_content.push_str("## 🎙️ 录音原始切片凭据\n\n");
         for (order, rel, dur) in &clips_copied {
-            md_content.push_str(&format!("- **录音片段 {}** (时长: {}): [点击试听/查看]({})\n", order, dur, rel));
+            md_content.push_str(&format!(
+                "- **录音片段 {}** (时长: {}): [点击试听/查看]({})\n",
+                order, dur, rel
+            ));
         }
         md_content.push('\n');
     }
@@ -2382,7 +2456,7 @@ async fn get_system_clipboard() -> Result<SystemClipboardDto, String> {
             if output.status.success() {
                 let types_str = String::from_utf8_lossy(&output.stdout);
                 let types: Vec<&str> = types_str.lines().map(|s| s.trim()).collect();
-                
+
                 // 优先检查图片
                 for t in &types {
                     if t.starts_with("image/") {
@@ -2393,7 +2467,8 @@ async fn get_system_clipboard() -> Result<SystemClipboardDto, String> {
                         {
                             if img_output.status.success() && !img_output.stdout.is_empty() {
                                 use base64::Engine;
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&img_output.stdout);
+                                let b64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&img_output.stdout);
                                 let ext = t.split('/').nth(1).unwrap_or("png");
                                 return Ok(SystemClipboardDto {
                                     content_type: "image".to_string(),
@@ -2477,10 +2552,7 @@ async fn get_system_clipboard() -> Result<SystemClipboardDto, String> {
 }
 
 #[tauri::command]
-fn open_material_file(
-    state: State<'_, AppState>,
-    material_id: String,
-) -> Result<(), String> {
+fn open_material_file(state: State<'_, AppState>, material_id: String) -> Result<(), String> {
     let mat_id = Uuid::parse_str(&material_id).map_err(|e| e.to_string())?;
     let mat = {
         let db = state.db.lock().unwrap();

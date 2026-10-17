@@ -405,7 +405,9 @@ impl AiSummarizer {
         if provider == "agy" {
             let mut full_prompt = format!("指令：{}\n\n内容：{}", system_prompt, user_content);
             if !image_paths.is_empty() {
-                full_prompt.push_str("\n\n【关联图片资料本地存储绝对路径（请直接查看解析图纸/截图）】：\n");
+                full_prompt.push_str(
+                    "\n\n【关联图片资料本地存储绝对路径（请直接查看解析图纸/截图）】：\n",
+                );
                 for p in image_paths {
                     full_prompt.push_str(&format!("- {}\n", p.display()));
                 }
@@ -570,7 +572,8 @@ impl AiSummarizer {
         system_prompt: &str,
         user_content: &str,
     ) -> Result<String, AiError> {
-        self.execute_completion_multimodal(system_prompt, user_content, &[]).await
+        self.execute_completion_multimodal(system_prompt, user_content, &[])
+            .await
     }
 
     /// 测试 AI 连通性
@@ -867,12 +870,16 @@ impl AiSummarizer {
                     if p.exists() {
                         image_paths.push(p);
                     }
-                    prompt_content.push_str(&format!("- 附图资料：《{}》（客户现场发送的图纸/截图/白板图）\n", m.file_name));
+                    prompt_content.push_str(&format!(
+                        "- 附图资料：《{}》（客户现场发送的图纸/截图/白板图）\n",
+                        m.file_name
+                    ));
                 } else {
                     prompt_content.push_str(&format!("- 文档资料：《{}》\n", m.file_name));
                     if let Some(ref txt) = m.extracted_text {
                         if !txt.trim().is_empty() {
-                            prompt_content.push_str(&format!("  [提取内容摘要/正文]：\n{}\n\n", txt.trim()));
+                            prompt_content
+                                .push_str(&format!("  [提取内容摘要/正文]：\n{}\n\n", txt.trim()));
                         }
                     }
                 }
@@ -921,9 +928,20 @@ impl AiSummarizer {
         let mut prioritized_dirs: Vec<&String> = directory_tree.iter().collect();
         prioritized_dirs.sort_by_key(|d| {
             let lower = d.to_lowercase();
-            if lower.starts_with("docs") || lower.starts_with("doc") || lower.contains("document") || lower.contains("meeting") || lower.contains("spec") || lower.contains("wiki") {
+            if lower.starts_with("docs")
+                || lower.starts_with("doc")
+                || lower.contains("document")
+                || lower.contains("meeting")
+                || lower.contains("spec")
+                || lower.contains("wiki")
+            {
                 0
-            } else if lower.starts_with("src") || lower.starts_with("app") || lower.starts_with("service") || lower.starts_with("packages") || lower.starts_with("crates") {
+            } else if lower.starts_with("src")
+                || lower.starts_with("app")
+                || lower.starts_with("service")
+                || lower.starts_with("packages")
+                || lower.starts_with("crates")
+            {
                 1
             } else {
                 2
@@ -944,7 +962,9 @@ impl AiSummarizer {
             dirs_formatted
         );
 
-        let raw_res = self.execute_completion(system_prompt, &prompt_content).await?;
+        let raw_res = self
+            .execute_completion(system_prompt, &prompt_content)
+            .await?;
         let clean_json = raw_res
             .trim()
             .trim_start_matches("```json")
@@ -959,12 +979,20 @@ impl AiSummarizer {
         }
 
         if let Ok(parsed) = serde_json::from_str::<AiDirResult>(clean_json) {
-            let clean_dir = parsed.target_dir.trim().trim_start_matches('/').trim_end_matches('/').to_string();
+            let clean_dir = parsed
+                .target_dir
+                .trim()
+                .trim_start_matches('/')
+                .trim_end_matches('/')
+                .to_string();
             return Ok((clean_dir, parsed.reason.trim().to_string()));
         }
 
         // 兜底提取
-        Ok(("docs/meetings".to_string(), "基于通用软件工程规范推荐".to_string()))
+        Ok((
+            "docs/meetings".to_string(),
+            "基于通用软件工程规范推荐".to_string(),
+        ))
     }
 
     /// 语音转文字辅助函数：调用本地 CLI 智能体 (agy / codex)

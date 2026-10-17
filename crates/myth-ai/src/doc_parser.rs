@@ -76,7 +76,10 @@ pub fn extract_document_text(path: &Path) -> Option<String> {
         // 限制单篇文档注入内容在 30,000 字符内，避免大模型上下文溢出
         if trimmed.chars().count() > 30000 {
             let truncated: String = trimmed.chars().take(30000).collect();
-            format!("{}\n\n[...该文档内容较长，已自动截取前 30,000 字...]", truncated)
+            format!(
+                "{}\n\n[...该文档内容较长，已自动截取前 30,000 字...]",
+                truncated
+            )
         } else {
             trimmed.to_string()
         }
@@ -218,9 +221,7 @@ pub fn extract_glossary_for_asr(file_names: &[&str], doc_texts: &[&str]) -> Stri
             // 抓取全大写或驼峰英文缩写（如 PRD, OAuth2, GraphQL, ASR）
             if clean.len() >= 2
                 && clean.len() <= 20
-                && clean
-                    .chars()
-                    .any(|c| c.is_ascii_uppercase())
+                && clean.chars().any(|c| c.is_ascii_uppercase())
             {
                 terms.insert(clean.to_string());
                 if terms.len() >= 30 {

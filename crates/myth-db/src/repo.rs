@@ -1335,7 +1335,10 @@ mod tests {
         let list = db.list_materials_for_meeting(&meeting.id).unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].file_name, "需求规格说明书.pdf");
-        assert_eq!(list[0].extracted_text.as_deref(), Some("这是客户发来的系统架构与API需求说明"));
+        assert_eq!(
+            list[0].extracted_text.as_deref(),
+            Some("这是客户发来的系统架构与API需求说明")
+        );
         assert_eq!(list[1].file_type, "image");
 
         // 验证单条获取
@@ -1354,4 +1357,3 @@ mod tests {
         assert_eq!(empty_list.len(), 0);
     }
 }
-

@@ -6411,13 +6411,13 @@ export function App() {
                     }
                   }}
                   className={`px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all ${
-                    Boolean(writeRepoLoadingId)
+                    writeRepoLoadingId
                       ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
                       : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer active:scale-95"
                   }`}
                   title="自动按时间戳编号创建子目录，并将纪要、录音切片与全部附件一次性写入 Git 版本库"
                 >
-                  {Boolean(writeRepoLoadingId) ? (
+                  {writeRepoLoadingId ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
                       <span>AI分析定位中...</span>
