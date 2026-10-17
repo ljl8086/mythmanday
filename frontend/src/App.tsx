@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
@@ -345,6 +345,7 @@ export function App() {
   const [writeRepoLoadingId, setWriteRepoLoadingId] = useState<string | null>(null);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [writeRepoSubmitting, setWriteRepoSubmitting] = useState(false);
+  const writeRepoReqSeqRef = useRef<number>(0);
   const [writeRepoData, setWriteRepoData] = useState<{
     meeting_id?: string;
     project_id: string;
@@ -1204,6 +1205,7 @@ export function App() {
     topic: string;
     summary: string;
   }) => {
+    const currentSeq = ++writeRepoReqSeqRef.current;
     const loadingKey = params.meetingId || params.projectId || "loading";
     setWriteRepoLoadingId(loadingKey);
     showToast("🔍 正在读取仓库结构与 AI 推荐归档路径，请稍候...");
@@ -1212,7 +1214,13 @@ export function App() {
         projectId: params.projectId,
         meetingId: params.meetingId || null,
         topic: params.topic || null,
+        summary: params.summary || null,
       });
+
+      // 如果在此期间触发了新的查询，丢弃本次过期的响应，避免覆盖最新弹窗状态
+      if (currentSeq !== writeRepoReqSeqRef.current) {
+        return;
+      }
 
       setWriteRepoData({
         meeting_id: params.meetingId,
@@ -1231,9 +1239,13 @@ export function App() {
       });
       setShowWriteRepoModal(true);
     } catch (e: any) {
-      showToast("无法获取项目版本库信息: " + e.toString());
+      if (currentSeq === writeRepoReqSeqRef.current) {
+        showToast("无法获取项目版本库信息: " + e.toString());
+      }
     } finally {
-      setWriteRepoLoadingId(null);
+      if (currentSeq === writeRepoReqSeqRef.current) {
+        setWriteRepoLoadingId(null);
+      }
     }
   };
 
@@ -3363,37 +3375,46 @@ export function App() {
                                                           </div>
                                                         )}
 
-                                                        <button
-                                                          type="button"
-                                                          disabled={writeRepoLoadingId === m.id}
-                                                          onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handleOpenWriteRepoModal({
-                                                              projectId: m.project_id || entry.project_id,
-                                                              meetingId: m.id,
-                                                              topic: m.topic,
-                                                              summary: m.summary || "本次会议暂无详细总结纪要",
-                                                            });
-                                                          }}
-                                                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
-                                                            writeRepoLoadingId === m.id
-                                                              ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
-                                                              : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
-                                                          }`}
-                                                          title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
-                                                        >
-                                                          {writeRepoLoadingId === m.id ? (
-                                                            <>
-                                                              <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
-                                                              <span>AI分析中...</span>
-                                                            </>
-                                                          ) : (
-                                                            <>
-                                                              <GitBranch className="w-3 h-3 text-emerald-400" />
-                                                              <span>写入版本库</span>
-                                                            </>
-                                                          )}
-                                                        </button>
+                                                        {m.status === "completed" ? (
+                                                          <button
+                                                            type="button"
+                                                            disabled={writeRepoLoadingId === m.id}
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleOpenWriteRepoModal({
+                                                                projectId: m.project_id || entry.project_id,
+                                                                meetingId: m.id,
+                                                                topic: m.topic,
+                                                                summary: m.summary || "本次会议暂无详细总结纪要",
+                                                              });
+                                                            }}
+                                                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
+                                                              writeRepoLoadingId === m.id
+                                                                ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                                                                : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
+                                                            }`}
+                                                            title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
+                                                          >
+                                                            {writeRepoLoadingId === m.id ? (
+                                                              <>
+                                                                <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                                                                <span>AI分析中...</span>
+                                                              </>
+                                                            ) : (
+                                                              <>
+                                                                <GitBranch className="w-3 h-3 text-emerald-400" />
+                                                                <span>写入版本库</span>
+                                                              </>
+                                                            )}
+                                                          </button>
+                                                        ) : (
+                                                          <span
+                                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
+                                                            title="会议尚未结束或纪要正在生成，请在会议完成后归档"
+                                                          >
+                                                            会议进行中
+                                                          </span>
+                                                        )}
                                                       </div>
                                                     </div>
 
@@ -6425,9 +6446,9 @@ export function App() {
       {/* ---------------- 模态框: 写入 Git 版本库确认与路径微调 ---------------- */}
       {showWriteRepoModal && writeRepoData && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
+          <div className="w-full max-w-lg max-h-[88vh] bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
             {/* 顶部标题 */}
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
                   <GitBranch className="w-4 h-4" />
@@ -6450,8 +6471,8 @@ export function App() {
               </button>
             </div>
 
-            {/* 表单内容 */}
-            <div className="p-5 space-y-4 text-xs">
+            {/* 表单内容 (可滚动，保证小视口下底部确认栏不被推出屏幕) */}
+            <div className="p-5 space-y-4 text-xs overflow-y-auto flex-1 min-h-0">
               {/* 仓库根路径提示 */}
               <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
                 <div className="flex items-center justify-between text-slate-500">
@@ -6525,9 +6546,9 @@ export function App() {
                   />
                 </div>
 
-                {/* 候选快捷目录列表 */}
+                {/* 候选快捷目录列表 (最大高度限制可滑动，避免撑破页面) */}
                 {writeRepoData.available_dirs.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100 max-h-24 overflow-y-auto">
                     <span className="text-[10px] text-slate-400 font-medium">仓库常用目录:</span>
                     {writeRepoData.available_dirs.map((d) => (
                       <button

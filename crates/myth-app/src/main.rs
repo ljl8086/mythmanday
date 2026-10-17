@@ -1963,6 +1963,7 @@ async fn get_meeting_repo_target_info(
     project_id: String,
     meeting_id: Option<String>,
     topic: Option<String>,
+    summary: Option<String>,
 ) -> Result<MeetingRepoTargetInfo, String> {
     let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
     let (project, remembered_dir, summary_snippet, ai_config) = {
@@ -1976,12 +1977,15 @@ async fn get_meeting_repo_target_info(
         let memory_key = format!("meeting_repo_parent_dir_{}", pid);
         let remembered = db.get_setting(&memory_key).ok().flatten();
 
-        let mut sum_text = String::new();
-        if let Some(ref mid_str) = meeting_id {
-            if let Ok(mid) = Uuid::parse_str(mid_str) {
-                if let Ok(Some(m)) = db.get_meeting(&mid) {
-                    if let Some(ref s) = m.meeting_summary {
-                        sum_text = s.clone();
+        // 优先使用前端传入的最新 summary，若未传或为空才查数据库
+        let mut sum_text = summary.unwrap_or_default();
+        if sum_text.trim().is_empty() {
+            if let Some(ref mid_str) = meeting_id {
+                if let Ok(mid) = Uuid::parse_str(mid_str) {
+                    if let Ok(Some(m)) = db.get_meeting(&mid) {
+                        if let Some(ref s) = m.meeting_summary {
+                            sum_text = s.clone();
+                        }
                     }
                 }
             }
@@ -2004,14 +2008,17 @@ async fn get_meeting_repo_target_info(
     // 会议详情、材料与录音数量
     let mut mat_count = 0;
     let mut audio_count = 0;
-    let mut m_topic = topic.unwrap_or_else(|| "会议沟通".to_string());
+    // 优先采用调用方传入的 topic（用户可能在弹窗中修改过），未传时才取数据库
+    let mut m_topic = topic.unwrap_or_default();
     let mut meeting_time = Local::now();
 
     if let Some(ref mid_str) = meeting_id {
         if let Ok(mid) = Uuid::parse_str(mid_str) {
             let db = state.db.lock().unwrap();
             if let Ok(Some(m)) = db.get_meeting(&mid) {
-                m_topic = m.topic;
+                if m_topic.trim().is_empty() {
+                    m_topic = m.topic;
+                }
                 meeting_time = m.start_at.with_timezone(&Local);
             }
             if let Ok(mats) = db.list_materials_for_meeting(&mid) {
@@ -2021,6 +2028,10 @@ async fn get_meeting_repo_target_info(
                 audio_count = clips.iter().filter(|c| !c.audio_path.is_empty()).count();
             }
         }
+    }
+
+    if m_topic.trim().is_empty() {
+        m_topic = "会议沟通".to_string();
     }
 
     // 编号格式: YYYYMMDDHHmm
@@ -2077,6 +2088,7 @@ async fn get_meeting_repo_target_info(
 
 #[tauri::command]
 async fn pick_repo_parent_folder(
+    app: tauri::AppHandle,
     repo_root: String,
     current_parent: Option<String>,
 ) -> Result<Option<String>, String> {
@@ -2093,7 +2105,7 @@ async fn pick_repo_parent_folder(
             root_path.clone()
         };
 
-        // 1. 尝试 zenity 系统图形目录选择器
+        // 1. Linux 下优先尝试 zenity 系统图形目录选择器
         if let Ok(output) = std::process::Command::new("zenity")
             .arg("--file-selection")
             .arg("--directory")
@@ -2116,7 +2128,7 @@ async fn pick_repo_parent_folder(
             }
         }
 
-        // 2. 尝试 kdialog (KDE 桌面环境备选)
+        // 2. Linux KDE 下尝试 kdialog (KDE 桌面环境备选)
         if let Ok(output) = std::process::Command::new("kdialog")
             .arg("--getexistingdirectory")
             .arg(init_dir.display().to_string())
@@ -2132,6 +2144,18 @@ async fn pick_repo_parent_folder(
                         return Ok(Some(picked_str));
                     }
                 }
+            }
+        }
+
+        // 3. 跨平台兜底 (Windows / macOS / 无上述工具的 Linux)：使用 tauri-plugin-dialog
+        use tauri_plugin_dialog::DialogExt;
+        let picked = app.dialog().file().set_directory(&init_dir).set_title("选择保存会议纪要的父目录").blocking_pick_folder();
+        if let Some(folder_path) = picked {
+            let picked_path = folder_path.into_path().map_err(|e| e.to_string())?;
+            if let Ok(rel) = picked_path.strip_prefix(&root_path) {
+                return Ok(Some(rel.to_string_lossy().to_string()));
+            } else {
+                return Ok(Some(picked_path.to_string_lossy().to_string()));
             }
         }
 
@@ -2196,11 +2220,34 @@ async fn write_meeting_to_git_repo(
         });
 
     let rel_parent = parent_dir.trim().trim_start_matches('/').trim_end_matches('/');
+
+    // 严格安全检查：严禁将目标目录指向 .git 元数据目录或其子目录
+    let normalized_parent = rel_parent.replace('\\', "/");
+    let normalized_folder = clean_folder_name.replace('\\', "/");
+    if normalized_parent == ".git"
+        || normalized_parent.starts_with(".git/")
+        || normalized_folder == ".git"
+        || normalized_folder.starts_with(".git/")
+        || normalized_parent.contains("/.git/")
+        || normalized_parent.ends_with("/.git")
+    {
+        return Err("安全拦截：严禁将归档目标目录设置为 Git 元数据目录 (.git)！".to_string());
+    }
+
     let target_meeting_dir = if rel_parent.is_empty() {
         repo_root.join(&clean_folder_name)
     } else {
         repo_root.join(rel_parent).join(&clean_folder_name)
     };
+
+    // 确保目标路径位于 repo_root 内部，防止路径遍历 (Path traversal)
+    let canonical_root = repo_root.canonicalize().unwrap_or_else(|_| repo_root.clone());
+    let target_parent_to_check = target_meeting_dir.parent().unwrap_or(&repo_root);
+    if let Ok(canon_parent) = target_parent_to_check.canonicalize() {
+        if !canon_parent.starts_with(&canonical_root) {
+            return Err("安全拦截：目标归档目录超出了指定的 Git 仓库根目录！".to_string());
+        }
+    }
 
     let assets_dir = target_meeting_dir.join("assets");
     tokio::fs::create_dir_all(&assets_dir)
@@ -4864,6 +4911,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_projects,

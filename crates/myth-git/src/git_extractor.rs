@@ -449,11 +449,13 @@ impl GitScanner {
             return Err(GitError::NotAGitRepo(path.display().to_string()));
         }
 
-        // 1. git add
+        // 1. git add (using --literal-pathspecs to avoid wildcard/bracket pattern interpretation)
         let add_out = Command::new("git")
             .arg("-C")
             .arg(path)
+            .arg("--literal-pathspecs")
             .arg("add")
+            .arg("--")
             .arg(rel_path_to_add.as_ref())
             .output()?;
 

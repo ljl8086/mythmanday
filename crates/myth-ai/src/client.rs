@@ -917,9 +917,22 @@ impl AiSummarizer {
         3. 如果现有子目录都太偏底层代码（如 src, backend, frontend）而不适合存文档，推荐规范的文档子目录（如 docs/meetings 或 docs/对应业务模块）；\n\
         4. 严禁输出任何 markdown 格式标记、代码块标记或额外闲聊，只输出纯 JSON 字符串！";
 
-        let dirs_formatted = directory_tree
-            .iter()
-            .take(50)
+        // 智能筛选并优先排列与文档、规范、核心模块相关的目录，同时容量扩大到 150 个目录，避免字典序简单截断
+        let mut prioritized_dirs: Vec<&String> = directory_tree.iter().collect();
+        prioritized_dirs.sort_by_key(|d| {
+            let lower = d.to_lowercase();
+            if lower.starts_with("docs") || lower.starts_with("doc") || lower.contains("document") || lower.contains("meeting") || lower.contains("spec") || lower.contains("wiki") {
+                0
+            } else if lower.starts_with("src") || lower.starts_with("app") || lower.starts_with("service") || lower.starts_with("packages") || lower.starts_with("crates") {
+                1
+            } else {
+                2
+            }
+        });
+
+        let dirs_formatted = prioritized_dirs
+            .into_iter()
+            .take(150)
             .map(|d| format!("- {}", d))
             .collect::<Vec<_>>()
             .join("\n");
