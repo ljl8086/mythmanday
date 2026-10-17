@@ -3445,25 +3445,6 @@ export function App() {
                                                         <Clipboard className="w-2.5 h-2.5 text-emerald-600" />
                                                         <span>📋 粘贴 (Ctrl+V)</span>
                                                       </button>
-
-                                                      {/* 写入版本库操作按钮 */}
-                                                      <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                          e.stopPropagation();
-                                                          handleOpenWriteRepoModal({
-                                                            projectId: m.project_id || entry.project_id,
-                                                            meetingId: m.id,
-                                                            topic: m.topic,
-                                                            summary: m.summary || "本次会议暂无详细总结纪要",
-                                                          });
-                                                        }}
-                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-900 text-white cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95 ml-auto"
-                                                        title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
-                                                      >
-                                                        <GitBranch className="w-2.5 h-2.5 text-emerald-400" />
-                                                        <span>写入版本库</span>
-                                                      </button>
                                                     </div>
 
                                                     {/* 会议达成共识与决议：自然文本列表，优雅边框缩进 */}
