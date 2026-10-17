@@ -342,7 +342,8 @@ export function App() {
 
   // Write Meeting To Git Repo Modal State
   const [showWriteRepoModal, setShowWriteRepoModal] = useState(false);
-  const [writeRepoLoading, setWriteRepoLoading] = useState(false);
+  const [writeRepoLoadingId, setWriteRepoLoadingId] = useState<string | null>(null);
+  const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [writeRepoSubmitting, setWriteRepoSubmitting] = useState(false);
   const [writeRepoData, setWriteRepoData] = useState<{
     meeting_id?: string;
@@ -1203,7 +1204,9 @@ export function App() {
     topic: string;
     summary: string;
   }) => {
-    setWriteRepoLoading(true);
+    const loadingKey = params.meetingId || params.projectId || "loading";
+    setWriteRepoLoadingId(loadingKey);
+    showToast("🔍 正在读取仓库结构与 AI 推荐归档路径，请稍候...");
     try {
       const res = await invoke<any>("get_meeting_repo_target_info", {
         projectId: params.projectId,
@@ -1230,7 +1233,7 @@ export function App() {
     } catch (e: any) {
       showToast("无法获取项目版本库信息: " + e.toString());
     } finally {
-      setWriteRepoLoading(false);
+      setWriteRepoLoadingId(null);
     }
   };
 
@@ -3362,6 +3365,7 @@ export function App() {
 
                                                         <button
                                                           type="button"
+                                                          disabled={writeRepoLoadingId === m.id}
                                                           onClick={(e) => {
                                                             e.stopPropagation();
                                                             handleOpenWriteRepoModal({
@@ -3371,11 +3375,24 @@ export function App() {
                                                               summary: m.summary || "本次会议暂无详细总结纪要",
                                                             });
                                                           }}
-                                                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] bg-slate-800 hover:bg-slate-900 text-white cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95"
+                                                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
+                                                            writeRepoLoadingId === m.id
+                                                              ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                                                              : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
+                                                          }`}
                                                           title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
                                                         >
-                                                          <GitBranch className="w-3 h-3 text-emerald-400" />
-                                                          <span>写入版本库</span>
+                                                          {writeRepoLoadingId === m.id ? (
+                                                            <>
+                                                              <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                                                              <span>AI分析中...</span>
+                                                            </>
+                                                          ) : (
+                                                            <>
+                                                              <GitBranch className="w-3 h-3 text-emerald-400" />
+                                                              <span>写入版本库</span>
+                                                            </>
+                                                          )}
                                                         </button>
                                                       </div>
                                                     </div>
@@ -6361,7 +6378,7 @@ export function App() {
                 </button>
                 <button
                   type="button"
-                  disabled={writeRepoLoading}
+                  disabled={Boolean(writeRepoLoadingId)}
                   onClick={() => {
                     if (meetingSummaryData) {
                       handleOpenWriteRepoModal({
@@ -6372,11 +6389,24 @@ export function App() {
                       });
                     }
                   }}
-                  className="px-3.5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                  className={`px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all ${
+                    Boolean(writeRepoLoadingId)
+                      ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                      : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer active:scale-95"
+                  }`}
                   title="自动按时间戳编号创建子目录，并将纪要、录音切片与全部附件一次性写入 Git 版本库"
                 >
-                  <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{writeRepoLoading ? "分析定位中..." : "写入版本库"}</span>
+                  {Boolean(writeRepoLoadingId) ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+                      <span>AI分析定位中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>写入版本库</span>
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -6455,7 +6485,10 @@ export function App() {
                   </label>
                   <button
                     type="button"
+                    disabled={isPickingFolder}
                     onClick={async () => {
+                      setIsPickingFolder(true);
+                      showToast("📂 正在打开系统文件管理器，请选择仓库目录...");
                       try {
                         const picked = await invoke<string | null>("pick_repo_parent_folder", {
                           repoRoot: writeRepoData.repo_root,
@@ -6466,13 +6499,19 @@ export function App() {
                         }
                       } catch (e: any) {
                         showToast("打开目录选择器失败: " + e.toString());
+                      } finally {
+                        setIsPickingFolder(false);
                       }
                     }}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer shadow-2xs"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
                     title="在系统文件管理器中浏览并选择仓库内的文件夹"
                   >
-                    <FolderOpen className="w-3 h-3 text-indigo-500" />
-                    <span>浏览选择目录...</span>
+                    {isPickingFolder ? (
+                      <Loader2 className="w-3 h-3 text-indigo-500 animate-spin" />
+                    ) : (
+                      <FolderOpen className="w-3 h-3 text-indigo-500" />
+                    )}
+                    <span>{isPickingFolder ? "正在打开管理器..." : "浏览选择目录..."}</span>
                   </button>
                 </div>
 
