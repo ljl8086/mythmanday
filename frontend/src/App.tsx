@@ -135,6 +135,7 @@ interface MeetingMaterial {
 
 interface MeetingDetail {
   id: string;
+  project_id?: string;
   topic: string;
   start_time: string;
   end_time?: string;
@@ -331,11 +332,33 @@ export function App() {
   const [showMeetingSummaryModal, setShowMeetingSummaryModal] = useState(false);
   const [isStoppingMeeting, setIsStoppingMeeting] = useState(false);
   const [meetingSummaryData, setMeetingSummaryData] = useState<{
+    meeting_id?: string;
     project_id: string;
     topic: string;
     audio_path: string;
     summary: string;
     transcript: string;
+  } | null>(null);
+
+  // Write Meeting To Git Repo Modal State
+  const [showWriteRepoModal, setShowWriteRepoModal] = useState(false);
+  const [writeRepoLoadingId, setWriteRepoLoadingId] = useState<string | null>(null);
+  const [isPickingFolder, setIsPickingFolder] = useState(false);
+  const [writeRepoSubmitting, setWriteRepoSubmitting] = useState(false);
+  const [writeRepoData, setWriteRepoData] = useState<{
+    meeting_id?: string;
+    project_id: string;
+    topic: string;
+    summary: string;
+    repo_root: string;
+    parent_dir: string;
+    folder_name: string;
+    is_remembered: boolean;
+    material_count: number;
+    audio_count: number;
+    available_dirs: string[];
+    ai_reason?: string;
+    auto_commit: boolean;
   } | null>(null);
 
   // Global In-App Audio Player Modal State
@@ -844,6 +867,7 @@ export function App() {
       }
       // 自动弹出纪要确认/编辑弹窗，让用户第一时间查看和微调
       setMeetingSummaryData({
+        meeting_id: data.meeting_id,
         project_id: data.project_id,
         topic: data.topic,
         audio_path: data.audio_path,
@@ -1170,6 +1194,73 @@ export function App() {
       }
     } catch (e: any) {
       showToast("保存会议纪要失败: " + e.toString());
+    }
+  };
+
+  // 打开写入 Git 版本库弹窗（自动读取智能推荐或历史记忆父目录）
+  const handleOpenWriteRepoModal = async (params: {
+    projectId: string;
+    meetingId?: string;
+    topic: string;
+    summary: string;
+  }) => {
+    const loadingKey = params.meetingId || params.projectId || "loading";
+    setWriteRepoLoadingId(loadingKey);
+    showToast("🔍 正在读取仓库结构与 AI 推荐归档路径，请稍候...");
+    try {
+      const res = await invoke<any>("get_meeting_repo_target_info", {
+        projectId: params.projectId,
+        meetingId: params.meetingId || null,
+        topic: params.topic || null,
+      });
+
+      setWriteRepoData({
+        meeting_id: params.meetingId,
+        project_id: params.projectId,
+        topic: params.topic,
+        summary: params.summary,
+        repo_root: res.repo_root,
+        parent_dir: res.parent_dir,
+        folder_name: res.folder_name,
+        is_remembered: res.is_remembered,
+        material_count: res.material_count,
+        audio_count: res.audio_count,
+        available_dirs: res.available_dirs || [],
+        ai_reason: res.ai_reason,
+        auto_commit: true,
+      });
+      setShowWriteRepoModal(true);
+    } catch (e: any) {
+      showToast("无法获取项目版本库信息: " + e.toString());
+    } finally {
+      setWriteRepoLoadingId(null);
+    }
+  };
+
+  // 确认一次性写入 Git 版本库
+  const handleConfirmWriteRepo = async () => {
+    if (!writeRepoData) return;
+    setWriteRepoSubmitting(true);
+    try {
+      const res = await invoke<any>("write_meeting_to_git_repo", {
+        projectId: writeRepoData.project_id,
+        meetingId: writeRepoData.meeting_id || null,
+        parentDir: writeRepoData.parent_dir,
+        folderName: writeRepoData.folder_name,
+        topic: writeRepoData.topic,
+        summary: writeRepoData.summary,
+        autoCommit: writeRepoData.auto_commit,
+      });
+
+      if (res && res.success) {
+        showToast(`🎉 成功写入版本库：${res.relative_path}${res.commit_hash_or_msg ? ` (${res.commit_hash_or_msg})` : ""}`);
+        setShowWriteRepoModal(false);
+        setWriteRepoData(null);
+      }
+    } catch (e: any) {
+      showToast("写入版本库失败: " + e.toString());
+    } finally {
+      setWriteRepoSubmitting(false);
     }
   };
 
@@ -2907,7 +2998,15 @@ export function App() {
                                   let remainingNotes = "";
 
                                   if (firstLineIdx !== -1) {
-                                    headlineText = rawNoteLines[firstLineIdx].trim().replace(/^#+\s*/, "").replace(/^【(.*?)】$/, "$1");
+                                    headlineText = rawNoteLines[firstLineIdx]
+                                      .trim()
+                                      .replace(/^#+\s*/, "")
+                                      .replace(/【会议进行中\s*🎙️?】/g, "")
+                                      .replace(/^【(.*?)】$/, "$1")
+                                      .trim();
+                                    if (!headlineText) {
+                                      headlineText = "日常研发任务与协同联调";
+                                    }
                                     let restIdx = firstLineIdx + 1;
                                     while (restIdx < rawNoteLines.length) {
                                       const line = rawNoteLines[restIdx].trim();
@@ -3170,98 +3269,132 @@ export function App() {
                                                         )}
                                                       </div>
 
-                                                      {/* 录音片段胶囊列表 */}
-                                                      {m.clips && m.clips.length > 0 && (
-                                                        <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-                                                          <span className="text-slate-400 text-[10px]">录音:</span>
-                                                          {m.clips.map((clip) => {
-                                                            const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
-                                                            const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
-                                                            const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
-                                                            const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
+                                                      {/* 录音片段胶囊列表 与 快速入库操作 */}
+                                                      <div className="flex items-center gap-2 flex-wrap">
+                                                        {m.clips && m.clips.length > 0 && (
+                                                          <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                                                            <span className="text-slate-400 text-[10px]">录音:</span>
+                                                            {m.clips.map((clip) => {
+                                                              const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
+                                                              const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
+                                                              const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
+                                                              const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
 
-                                                            return (
-                                                              <div
-                                                                key={clip.id}
-                                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border transition-all ${
-                                                                  isFailed
-                                                                    ? "bg-rose-50 border-rose-200 text-rose-700"
-                                                                    : isPending
-                                                                    ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
-                                                                    : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                                                                }`}
-                                                              >
-                                                                <button
-                                                                  onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
-                                                                  className="font-medium flex items-center gap-1 hover:underline cursor-pointer"
-                                                                  title="播放该录音片段"
+                                                              return (
+                                                                <div
+                                                                  key={clip.id}
+                                                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border transition-all ${
+                                                                    isFailed
+                                                                      ? "bg-rose-50 border-rose-200 text-rose-700"
+                                                                      : isPending
+                                                                      ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
+                                                                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
+                                                                  }`}
                                                                 >
-                                                                  <Volume2 className="w-2.5 h-2.5 text-slate-500" />
-                                                                  <span>片段 {clip.clip_order} ({clip.duration_text})</span>
-                                                                </button>
-
-                                                                {isTranscribed && (
-                                                                  <div className="flex items-center gap-1 border-l border-slate-200 pl-1 ml-0.5">
-                                                                    {clip.transcript && (
-                                                                      <button
-                                                                        onClick={() => setActiveTranscriptModal({
-                                                                          title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
-                                                                          transcript: clip.transcript!,
-                                                                        })}
-                                                                        className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5"
-                                                                        title="查看转写文稿"
-                                                                      >
-                                                                        <FileText className="w-2.5 h-2.5" />
-                                                                        <span>文稿</span>
-                                                                      </button>
-                                                                    )}
-                                                                    <button
-                                                                      type="button"
-                                                                      onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        setConfirmRetryClipModal({
-                                                                          clipId: clip.id,
-                                                                          clipOrder: clip.clip_order,
-                                                                          durationText: clip.duration_text,
-                                                                          topic: m.topic,
-                                                                          hasTranscript: !!clip.transcript,
-                                                                        });
-                                                                      }}
-                                                                      className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
-                                                                      title="重新转写此片段语音"
-                                                                    >
-                                                                      <RotateCw className="w-2.5 h-2.5" />
-                                                                    </button>
-                                                                  </div>
-                                                                )}
-
-                                                                {isPending && (
-                                                                  <span className="flex items-center gap-0.5 text-amber-600 font-medium pl-1">
-                                                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                                                    <span>转写中</span>
-                                                                  </span>
-                                                                )}
-
-                                                                {isFailed && (
                                                                   <button
-                                                                    onClick={() => setConfirmRetryClipModal({
-                                                                      clipId: clip.id,
-                                                                      clipOrder: clip.clip_order,
-                                                                      durationText: clip.duration_text,
-                                                                      topic: m.topic,
-                                                                      hasTranscript: !!clip.transcript,
-                                                                    })}
-                                                                    className="px-1 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] cursor-pointer"
-                                                                    title="重试转写"
+                                                                    onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
+                                                                    className="font-medium flex items-center gap-1 hover:underline cursor-pointer"
+                                                                    title="播放该录音片段"
                                                                   >
-                                                                    重试
+                                                                    <Volume2 className="w-2.5 h-2.5 text-slate-500" />
+                                                                    <span>片段 {clip.clip_order} ({clip.duration_text})</span>
                                                                   </button>
-                                                                )}
-                                                              </div>
-                                                            );
-                                                          })}
-                                                        </div>
-                                                      )}
+
+                                                                  {isTranscribed && (
+                                                                    <div className="flex items-center gap-1 border-l border-slate-200 pl-1 ml-0.5">
+                                                                      {clip.transcript && (
+                                                                        <button
+                                                                          onClick={() => setActiveTranscriptModal({
+                                                                            title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
+                                                                            transcript: clip.transcript!,
+                                                                          })}
+                                                                          className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5"
+                                                                          title="查看转写文稿"
+                                                                        >
+                                                                          <FileText className="w-2.5 h-2.5" />
+                                                                          <span>文稿</span>
+                                                                        </button>
+                                                                      )}
+                                                                      <button
+                                                                        type="button"
+                                                                        onClick={(e) => {
+                                                                          e.stopPropagation();
+                                                                          setConfirmRetryClipModal({
+                                                                            clipId: clip.id,
+                                                                            clipOrder: clip.clip_order,
+                                                                            durationText: clip.duration_text,
+                                                                            topic: m.topic,
+                                                                            hasTranscript: !!clip.transcript,
+                                                                          });
+                                                                        }}
+                                                                        className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
+                                                                        title="重新转写此片段语音"
+                                                                      >
+                                                                        <RotateCw className="w-2.5 h-2.5" />
+                                                                      </button>
+                                                                    </div>
+                                                                  )}
+
+                                                                  {isPending && (
+                                                                    <span className="flex items-center gap-0.5 text-amber-600 font-medium pl-1">
+                                                                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                      <span>转写中</span>
+                                                                    </span>
+                                                                  )}
+
+                                                                  {isFailed && (
+                                                                    <button
+                                                                      onClick={() => setConfirmRetryClipModal({
+                                                                        clipId: clip.id,
+                                                                        clipOrder: clip.clip_order,
+                                                                        durationText: clip.duration_text,
+                                                                        topic: m.topic,
+                                                                        hasTranscript: !!clip.transcript,
+                                                                      })}
+                                                                      className="px-1 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] cursor-pointer"
+                                                                      title="重试转写"
+                                                                    >
+                                                                      重试
+                                                                    </button>
+                                                                  )}
+                                                                </div>
+                                                              );
+                                                            })}
+                                                          </div>
+                                                        )}
+
+                                                        <button
+                                                          type="button"
+                                                          disabled={writeRepoLoadingId === m.id}
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleOpenWriteRepoModal({
+                                                              projectId: m.project_id || entry.project_id,
+                                                              meetingId: m.id,
+                                                              topic: m.topic,
+                                                              summary: m.summary || "本次会议暂无详细总结纪要",
+                                                            });
+                                                          }}
+                                                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
+                                                            writeRepoLoadingId === m.id
+                                                              ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                                                              : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
+                                                          }`}
+                                                          title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
+                                                        >
+                                                          {writeRepoLoadingId === m.id ? (
+                                                            <>
+                                                              <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                                                              <span>AI分析中...</span>
+                                                            </>
+                                                          ) : (
+                                                            <>
+                                                              <GitBranch className="w-3 h-3 text-emerald-400" />
+                                                              <span>写入版本库</span>
+                                                            </>
+                                                          )}
+                                                        </button>
+                                                      </div>
                                                     </div>
 
                                                     {/* 会议参考资料（文档与图片） */}
@@ -6239,19 +6372,277 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => setShowMeetingSummaryModal(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                  className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                 >
                   暂存/关闭
                 </button>
                 <button
                   type="button"
+                  disabled={Boolean(writeRepoLoadingId)}
+                  onClick={() => {
+                    if (meetingSummaryData) {
+                      handleOpenWriteRepoModal({
+                        projectId: meetingSummaryData.project_id,
+                        meetingId: meetingSummaryData.meeting_id,
+                        topic: meetingSummaryData.topic,
+                        summary: meetingSummaryData.summary,
+                      });
+                    }
+                  }}
+                  className={`px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all ${
+                    Boolean(writeRepoLoadingId)
+                      ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                      : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer active:scale-95"
+                  }`}
+                  title="自动按时间戳编号创建子目录，并将纪要、录音切片与全部附件一次性写入 Git 版本库"
+                >
+                  {Boolean(writeRepoLoadingId) ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+                      <span>AI分析定位中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>写入版本库</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
                   onClick={handleSaveMeetingSummary}
-                  className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   确认并存入项目档案
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 写入 Git 版本库确认与路径微调 ---------------- */}
+      {showWriteRepoModal && writeRepoData && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
+            {/* 顶部标题 */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                    写入 Git 知识库与交付凭证
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    一次性打包纪要 Markdown、录音原始切片与全部附件图纸
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWriteRepoModal(false)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 表单内容 */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* 仓库根路径提示 */}
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
+                <div className="flex items-center justify-between text-slate-500">
+                  <span className="font-semibold flex items-center gap-1">
+                    <FolderOpen className="w-3.5 h-3.5 text-indigo-500" /> Git 仓库根目录:
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    已关联
+                  </span>
+                </div>
+                <div className="font-mono text-[11px] text-slate-700 truncate" title={writeRepoData.repo_root}>
+                  {writeRepoData.repo_root}
+                </div>
+              </div>
+
+              {/* 父目录选择与微调 */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                  <label className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <span>📁 归档父目录 (相对路径)</span>
+                    {writeRepoData.is_remembered ? (
+                      <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200 font-semibold">
+                        ⚡ 历史记忆定位
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 font-semibold flex items-center gap-1">
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                        AI 语义推荐
+                      </span>
+                    )}
+                  </label>
+                  <button
+                    type="button"
+                    disabled={isPickingFolder}
+                    onClick={async () => {
+                      setIsPickingFolder(true);
+                      showToast("📂 正在打开系统文件管理器，请选择仓库目录...");
+                      try {
+                        const picked = await invoke<string | null>("pick_repo_parent_folder", {
+                          repoRoot: writeRepoData.repo_root,
+                          currentParent: writeRepoData.parent_dir || null,
+                        });
+                        if (picked) {
+                          setWriteRepoData((prev) => prev ? { ...prev, parent_dir: picked } : prev);
+                        }
+                      } catch (e: any) {
+                        showToast("打开目录选择器失败: " + e.toString());
+                      } finally {
+                        setIsPickingFolder(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+                    title="在系统文件管理器中浏览并选择仓库内的文件夹"
+                  >
+                    {isPickingFolder ? (
+                      <Loader2 className="w-3 h-3 text-indigo-500 animate-spin" />
+                    ) : (
+                      <FolderOpen className="w-3 h-3 text-indigo-500" />
+                    )}
+                    <span>{isPickingFolder ? "正在打开管理器..." : "浏览选择目录..."}</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={writeRepoData.parent_dir}
+                    onChange={(e) => setWriteRepoData({ ...writeRepoData, parent_dir: e.target.value })}
+                    placeholder="例如: docs/meetings 或 doc（留空表示仓库根目录）"
+                    className="flex-1 h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium"
+                  />
+                </div>
+
+                {/* 候选快捷目录列表 */}
+                {writeRepoData.available_dirs.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100">
+                    <span className="text-[10px] text-slate-400 font-medium">仓库常用目录:</span>
+                    {writeRepoData.available_dirs.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: d })}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border font-mono transition-colors cursor-pointer ${
+                          writeRepoData.parent_dir === d
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: "" })}
+                      className={`text-[10px] px-2 py-0.5 rounded-full border font-mono transition-colors cursor-pointer ${
+                        writeRepoData.parent_dir === ""
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      }`}
+                      title="直接保存在仓库根目录"
+                    >
+                      / (根目录)
+                    </button>
+                  </div>
+                )}
+
+                {writeRepoData.ai_reason && !writeRepoData.is_remembered && (
+                  <div className="mt-2 p-2 rounded-lg bg-emerald-50/80 border border-emerald-200/70 text-emerald-800 text-[11px] flex items-start gap-1.5 leading-relaxed">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold text-emerald-900">AI 推荐依据：</span>
+                      <span>{writeRepoData.ai_reason}</span>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[10px] text-slate-400 mt-1.5">
+                  💡 您可直接手动修改输入框、点击上方快捷标签、或点击「浏览选择目录」通过系统对话框挑选。后续将自动记住此选择。
+                </p>
+              </div>
+
+              {/* 会议唯一编号专属子目录 (只读或可微调) */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">
+                  🏷️ 自动生成的会议专属子目录 (时间戳编号)
+                </label>
+                <input
+                  type="text"
+                  value={writeRepoData.folder_name}
+                  onChange={(e) => setWriteRepoData({ ...writeRepoData, folder_name: e.target.value })}
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium bg-slate-50/50"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  最终落盘完整路径：<span className="font-mono text-indigo-600 font-bold">{writeRepoData.parent_dir ? `${writeRepoData.parent_dir}/` : ""}{writeRepoData.folder_name}/README.md</span>
+                </p>
+              </div>
+
+              {/* 一体化打包清单 */}
+              <div className="p-3 rounded-xl bg-indigo-50/50 border border-indigo-100 space-y-1.5">
+                <div className="font-bold text-indigo-900 flex items-center justify-between text-[11px]">
+                  <span>📦 包含资产清单:</span>
+                  <span className="text-indigo-600">一次性原子写入</span>
+                </div>
+                <ul className="text-[11px] text-indigo-800 space-y-1 list-disc list-inside">
+                  <li>会议纪要 Markdown (相对引用 assets)</li>
+                  <li>录音切片凭据: <span className="font-bold">{writeRepoData.audio_count} 个</span> (存入 assets/)</li>
+                  <li>参考材料与图纸: <span className="font-bold">{writeRepoData.material_count} 个</span> (存入 assets/)</li>
+                </ul>
+              </div>
+
+              {/* 自动 Git 提交选项 */}
+              <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+                <input
+                  type="checkbox"
+                  checked={writeRepoData.auto_commit}
+                  onChange={(e) => setWriteRepoData({ ...writeRepoData, auto_commit: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                />
+                <span className="text-xs text-slate-700 font-medium">
+                  写入后自动执行 <span className="font-mono font-bold text-slate-900">git add</span> 与 <span className="font-mono font-bold text-slate-900">git commit</span>
+                </span>
+              </label>
+            </div>
+
+            {/* 底部按钮 */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => setShowWriteRepoModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={writeRepoSubmitting}
+                onClick={handleConfirmWriteRepo}
+                className="px-5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {writeRepoSubmitting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>正在写入版本库...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>确认写入版本库</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

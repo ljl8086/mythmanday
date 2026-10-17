@@ -903,6 +903,57 @@ impl AiSummarizer {
             .await
     }
 
+    /// 结合会议议题、纪要内容与代码仓库深层目录树，调用 AI 进行真实语义归档分析
+    pub async fn suggest_meeting_repo_dir(
+        &self,
+        topic: &str,
+        summary_snippet: &str,
+        directory_tree: &[String],
+    ) -> Result<(String, String), AiError> {
+        let system_prompt = "你是一名资深的软件架构师与工程文档管理专家。任务：根据本次会议的议题、纪要内容摘要，以及版本库现有目录结构，为会议纪要推荐一个最合适归档的父目录（相对路径）。\n\
+        规则要求：\n\
+        1. 必须返回合法的 JSON 对象，格式：{\"target_dir\": \"推荐的相对目录路径\", \"reason\": \"推荐理由简析（1句话说明与哪个模块/业务最匹配）\"}；\n\
+        2. 优先在现有仓库目录中寻找与该会议内容业务高度契合的子目录（例如 docs/xxx 模块目录）；\n\
+        3. 如果现有子目录都太偏底层代码（如 src, backend, frontend）而不适合存文档，推荐规范的文档子目录（如 docs/meetings 或 docs/对应业务模块）；\n\
+        4. 严禁输出任何 markdown 格式标记、代码块标记或额外闲聊，只输出纯 JSON 字符串！";
+
+        let dirs_formatted = directory_tree
+            .iter()
+            .take(50)
+            .map(|d| format!("- {}", d))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt_content = format!(
+            "【会议议题】：{}\n\n【会议纪要摘要】：\n{}\n\n【当前代码仓库检测到的目录树】：\n{}",
+            topic,
+            summary_snippet.chars().take(800).collect::<String>(),
+            dirs_formatted
+        );
+
+        let raw_res = self.execute_completion(system_prompt, &prompt_content).await?;
+        let clean_json = raw_res
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        #[derive(Deserialize)]
+        struct AiDirResult {
+            target_dir: String,
+            reason: String,
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<AiDirResult>(clean_json) {
+            let clean_dir = parsed.target_dir.trim().trim_start_matches('/').trim_end_matches('/').to_string();
+            return Ok((clean_dir, parsed.reason.trim().to_string()));
+        }
+
+        // 兜底提取
+        Ok(("docs/meetings".to_string(), "基于通用软件工程规范推荐".to_string()))
+    }
+
     /// 语音转文字辅助函数：调用本地 CLI 智能体 (agy / codex)
     async fn transcribe_with_cli_agent(
         &self,

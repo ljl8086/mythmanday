@@ -437,4 +437,50 @@ impl GitScanner {
 
         Ok(map)
     }
+
+    /// 对指定仓库内的相对路径或全量修改执行 git add 并提交
+    pub fn commit_files(
+        repo_path: impl AsRef<Path>,
+        rel_path_to_add: impl AsRef<Path>,
+        commit_message: &str,
+    ) -> Result<String, GitError> {
+        let path = repo_path.as_ref();
+        if !Self::is_git_repo(path) {
+            return Err(GitError::NotAGitRepo(path.display().to_string()));
+        }
+
+        // 1. git add
+        let add_out = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .arg("add")
+            .arg(rel_path_to_add.as_ref())
+            .output()?;
+
+        if !add_out.status.success() {
+            let err = String::from_utf8_lossy(&add_out.stderr).to_string();
+            return Err(GitError::ExecutionFailed(format!("git add failed: {}", err)));
+        }
+
+        // 2. git commit -m
+        let commit_out = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .arg("commit")
+            .arg("-m")
+            .arg(commit_message)
+            .output()?;
+
+        if !commit_out.status.success() {
+            let err = String::from_utf8_lossy(&commit_out.stderr).to_string();
+            // 如果是因为 nothing to commit，则安全返回
+            if err.contains("nothing to commit") || err.contains("无文件要提交") {
+                return Ok("无变更需要提交".to_string());
+            }
+            return Err(GitError::ExecutionFailed(format!("git commit failed: {}", err)));
+        }
+
+        let out_str = String::from_utf8_lossy(&commit_out.stdout).trim().to_string();
+        Ok(out_str)
+    }
 }
