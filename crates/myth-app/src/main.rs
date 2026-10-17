@@ -1897,6 +1897,7 @@ pub struct MeetingRepoTargetInfo {
     pub material_count: usize,
     pub audio_count: usize,
     pub available_dirs: Vec<String>,
+    pub ai_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1923,40 +1924,37 @@ fn sanitize_folder_name(name: &str) -> String {
     }
 }
 
-/// 快速扫描仓库中常见文档目录（docs, doc, meetings 等）
-fn find_candidate_meeting_dirs(repo_root: &std::path::Path) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let common_subdirs = [
-        "docs/meetings",
-        "doc/meetings",
-        "documents/meetings",
-        "meetings",
-        "docs",
-        "doc",
-        "wiki",
-    ];
-    for sub in &common_subdirs {
-        let p = repo_root.join(sub);
-        if p.is_dir() {
-            candidates.push(sub.to_string());
+/// 遍历仓库最多 3 层深度的所有有效目录（排除 .git、node_modules、target、dist 等）
+fn scan_repository_directory_tree(repo_root: &std::path::Path) -> Vec<String> {
+    let mut results = Vec::new();
+
+    fn walk(root: &std::path::Path, current: &std::path::Path, depth: usize, out: &mut Vec<String>) {
+        if depth > 3 {
+            return;
         }
-    }
-    // 递归查找一层子目录里的可能文档目录
-    if let Ok(entries) = std::fs::read_dir(repo_root) {
-        for entry in entries.flatten() {
-            if let Ok(ft) = entry.file_type() {
-                if ft.is_dir() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if !name.starts_with('.') && name != "target" && name != "node_modules" && name != "dist" {
-                        if !candidates.contains(&name) && (name.contains("doc") || name.contains("meeting") || name.contains("wiki")) {
-                            candidates.push(name);
+        if let Ok(entries) = std::fs::read_dir(current) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') || name == "target" || name == "node_modules" || name == "dist" || name == "vendor" {
+                            continue;
                         }
+                        let path = entry.path();
+                        if let Ok(rel) = path.strip_prefix(root) {
+                            let rel_str = rel.to_string_lossy().to_string();
+                            out.push(rel_str);
+                        }
+                        walk(root, &path, depth + 1, out);
                     }
                 }
             }
         }
     }
-    candidates
+
+    walk(repo_root, repo_root, 1, &mut results);
+    results.sort();
+    results
 }
 
 #[tauri::command]
@@ -1967,12 +1965,32 @@ async fn get_meeting_repo_target_info(
     topic: Option<String>,
 ) -> Result<MeetingRepoTargetInfo, String> {
     let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
-    let db = state.db.lock().unwrap();
+    let (project, remembered_dir, summary_snippet, ai_config) = {
+        let db = state.db.lock().unwrap();
 
-    let project = db
-        .get_project(&pid)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "未找到项目".to_string())?;
+        let project = db
+            .get_project(&pid)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "未找到项目".to_string())?;
+
+        let memory_key = format!("meeting_repo_parent_dir_{}", pid);
+        let remembered = db.get_setting(&memory_key).ok().flatten();
+
+        let mut sum_text = String::new();
+        if let Some(ref mid_str) = meeting_id {
+            if let Ok(mid) = Uuid::parse_str(mid_str) {
+                if let Ok(Some(m)) = db.get_meeting(&mid) {
+                    if let Some(ref s) = m.meeting_summary {
+                        sum_text = s.clone();
+                    }
+                }
+            }
+        }
+
+        let ai_conf = load_ai_config(&db);
+
+        (project, remembered, sum_text, ai_conf)
+    };
 
     let git_repo_path_str = project
         .git_repo_path
@@ -1991,6 +2009,7 @@ async fn get_meeting_repo_target_info(
 
     if let Some(ref mid_str) = meeting_id {
         if let Ok(mid) = Uuid::parse_str(mid_str) {
+            let db = state.db.lock().unwrap();
             if let Ok(Some(m)) = db.get_meeting(&mid) {
                 m_topic = m.topic;
                 meeting_time = m.start_at.with_timezone(&Local);
@@ -2008,24 +2027,41 @@ async fn get_meeting_repo_target_info(
     let time_code = meeting_time.format("%Y%m%d%H%M").to_string();
     let folder_name = format!("{}-{}", time_code, sanitize_folder_name(&m_topic));
 
-    // 1. 检查历史记忆
-    let memory_key = format!("meeting_repo_parent_dir_{}", pid);
-    let remembered = db.get_setting(&memory_key).ok().flatten();
+    // 全量深度扫描实际仓库目录树
+    let all_dirs = scan_repository_directory_tree(&repo_root);
 
-    let (parent_dir, is_remembered) = if let Some(mem) = remembered {
-        (mem, true)
+    // 筛选适合在 UI 快捷展示的常见文档与模块目录
+    let mut available_dirs: Vec<String> = all_dirs
+        .iter()
+        .filter(|d| d.starts_with("doc") || d.starts_with("wiki") || d.contains("meeting") || d.contains("spec") || d.contains("proposal") || d.contains("design"))
+        .cloned()
+        .collect();
+    if available_dirs.is_empty() {
+        available_dirs = all_dirs.iter().take(12).cloned().collect();
+    }
+
+    let (parent_dir, is_remembered, ai_reason) = if let Some(mem) = remembered_dir {
+        (mem, true, None)
     } else {
-        // 2. 启发式秒级分析
-        let candidates = find_candidate_meeting_dirs(&repo_root);
-        let best_guess = if let Some(first) = candidates.first() {
-            first.clone()
-        } else {
-            "docs/meetings".to_string()
-        };
-        (best_guess, false)
+        // 未曾选择过：真实调用 AI 智能分析该会议与仓库哪个目录最匹配！
+        let summarizer = myth_ai::AiSummarizer::new(ai_config);
+        match summarizer.suggest_meeting_repo_dir(&m_topic, &summary_snippet, &all_dirs).await {
+            Ok((ai_dir, reason)) => {
+                let final_dir = if ai_dir.is_empty() {
+                    "docs/meetings".to_string()
+                } else {
+                    ai_dir
+                };
+                (final_dir, false, Some(reason))
+            }
+            Err(e) => {
+                tracing::warn!("调用大模型推荐目录失败: {}", e);
+                // 失败回退方案
+                let fallback = available_dirs.first().cloned().unwrap_or_else(|| "docs/meetings".to_string());
+                (fallback, false, Some(format!("AI 分析暂时不可用，默认定位到通用文档目录 ({})", e)))
+            }
+        }
     };
-
-    let available_dirs = find_candidate_meeting_dirs(&repo_root);
 
     Ok(MeetingRepoTargetInfo {
         repo_root: git_repo_path_str,
@@ -2035,6 +2071,7 @@ async fn get_meeting_repo_target_info(
         material_count: mat_count,
         audio_count,
         available_dirs,
+        ai_reason,
     })
 }
 

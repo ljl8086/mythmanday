@@ -356,6 +356,7 @@ export function App() {
     material_count: number;
     audio_count: number;
     available_dirs: string[];
+    ai_reason?: string;
     auto_commit: boolean;
   } | null>(null);
 
@@ -1222,6 +1223,7 @@ export function App() {
         material_count: res.material_count,
         audio_count: res.audio_count,
         available_dirs: res.available_dirs || [],
+        ai_reason: res.ai_reason,
         auto_commit: true,
       });
       setShowWriteRepoModal(true);
@@ -6442,11 +6444,12 @@ export function App() {
                     <span>📁 归档父目录 (相对路径)</span>
                     {writeRepoData.is_remembered ? (
                       <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200 font-semibold">
-                        ⚡ 记忆自动定位
+                        ⚡ 历史记忆定位
                       </span>
                     ) : (
-                      <span className="text-[10px] text-violet-600 bg-violet-50 px-1.5 py-0.2 rounded border border-violet-200 font-semibold">
-                        ✨ 智能推荐
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 font-semibold flex items-center gap-1">
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                        AI 语义推荐
                       </span>
                     )}
                   </label>
@@ -6516,7 +6519,17 @@ export function App() {
                   </div>
                 )}
 
-                <p className="text-[10px] text-slate-400 mt-1">
+                {writeRepoData.ai_reason && !writeRepoData.is_remembered && (
+                  <div className="mt-2 p-2 rounded-lg bg-emerald-50/80 border border-emerald-200/70 text-emerald-800 text-[11px] flex items-start gap-1.5 leading-relaxed">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold text-emerald-900">AI 推荐依据：</span>
+                      <span>{writeRepoData.ai_reason}</span>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[10px] text-slate-400 mt-1.5">
                   💡 您可直接手动修改输入框、点击上方快捷标签、或点击「浏览选择目录」通过系统对话框挑选。后续将自动记住此选择。
                 </p>
               </div>
