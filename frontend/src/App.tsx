@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
@@ -331,6 +331,7 @@ export function App() {
   // Meeting Summary Modal (Stop Meeting & AI Generated Minutes)
   const [showMeetingSummaryModal, setShowMeetingSummaryModal] = useState(false);
   const [isStoppingMeeting, setIsStoppingMeeting] = useState(false);
+  const [finishingMeetingIds, setFinishingMeetingIds] = useState<Set<string>>(new Set());
   const [meetingSummaryData, setMeetingSummaryData] = useState<{
     meeting_id?: string;
     project_id: string;
@@ -345,6 +346,7 @@ export function App() {
   const [writeRepoLoadingId, setWriteRepoLoadingId] = useState<string | null>(null);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [writeRepoSubmitting, setWriteRepoSubmitting] = useState(false);
+  const writeRepoReqSeqRef = useRef<number>(0);
   const [writeRepoData, setWriteRepoData] = useState<{
     meeting_id?: string;
     project_id: string;
@@ -1151,6 +1153,9 @@ export function App() {
   // 结束会议（方案2双选项：参数 stopProjectTimer 决定是否同步停止主工时）
   const handleFinishMeeting = async (stopProjectTimer: boolean = false, meetingId?: string) => {
     setIsStoppingMeeting(true);
+    if (meetingId) {
+      setFinishingMeetingIds((prev) => new Set(prev).add(meetingId));
+    }
     showToast(stopProjectTimer ? "⏹ 正在结束会议并封包今日工时..." : "⏹ 正在结束会议（工时继续保持计时）...");
     try {
       const res = await invoke<StopMeetingResult>("finish_meeting", {
@@ -1159,15 +1164,23 @@ export function App() {
       });
       if (res && res.success) {
         showToast("🎉 " + res.message);
-        refreshData();
+        const refreshTasks: Promise<any>[] = [refreshData()];
         if (selectedProjectId) {
-          refreshProjectDetails(selectedProjectId, selectedMonth);
+          refreshTasks.push(refreshProjectDetails(selectedProjectId, selectedMonth));
         }
+        await Promise.all(refreshTasks);
       }
     } catch (e: any) {
       showToast("结束会议失败: " + e.toString());
     } finally {
       setIsStoppingMeeting(false);
+      if (meetingId) {
+        setFinishingMeetingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(meetingId);
+          return next;
+        });
+      }
     }
   };
 
@@ -1204,6 +1217,7 @@ export function App() {
     topic: string;
     summary: string;
   }) => {
+    const currentSeq = ++writeRepoReqSeqRef.current;
     const loadingKey = params.meetingId || params.projectId || "loading";
     setWriteRepoLoadingId(loadingKey);
     showToast("🔍 正在读取仓库结构与 AI 推荐归档路径，请稍候...");
@@ -1212,7 +1226,13 @@ export function App() {
         projectId: params.projectId,
         meetingId: params.meetingId || null,
         topic: params.topic || null,
+        summary: params.summary || null,
       });
+
+      // 如果在此期间触发了新的查询，丢弃本次过期的响应，避免覆盖最新弹窗状态
+      if (currentSeq !== writeRepoReqSeqRef.current) {
+        return;
+      }
 
       setWriteRepoData({
         meeting_id: params.meetingId,
@@ -1231,9 +1251,13 @@ export function App() {
       });
       setShowWriteRepoModal(true);
     } catch (e: any) {
-      showToast("无法获取项目版本库信息: " + e.toString());
+      if (currentSeq === writeRepoReqSeqRef.current) {
+        showToast("无法获取项目版本库信息: " + e.toString());
+      }
     } finally {
-      setWriteRepoLoadingId(null);
+      if (currentSeq === writeRepoReqSeqRef.current) {
+        setWriteRepoLoadingId(null);
+      }
     }
   };
 
@@ -3363,37 +3387,98 @@ export function App() {
                                                           </div>
                                                         )}
 
-                                                        <button
-                                                          type="button"
-                                                          disabled={writeRepoLoadingId === m.id}
-                                                          onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handleOpenWriteRepoModal({
-                                                              projectId: m.project_id || entry.project_id,
-                                                              meetingId: m.id,
-                                                              topic: m.topic,
-                                                              summary: m.summary || "本次会议暂无详细总结纪要",
-                                                            });
-                                                          }}
-                                                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
-                                                            writeRepoLoadingId === m.id
-                                                              ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
-                                                              : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
-                                                          }`}
-                                                          title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
-                                                        >
-                                                          {writeRepoLoadingId === m.id ? (
-                                                            <>
-                                                              <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
-                                                              <span>AI分析中...</span>
-                                                            </>
-                                                          ) : (
-                                                            <>
-                                                              <GitBranch className="w-3 h-3 text-emerald-400" />
-                                                              <span>写入版本库</span>
-                                                            </>
-                                                          )}
-                                                        </button>
+                                                        {m.status === "completed" ? (
+                                                          <button
+                                                            type="button"
+                                                            disabled={writeRepoLoadingId === m.id}
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              handleOpenWriteRepoModal({
+                                                                projectId: m.project_id || entry.project_id,
+                                                                meetingId: m.id,
+                                                                topic: m.topic,
+                                                                summary: m.summary || "本次会议暂无详细总结纪要",
+                                                              });
+                                                            }}
+                                                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] transition-all font-semibold shadow-2xs ${
+                                                              writeRepoLoadingId === m.id
+                                                                ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
+                                                                : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer hover:shadow-xs active:scale-95"
+                                                            }`}
+                                                            title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
+                                                          >
+                                                            {writeRepoLoadingId === m.id ? (
+                                                              <>
+                                                                <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                                                                <span>AI分析中...</span>
+                                                              </>
+                                                            ) : (
+                                                              <>
+                                                                <GitBranch className="w-3 h-3 text-emerald-400" />
+                                                                <span>写入版本库</span>
+                                                              </>
+                                                            )}
+                                                          </button>
+                                                        ) : m.status === "summarizing" ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <span
+                                                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] text-amber-800 bg-amber-50 border border-amber-300 font-semibold animate-pulse"
+                                                              title="AI 正在汇总本场会议录音转写文稿并生成纪要，请稍候..."
+                                                            >
+                                                              <Loader2 className="w-3 h-3 text-amber-600 animate-spin" />
+                                                              <span>AI 纪要提炼中...</span>
+                                                            </span>
+                                                          </div>
+                                                        ) : (
+                                                          <div className="flex items-center gap-1.5">
+                                                            {globalStats.is_recording_audio &&
+                                                            globalStats.active_meeting_id &&
+                                                            globalStats.active_meeting_id !== m.id ? (
+                                                              <button
+                                                                type="button"
+                                                                disabled={true}
+                                                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-400 cursor-not-allowed shadow-2xs"
+                                                                title="当前有另一场会议正在录音中，请先结束录音或在活跃会议卡片操作"
+                                                              >
+                                                                <Square className="w-2.5 h-2.5 fill-current" />
+                                                                <span>其他会议录音中</span>
+                                                              </button>
+                                                            ) : (
+                                                              <button
+                                                                type="button"
+                                                                disabled={isStoppingMeeting || finishingMeetingIds.has(m.id)}
+                                                                onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  handleFinishMeeting(false, m.id);
+                                                                }}
+                                                                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold transition-all shadow-2xs ${
+                                                                  isStoppingMeeting || finishingMeetingIds.has(m.id)
+                                                                    ? "bg-slate-700 text-slate-300 cursor-wait opacity-80"
+                                                                    : "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer active:scale-95"
+                                                                }`}
+                                                                title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
+                                                              >
+                                                                {isStoppingMeeting || finishingMeetingIds.has(m.id) ? (
+                                                                  <>
+                                                                    <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
+                                                                    <span>正在提炼...</span>
+                                                                  </>
+                                                                ) : (
+                                                                  <>
+                                                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                                                    <span>结束会议</span>
+                                                                  </>
+                                                                )}
+                                                              </button>
+                                                            )}
+                                                            <span
+                                                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
+                                                              title="会议录音已停止，等待结束生成纪要"
+                                                            >
+                                                              进行中
+                                                            </span>
+                                                          </div>
+                                                        )}
                                                       </div>
                                                     </div>
 
@@ -6390,13 +6475,13 @@ export function App() {
                     }
                   }}
                   className={`px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5 transition-all ${
-                    Boolean(writeRepoLoadingId)
+                    writeRepoLoadingId
                       ? "bg-slate-700 text-slate-300 cursor-wait opacity-90"
                       : "bg-slate-800 hover:bg-slate-900 text-white cursor-pointer active:scale-95"
                   }`}
                   title="自动按时间戳编号创建子目录，并将纪要、录音切片与全部附件一次性写入 Git 版本库"
                 >
-                  {Boolean(writeRepoLoadingId) ? (
+                  {writeRepoLoadingId ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
                       <span>AI分析定位中...</span>
@@ -6425,9 +6510,9 @@ export function App() {
       {/* ---------------- 模态框: 写入 Git 版本库确认与路径微调 ---------------- */}
       {showWriteRepoModal && writeRepoData && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
+          <div className="w-full max-w-lg max-h-[88vh] bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
             {/* 顶部标题 */}
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
                   <GitBranch className="w-4 h-4" />
@@ -6450,8 +6535,8 @@ export function App() {
               </button>
             </div>
 
-            {/* 表单内容 */}
-            <div className="p-5 space-y-4 text-xs">
+            {/* 表单内容 (可滚动，保证小视口下底部确认栏不被推出屏幕) */}
+            <div className="p-5 space-y-4 text-xs overflow-y-auto flex-1 min-h-0">
               {/* 仓库根路径提示 */}
               <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
                 <div className="flex items-center justify-between text-slate-500">
@@ -6525,9 +6610,9 @@ export function App() {
                   />
                 </div>
 
-                {/* 候选快捷目录列表 */}
+                {/* 候选快捷目录列表 (最大高度限制可滑动，避免撑破页面) */}
                 {writeRepoData.available_dirs.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100 max-h-24 overflow-y-auto">
                     <span className="text-[10px] text-slate-400 font-medium">仓库常用目录:</span>
                     {writeRepoData.available_dirs.map((d) => (
                       <button

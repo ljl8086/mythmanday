@@ -123,4 +123,3 @@ CREATE INDEX IF NOT EXISTS idx_meeting_clips_meeting_id ON meeting_audio_clips (
 CREATE INDEX IF NOT EXISTS idx_meeting_materials_meeting_id ON meeting_materials (meeting_id);
 CREATE INDEX IF NOT EXISTS idx_quick_notes_project_id ON quick_notes (project_id);
 "#;
-

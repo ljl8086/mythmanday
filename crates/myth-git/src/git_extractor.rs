@@ -449,17 +449,22 @@ impl GitScanner {
             return Err(GitError::NotAGitRepo(path.display().to_string()));
         }
 
-        // 1. git add
+        // 1. git add (using --literal-pathspecs to avoid wildcard/bracket pattern interpretation)
         let add_out = Command::new("git")
             .arg("-C")
             .arg(path)
+            .arg("--literal-pathspecs")
             .arg("add")
+            .arg("--")
             .arg(rel_path_to_add.as_ref())
             .output()?;
 
         if !add_out.status.success() {
             let err = String::from_utf8_lossy(&add_out.stderr).to_string();
-            return Err(GitError::ExecutionFailed(format!("git add failed: {}", err)));
+            return Err(GitError::ExecutionFailed(format!(
+                "git add failed: {}",
+                err
+            )));
         }
 
         // 2. git commit -m
@@ -477,10 +482,15 @@ impl GitScanner {
             if err.contains("nothing to commit") || err.contains("无文件要提交") {
                 return Ok("无变更需要提交".to_string());
             }
-            return Err(GitError::ExecutionFailed(format!("git commit failed: {}", err)));
+            return Err(GitError::ExecutionFailed(format!(
+                "git commit failed: {}",
+                err
+            )));
         }
 
-        let out_str = String::from_utf8_lossy(&commit_out.stdout).trim().to_string();
+        let out_str = String::from_utf8_lossy(&commit_out.stdout)
+            .trim()
+            .to_string();
         Ok(out_str)
     }
 }
