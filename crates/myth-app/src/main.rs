@@ -215,6 +215,7 @@ pub struct MeetingMaterialDto {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MeetingDetailDto {
     pub id: String,
+    pub project_id: String,
     pub topic: String,
     pub start_time: String,
     pub end_time: Option<String>,
@@ -274,6 +275,8 @@ pub struct GlobalStatsDto {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct StopMeetingResultDto {
     pub success: bool,
+    #[serde(default)]
+    pub meeting_id: Option<String>,
     pub project_id: String,
     pub topic: String,
     pub audio_path: String,
@@ -284,6 +287,7 @@ pub struct StopMeetingResultDto {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MeetingSummaryReadyDto {
+    pub meeting_id: Option<String>,
     pub project_id: String,
     pub entry_id: Option<String>,
     pub topic: String,
@@ -593,6 +597,7 @@ fn get_daily_groups(
                 let m_end_local = m.end_at.map(|d| d.with_timezone(&Local));
                 MeetingDetailDto {
                     id: m.id.to_string(),
+                    project_id: m.project_id.to_string(),
                     topic: m.topic,
                     start_time: m_start_local.format("%H:%M").to_string(),
                     end_time: m_end_local.map(|d| d.format("%H:%M").to_string()),
@@ -1667,6 +1672,7 @@ async fn finish_meeting(
         }
 
         let payload = MeetingSummaryReadyDto {
+            meeting_id: Some(m_id.to_string()),
             project_id: pid.to_string(),
             entry_id: Some(entry_id.to_string()),
             topic: topic_clone,
@@ -1679,6 +1685,7 @@ async fn finish_meeting(
 
     Ok(StopMeetingResultDto {
         success: true,
+        meeting_id: Some(m_id.to_string()),
         project_id: pid.to_string(),
         topic: topic.clone(),
         audio_path: String::new(),
@@ -1879,6 +1886,330 @@ async fn get_material_data_url(
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MeetingRepoTargetInfo {
+    pub repo_root: String,
+    pub parent_dir: String,
+    pub is_remembered: bool,
+    pub folder_name: String,
+    pub material_count: usize,
+    pub audio_count: usize,
+    pub available_dirs: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WriteMeetingToRepoResult {
+    pub success: bool,
+    pub full_path: String,
+    pub relative_path: String,
+    pub commit_hash_or_msg: Option<String>,
+}
+
+fn sanitize_folder_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '_',
+            other => other,
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "会议纪要".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 快速扫描仓库中常见文档目录（docs, doc, meetings 等）
+fn find_candidate_meeting_dirs(repo_root: &std::path::Path) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let common_subdirs = [
+        "docs/meetings",
+        "doc/meetings",
+        "documents/meetings",
+        "meetings",
+        "docs",
+        "doc",
+        "wiki",
+    ];
+    for sub in &common_subdirs {
+        let p = repo_root.join(sub);
+        if p.is_dir() {
+            candidates.push(sub.to_string());
+        }
+    }
+    // 递归查找一层子目录里的可能文档目录
+    if let Ok(entries) = std::fs::read_dir(repo_root) {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.starts_with('.') && name != "target" && name != "node_modules" && name != "dist" {
+                        if !candidates.contains(&name) && (name.contains("doc") || name.contains("meeting") || name.contains("wiki")) {
+                            candidates.push(name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates
+}
+
+#[tauri::command]
+async fn get_meeting_repo_target_info(
+    state: State<'_, AppState>,
+    project_id: String,
+    meeting_id: Option<String>,
+    topic: Option<String>,
+) -> Result<MeetingRepoTargetInfo, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let db = state.db.lock().unwrap();
+
+    let project = db
+        .get_project(&pid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "未找到项目".to_string())?;
+
+    let git_repo_path_str = project
+        .git_repo_path
+        .ok_or_else(|| "该项目尚未关联本地 Git 仓库路径，请先在项目设置中配置仓库路径！".to_string())?;
+
+    let repo_root = std::path::PathBuf::from(&git_repo_path_str);
+    if !repo_root.is_dir() {
+        return Err(format!("项目配置的 Git 路径不存在或不是文件夹: {}", git_repo_path_str));
+    }
+
+    // 会议详情、材料与录音数量
+    let mut mat_count = 0;
+    let mut audio_count = 0;
+    let mut m_topic = topic.unwrap_or_else(|| "会议沟通".to_string());
+    let mut meeting_time = Local::now();
+
+    if let Some(ref mid_str) = meeting_id {
+        if let Ok(mid) = Uuid::parse_str(mid_str) {
+            if let Ok(Some(m)) = db.get_meeting(&mid) {
+                m_topic = m.topic;
+                meeting_time = m.start_at.with_timezone(&Local);
+            }
+            if let Ok(mats) = db.list_materials_for_meeting(&mid) {
+                mat_count = mats.len();
+            }
+            if let Ok(clips) = db.list_audio_clips_for_meeting(&mid) {
+                audio_count = clips.iter().filter(|c| !c.audio_path.is_empty()).count();
+            }
+        }
+    }
+
+    // 编号格式: YYYYMMDDHHmm
+    let time_code = meeting_time.format("%Y%m%d%H%M").to_string();
+    let folder_name = format!("{}-{}", time_code, sanitize_folder_name(&m_topic));
+
+    // 1. 检查历史记忆
+    let memory_key = format!("meeting_repo_parent_dir_{}", pid);
+    let remembered = db.get_setting(&memory_key).ok().flatten();
+
+    let (parent_dir, is_remembered) = if let Some(mem) = remembered {
+        (mem, true)
+    } else {
+        // 2. 启发式秒级分析
+        let candidates = find_candidate_meeting_dirs(&repo_root);
+        let best_guess = if let Some(first) = candidates.first() {
+            first.clone()
+        } else {
+            "docs/meetings".to_string()
+        };
+        (best_guess, false)
+    };
+
+    let available_dirs = find_candidate_meeting_dirs(&repo_root);
+
+    Ok(MeetingRepoTargetInfo {
+        repo_root: git_repo_path_str,
+        parent_dir,
+        is_remembered,
+        folder_name,
+        material_count: mat_count,
+        audio_count,
+        available_dirs,
+    })
+}
+
+#[tauri::command]
+async fn write_meeting_to_git_repo(
+    state: State<'_, AppState>,
+    project_id: String,
+    meeting_id: Option<String>,
+    parent_dir: String,
+    folder_name: Option<String>,
+    topic: String,
+    summary: String,
+    auto_commit: bool,
+) -> Result<WriteMeetingToRepoResult, String> {
+    let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
+    let (project, materials_to_copy, clips_to_copy) = {
+        let db = state.db.lock().unwrap();
+
+        let project = db
+            .get_project(&pid)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "未找到项目".to_string())?;
+
+        let mut mats = Vec::new();
+        let mut clips = Vec::new();
+
+        if let Some(ref mid_str) = meeting_id {
+            if let Ok(mid) = Uuid::parse_str(mid_str) {
+                if let Ok(m_list) = db.list_materials_for_meeting(&mid) {
+                    mats = m_list;
+                }
+                if let Ok(c_list) = db.list_audio_clips_for_meeting(&mid) {
+                    clips = c_list;
+                }
+            }
+        }
+
+        (project, mats, clips)
+    };
+
+    let git_repo_path_str = project
+        .git_repo_path
+        .ok_or_else(|| "未配置 Git 仓库路径".to_string())?;
+
+    let repo_root = std::path::PathBuf::from(&git_repo_path_str);
+    if !repo_root.is_dir() {
+        return Err(format!("Git 仓库路径不存在: {}", git_repo_path_str));
+    }
+
+    // 确定文件夹名称（时间戳编号）
+    let clean_folder_name = folder_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            let time_code = Local::now().format("%Y%m%d%H%M").to_string();
+            format!("{}-{}", time_code, sanitize_folder_name(&topic))
+        });
+
+    let rel_parent = parent_dir.trim().trim_start_matches('/').trim_end_matches('/');
+    let target_meeting_dir = if rel_parent.is_empty() {
+        repo_root.join(&clean_folder_name)
+    } else {
+        repo_root.join(rel_parent).join(&clean_folder_name)
+    };
+
+    let assets_dir = target_meeting_dir.join("assets");
+    tokio::fs::create_dir_all(&assets_dir)
+        .await
+        .map_err(|e| format!("创建目标目录失败: {}", e))?;
+
+    // 复制材料与音频切片
+    let mut materials_copied: Vec<(String, String, String)> = Vec::new(); // (orig_name, rel_path, file_type)
+    let mut clips_copied: Vec<(u32, String, String)> = Vec::new(); // (clip_order, rel_path, duration_text)
+
+    for mat in materials_to_copy {
+        let src_path = std::path::PathBuf::from(&mat.file_path);
+        if src_path.is_file() {
+            let dest_filename = &mat.file_name;
+            let dest_path = assets_dir.join(dest_filename);
+            if let Err(e) = tokio::fs::copy(&src_path, &dest_path).await {
+                tracing::warn!("复制会议附件失败 {}: {}", src_path.display(), e);
+            } else {
+                materials_copied.push((
+                    mat.file_name.clone(),
+                    format!("./assets/{}", dest_filename),
+                    mat.file_type.clone(),
+                ));
+            }
+        }
+    }
+
+    for clip in clips_to_copy {
+        let src_path = std::path::PathBuf::from(&clip.audio_path);
+        if src_path.is_file() {
+            let ext = src_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("wav");
+            let dest_filename = format!("clip_{}_{}s.{}", clip.clip_order, clip.duration_secs, ext);
+            let dest_path = assets_dir.join(&dest_filename);
+            if let Err(e) = tokio::fs::copy(&src_path, &dest_path).await {
+                tracing::warn!("复制录音切片失败 {}: {}", src_path.display(), e);
+            } else {
+                clips_copied.push((
+                    clip.clip_order,
+                    format!("./assets/{}", dest_filename),
+                    format_duration(clip.duration_secs),
+                ));
+            }
+        }
+    }
+
+    // 生成 Markdown 纪要
+    let mut md_content = format!("# 会议纪要：{}\n\n", topic);
+    md_content.push_str(&format!("- **归档时间**：{}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
+    md_content.push_str(&format!("- **关联项目**：{}\n\n", project.name));
+    md_content.push_str("## 📝 纪要正文与核心决议\n\n");
+    md_content.push_str(summary.trim());
+    md_content.push_str("\n\n---\n\n");
+
+    // 附录：材料与录音
+    if !materials_copied.is_empty() {
+        md_content.push_str("## 📎 关联会议材料与图纸\n\n");
+        for (name, rel, ftype) in &materials_copied {
+            if ftype == "image" {
+                md_content.push_str(&format!("### {}\n![{}]({})\n\n", name, name, rel));
+            } else {
+                md_content.push_str(&format!("- [{}]({})\n", name, rel));
+            }
+        }
+        md_content.push('\n');
+    }
+
+    if !clips_copied.is_empty() {
+        md_content.push_str("## 🎙️ 录音原始切片凭据\n\n");
+        for (order, rel, dur) in &clips_copied {
+            md_content.push_str(&format!("- **录音片段 {}** (时长: {}): [点击试听/查看]({})\n", order, dur, rel));
+        }
+        md_content.push('\n');
+    }
+
+    // 写入 README.md
+    let md_file_path = target_meeting_dir.join("README.md");
+    tokio::fs::write(&md_file_path, md_content.as_bytes())
+        .await
+        .map_err(|e| format!("写入纪要 Markdown 文件失败: {}", e))?;
+
+    // 保存父目录到记忆配置
+    {
+        let db = state.db.lock().unwrap();
+        let memory_key = format!("meeting_repo_parent_dir_{}", pid);
+        let _ = db.set_setting(&memory_key, rel_parent);
+    }
+
+    // 计算相对路径
+    let relative_target_str = match target_meeting_dir.strip_prefix(&repo_root) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => clean_folder_name.clone(),
+    };
+
+    // 可选：执行 Git Add & Commit
+    let mut commit_msg_res = None;
+    if auto_commit {
+        let commit_title = format!("docs(meeting): archive meeting minutes for {}", topic);
+        match myth_git::GitScanner::commit_files(&repo_root, &relative_target_str, &commit_title) {
+            Ok(msg) => commit_msg_res = Some(msg),
+            Err(e) => tracing::warn!("Git 自动提交失败: {}", e),
+        }
+    }
+
+    Ok(WriteMeetingToRepoResult {
+        success: true,
+        full_path: target_meeting_dir.to_string_lossy().to_string(),
+        relative_path: relative_target_str,
+        commit_hash_or_msg: commit_msg_res,
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -4483,7 +4814,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_meeting_materials,
             get_material_data_url,
             open_material_file,
-            get_system_clipboard
+            get_system_clipboard,
+            get_meeting_repo_target_info,
+            write_meeting_to_git_repo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

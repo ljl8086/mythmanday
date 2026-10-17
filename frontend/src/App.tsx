@@ -135,6 +135,7 @@ interface MeetingMaterial {
 
 interface MeetingDetail {
   id: string;
+  project_id?: string;
   topic: string;
   start_time: string;
   end_time?: string;
@@ -331,11 +332,31 @@ export function App() {
   const [showMeetingSummaryModal, setShowMeetingSummaryModal] = useState(false);
   const [isStoppingMeeting, setIsStoppingMeeting] = useState(false);
   const [meetingSummaryData, setMeetingSummaryData] = useState<{
+    meeting_id?: string;
     project_id: string;
     topic: string;
     audio_path: string;
     summary: string;
     transcript: string;
+  } | null>(null);
+
+  // Write Meeting To Git Repo Modal State
+  const [showWriteRepoModal, setShowWriteRepoModal] = useState(false);
+  const [writeRepoLoading, setWriteRepoLoading] = useState(false);
+  const [writeRepoSubmitting, setWriteRepoSubmitting] = useState(false);
+  const [writeRepoData, setWriteRepoData] = useState<{
+    meeting_id?: string;
+    project_id: string;
+    topic: string;
+    summary: string;
+    repo_root: string;
+    parent_dir: string;
+    folder_name: string;
+    is_remembered: boolean;
+    material_count: number;
+    audio_count: number;
+    available_dirs: string[];
+    auto_commit: boolean;
   } | null>(null);
 
   // Global In-App Audio Player Modal State
@@ -844,6 +865,7 @@ export function App() {
       }
       // 自动弹出纪要确认/编辑弹窗，让用户第一时间查看和微调
       setMeetingSummaryData({
+        meeting_id: data.meeting_id,
         project_id: data.project_id,
         topic: data.topic,
         audio_path: data.audio_path,
@@ -1170,6 +1192,70 @@ export function App() {
       }
     } catch (e: any) {
       showToast("保存会议纪要失败: " + e.toString());
+    }
+  };
+
+  // 打开写入 Git 版本库弹窗（自动读取智能推荐或历史记忆父目录）
+  const handleOpenWriteRepoModal = async (params: {
+    projectId: string;
+    meetingId?: string;
+    topic: string;
+    summary: string;
+  }) => {
+    setWriteRepoLoading(true);
+    try {
+      const res = await invoke<any>("get_meeting_repo_target_info", {
+        projectId: params.projectId,
+        meetingId: params.meetingId || null,
+        topic: params.topic || null,
+      });
+
+      setWriteRepoData({
+        meeting_id: params.meetingId,
+        project_id: params.projectId,
+        topic: params.topic,
+        summary: params.summary,
+        repo_root: res.repo_root,
+        parent_dir: res.parent_dir,
+        folder_name: res.folder_name,
+        is_remembered: res.is_remembered,
+        material_count: res.material_count,
+        audio_count: res.audio_count,
+        available_dirs: res.available_dirs || [],
+        auto_commit: true,
+      });
+      setShowWriteRepoModal(true);
+    } catch (e: any) {
+      showToast("无法获取项目版本库信息: " + e.toString());
+    } finally {
+      setWriteRepoLoading(false);
+    }
+  };
+
+  // 确认一次性写入 Git 版本库
+  const handleConfirmWriteRepo = async () => {
+    if (!writeRepoData) return;
+    setWriteRepoSubmitting(true);
+    try {
+      const res = await invoke<any>("write_meeting_to_git_repo", {
+        projectId: writeRepoData.project_id,
+        meetingId: writeRepoData.meeting_id || null,
+        parentDir: writeRepoData.parent_dir,
+        folderName: writeRepoData.folder_name,
+        topic: writeRepoData.topic,
+        summary: writeRepoData.summary,
+        autoCommit: writeRepoData.auto_commit,
+      });
+
+      if (res && res.success) {
+        showToast(`🎉 成功写入版本库：${res.relative_path}${res.commit_hash_or_msg ? ` (${res.commit_hash_or_msg})` : ""}`);
+        setShowWriteRepoModal(false);
+        setWriteRepoData(null);
+      }
+    } catch (e: any) {
+      showToast("写入版本库失败: " + e.toString());
+    } finally {
+      setWriteRepoSubmitting(false);
     }
   };
 
@@ -3330,6 +3416,25 @@ export function App() {
                                                       >
                                                         <Clipboard className="w-2.5 h-2.5 text-emerald-600" />
                                                         <span>📋 粘贴 (Ctrl+V)</span>
+                                                      </button>
+
+                                                      {/* 写入版本库操作按钮 */}
+                                                      <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          handleOpenWriteRepoModal({
+                                                            projectId: m.project_id || entry.project_id,
+                                                            meetingId: m.id,
+                                                            topic: m.topic,
+                                                            summary: m.summary || "本次会议暂无详细总结纪要",
+                                                          });
+                                                        }}
+                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-900 text-white cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95 ml-auto"
+                                                        title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
+                                                      >
+                                                        <GitBranch className="w-2.5 h-2.5 text-emerald-400" />
+                                                        <span>写入版本库</span>
                                                       </button>
                                                     </div>
 
@@ -6239,19 +6344,205 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => setShowMeetingSummaryModal(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                  className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                 >
                   暂存/关闭
                 </button>
                 <button
                   type="button"
+                  disabled={writeRepoLoading}
+                  onClick={() => {
+                    if (meetingSummaryData) {
+                      handleOpenWriteRepoModal({
+                        projectId: meetingSummaryData.project_id,
+                        meetingId: meetingSummaryData.meeting_id,
+                        topic: meetingSummaryData.topic,
+                        summary: meetingSummaryData.summary,
+                      });
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                  title="自动按时间戳编号创建子目录，并将纪要、录音切片与全部附件一次性写入 Git 版本库"
+                >
+                  <GitBranch className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{writeRepoLoading ? "分析定位中..." : "写入版本库"}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleSaveMeetingSummary}
-                  className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   确认并存入项目档案
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- 模态框: 写入 Git 版本库确认与路径微调 ---------------- */}
+      {showWriteRepoModal && writeRepoData && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200/90 shadow-2xl overflow-hidden flex flex-col">
+            {/* 顶部标题 */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                    写入 Git 知识库与交付凭证
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    一次性打包纪要 Markdown、录音原始切片与全部附件图纸
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWriteRepoModal(false)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 表单内容 */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* 仓库根路径提示 */}
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
+                <div className="flex items-center justify-between text-slate-500">
+                  <span className="font-semibold flex items-center gap-1">
+                    <FolderOpen className="w-3.5 h-3.5 text-indigo-500" /> Git 仓库根目录:
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    已关联
+                  </span>
+                </div>
+                <div className="font-mono text-[11px] text-slate-700 truncate" title={writeRepoData.repo_root}>
+                  {writeRepoData.repo_root}
+                </div>
+              </div>
+
+              {/* 父目录选择与微调 */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="font-bold text-slate-700 flex items-center gap-1">
+                    <span>📁 归档父目录 (相对路径)</span>
+                    {writeRepoData.is_remembered ? (
+                      <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200 font-semibold">
+                        ⚡ 记忆自动定位
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-violet-600 bg-violet-50 px-1.5 py-0.2 rounded border border-violet-200 font-semibold">
+                        ✨ 启发式/AI推荐
+                      </span>
+                    )}
+                  </label>
+                  {writeRepoData.available_dirs.length > 0 && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-slate-400">快捷切换:</span>
+                      {writeRepoData.available_dirs.slice(0, 3).map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: d })}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border font-mono transition-colors cursor-pointer ${
+                            writeRepoData.parent_dir === d
+                              ? "bg-indigo-600 text-white border-indigo-600"
+                              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={writeRepoData.parent_dir}
+                  onChange={(e) => setWriteRepoData({ ...writeRepoData, parent_dir: e.target.value })}
+                  placeholder="例如: docs/meetings 或 doc"
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  后续写入将自动记住此父目录，无需每次重复选择。
+                </p>
+              </div>
+
+              {/* 会议唯一编号专属子目录 (只读或可微调) */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">
+                  🏷️ 自动生成的会议专属子目录 (时间戳编号)
+                </label>
+                <input
+                  type="text"
+                  value={writeRepoData.folder_name}
+                  onChange={(e) => setWriteRepoData({ ...writeRepoData, folder_name: e.target.value })}
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium bg-slate-50/50"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  最终落盘完整路径：<span className="font-mono text-indigo-600 font-bold">{writeRepoData.parent_dir ? `${writeRepoData.parent_dir}/` : ""}{writeRepoData.folder_name}/README.md</span>
+                </p>
+              </div>
+
+              {/* 一体化打包清单 */}
+              <div className="p-3 rounded-xl bg-indigo-50/50 border border-indigo-100 space-y-1.5">
+                <div className="font-bold text-indigo-900 flex items-center justify-between text-[11px]">
+                  <span>📦 包含资产清单:</span>
+                  <span className="text-indigo-600">一次性原子写入</span>
+                </div>
+                <ul className="text-[11px] text-indigo-800 space-y-1 list-disc list-inside">
+                  <li>会议纪要 Markdown (相对引用 assets)</li>
+                  <li>录音切片凭据: <span className="font-bold">{writeRepoData.audio_count} 个</span> (存入 assets/)</li>
+                  <li>参考材料与图纸: <span className="font-bold">{writeRepoData.material_count} 个</span> (存入 assets/)</li>
+                </ul>
+              </div>
+
+              {/* 自动 Git 提交选项 */}
+              <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+                <input
+                  type="checkbox"
+                  checked={writeRepoData.auto_commit}
+                  onChange={(e) => setWriteRepoData({ ...writeRepoData, auto_commit: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                />
+                <span className="text-xs text-slate-700 font-medium">
+                  写入后自动执行 <span className="font-mono font-bold text-slate-900">git add</span> 与 <span className="font-mono font-bold text-slate-900">git commit</span>
+                </span>
+              </label>
+            </div>
+
+            {/* 底部按钮 */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/50">
+              <button
+                type="button"
+                onClick={() => setShowWriteRepoModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={writeRepoSubmitting}
+                onClick={handleConfirmWriteRepo}
+                className="px-5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {writeRepoSubmitting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>正在写入版本库...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>确认写入版本库</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
