@@ -3407,6 +3407,16 @@ export function App() {
                                                               </>
                                                             )}
                                                           </button>
+                                                        ) : m.status === "summarizing" ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <span
+                                                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] text-amber-800 bg-amber-50 border border-amber-300 font-semibold animate-pulse"
+                                                              title="AI 正在汇总本场会议录音转写文稿并生成纪要，请稍候..."
+                                                            >
+                                                              <Loader2 className="w-3 h-3 text-amber-600 animate-spin" />
+                                                              <span>AI 纪要提炼中...</span>
+                                                            </span>
+                                                          </div>
                                                         ) : (
                                                           <div className="flex items-center gap-1.5">
                                                             <button
@@ -3416,12 +3426,16 @@ export function App() {
                                                                 e.stopPropagation();
                                                                 handleFinishMeeting(false, m.id);
                                                               }}
-                                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-semibold transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                                                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold transition-all shadow-2xs ${
+                                                                isStoppingMeeting
+                                                                  ? "bg-slate-700 text-slate-300 cursor-wait opacity-80"
+                                                                  : "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer active:scale-95"
+                                                              }`}
                                                               title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
                                                             >
                                                               {isStoppingMeeting ? (
                                                                 <>
-                                                                  <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                  <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
                                                                   <span>正在提炼...</span>
                                                                 </>
                                                               ) : (
@@ -3433,9 +3447,9 @@ export function App() {
                                                             </button>
                                                             <span
                                                               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
-                                                              title="会议尚未结束或纪要正在生成中"
+                                                              title="会议录音已停止，等待结束生成纪要"
                                                             >
-                                                              {m.status === "summarizing" ? "纪要提炼中..." : "进行中"}
+                                                              进行中
                                                             </span>
                                                           </div>
                                                         )}
