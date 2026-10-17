@@ -2351,7 +2351,7 @@ async fn write_meeting_to_git_repo(
     };
 
     let segments: Vec<&str> = full_rel.split('/').filter(|s| !s.is_empty()).collect();
-    if segments.iter().any(|&s| s == ".git") {
+    if segments.iter().any(|&s| s.eq_ignore_ascii_case(".git")) {
         return Err("安全拦截：严禁将归档目标目录设置为 Git 元数据目录 (.git)！".to_string());
     }
 
@@ -2361,7 +2361,7 @@ async fn write_meeting_to_git_repo(
         repo_root.join(rel_parent).join(&clean_folder_name)
     };
 
-    // 3. 校验最近的存在祖先目录，确保严格包含在仓库根目录内
+    // 3. 校验最近的存在祖先目录，确保严格包含在仓库根目录内且不在 .git 目录内
     let canonical_root = repo_root
         .canonicalize()
         .map_err(|e| format!("解析仓库根目录绝对路径失败: {}", e))?;
@@ -2378,6 +2378,16 @@ async fn write_meeting_to_git_repo(
     if let Ok(canon_ancestor) = ancestor.canonicalize() {
         if !canon_ancestor.starts_with(&canonical_root) {
             return Err("安全拦截：目标归档目录超出了指定的 Git 仓库根目录！".to_string());
+        }
+        if let Ok(rel) = canon_ancestor.strip_prefix(&canonical_root) {
+            if rel
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case(".git"))
+            {
+                return Err(
+                    "安全拦截：严禁将归档目标目录放置在 Git 元数据目录 (.git) 内部！".to_string(),
+                );
+            }
         }
     } else {
         return Err("安全拦截：无法解析目标路径所在祖先目录！".to_string());

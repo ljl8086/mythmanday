@@ -3431,32 +3431,46 @@ export function App() {
                                                           </div>
                                                         ) : (
                                                           <div className="flex items-center gap-1.5">
-                                                            <button
-                                                              type="button"
-                                                              disabled={isStoppingMeeting || finishingMeetingIds.has(m.id)}
-                                                              onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleFinishMeeting(false, m.id);
-                                                              }}
-                                                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold transition-all shadow-2xs ${
-                                                                isStoppingMeeting || finishingMeetingIds.has(m.id)
-                                                                  ? "bg-slate-700 text-slate-300 cursor-wait opacity-80"
-                                                                  : "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer active:scale-95"
-                                                              }`}
-                                                              title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
-                                                            >
-                                                              {isStoppingMeeting || finishingMeetingIds.has(m.id) ? (
-                                                                <>
-                                                                  <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
-                                                                  <span>正在提炼...</span>
-                                                                </>
-                                                              ) : (
-                                                                <>
-                                                                  <Square className="w-2.5 h-2.5 fill-current" />
-                                                                  <span>结束会议</span>
-                                                                </>
-                                                              )}
-                                                            </button>
+                                                            {globalStats.is_recording_audio &&
+                                                            globalStats.active_meeting_id &&
+                                                            globalStats.active_meeting_id !== m.id ? (
+                                                              <button
+                                                                type="button"
+                                                                disabled={true}
+                                                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-400 cursor-not-allowed shadow-2xs"
+                                                                title="当前有另一场会议正在录音中，请先结束录音或在活跃会议卡片操作"
+                                                              >
+                                                                <Square className="w-2.5 h-2.5 fill-current" />
+                                                                <span>其他会议录音中</span>
+                                                              </button>
+                                                            ) : (
+                                                              <button
+                                                                type="button"
+                                                                disabled={isStoppingMeeting || finishingMeetingIds.has(m.id)}
+                                                                onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  handleFinishMeeting(false, m.id);
+                                                                }}
+                                                                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-semibold transition-all shadow-2xs ${
+                                                                  isStoppingMeeting || finishingMeetingIds.has(m.id)
+                                                                    ? "bg-slate-700 text-slate-300 cursor-wait opacity-80"
+                                                                    : "bg-rose-600 hover:bg-rose-700 text-white cursor-pointer active:scale-95"
+                                                                }`}
+                                                                title="结束本场会议并综合所有录音切片生成 AI 会议纪要（工时继续保持）"
+                                                              >
+                                                                {isStoppingMeeting || finishingMeetingIds.has(m.id) ? (
+                                                                  <>
+                                                                    <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
+                                                                    <span>正在提炼...</span>
+                                                                  </>
+                                                                ) : (
+                                                                  <>
+                                                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                                                    <span>结束会议</span>
+                                                                  </>
+                                                                )}
+                                                              </button>
+                                                            )}
                                                             <span
                                                               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-amber-700 bg-amber-50 border border-amber-200 font-medium"
                                                               title="会议录音已停止，等待结束生成纪要"
