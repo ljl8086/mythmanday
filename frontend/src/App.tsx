@@ -2993,7 +2993,15 @@ export function App() {
                                   let remainingNotes = "";
 
                                   if (firstLineIdx !== -1) {
-                                    headlineText = rawNoteLines[firstLineIdx].trim().replace(/^#+\s*/, "").replace(/^【(.*?)】$/, "$1");
+                                    headlineText = rawNoteLines[firstLineIdx]
+                                      .trim()
+                                      .replace(/^#+\s*/, "")
+                                      .replace(/【会议进行中\s*🎙️?】/g, "")
+                                      .replace(/^【(.*?)】$/, "$1")
+                                      .trim();
+                                    if (!headlineText) {
+                                      headlineText = "日常研发任务与协同联调";
+                                    }
                                     let restIdx = firstLineIdx + 1;
                                     while (restIdx < rawNoteLines.length) {
                                       const line = rawNoteLines[restIdx].trim();
@@ -3256,98 +3264,118 @@ export function App() {
                                                         )}
                                                       </div>
 
-                                                      {/* 录音片段胶囊列表 */}
-                                                      {m.clips && m.clips.length > 0 && (
-                                                        <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-                                                          <span className="text-slate-400 text-[10px]">录音:</span>
-                                                          {m.clips.map((clip) => {
-                                                            const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
-                                                            const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
-                                                            const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
-                                                            const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
+                                                      {/* 录音片段胶囊列表 与 快速入库操作 */}
+                                                      <div className="flex items-center gap-2 flex-wrap">
+                                                        {m.clips && m.clips.length > 0 && (
+                                                          <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                                                            <span className="text-slate-400 text-[10px]">录音:</span>
+                                                            {m.clips.map((clip) => {
+                                                              const hasFinalResult = clip.status === "transcribed" || clip.status === "failed" || !!clip.transcript;
+                                                              const isPending = !hasFinalResult && (clip.status === "pending" || retryingClipIds.has(clip.id));
+                                                              const isTranscribed = clip.status === "transcribed" || (!isPending && !!clip.transcript);
+                                                              const isFailed = !isPending && !isTranscribed && (clip.status === "failed" || !clip.transcript);
 
-                                                            return (
-                                                              <div
-                                                                key={clip.id}
-                                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border transition-all ${
-                                                                  isFailed
-                                                                    ? "bg-rose-50 border-rose-200 text-rose-700"
-                                                                    : isPending
-                                                                    ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
-                                                                    : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                                                                }`}
-                                                              >
-                                                                <button
-                                                                  onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
-                                                                  className="font-medium flex items-center gap-1 hover:underline cursor-pointer"
-                                                                  title="播放该录音片段"
+                                                              return (
+                                                                <div
+                                                                  key={clip.id}
+                                                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border transition-all ${
+                                                                    isFailed
+                                                                      ? "bg-rose-50 border-rose-200 text-rose-700"
+                                                                      : isPending
+                                                                      ? "bg-amber-50 border-amber-200 text-amber-700 animate-pulse"
+                                                                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
+                                                                  }`}
                                                                 >
-                                                                  <Volume2 className="w-2.5 h-2.5 text-slate-500" />
-                                                                  <span>片段 {clip.clip_order} ({clip.duration_text})</span>
-                                                                </button>
-
-                                                                {isTranscribed && (
-                                                                  <div className="flex items-center gap-1 border-l border-slate-200 pl-1 ml-0.5">
-                                                                    {clip.transcript && (
-                                                                      <button
-                                                                        onClick={() => setActiveTranscriptModal({
-                                                                          title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
-                                                                          transcript: clip.transcript!,
-                                                                        })}
-                                                                        className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5"
-                                                                        title="查看转写文稿"
-                                                                      >
-                                                                        <FileText className="w-2.5 h-2.5" />
-                                                                        <span>文稿</span>
-                                                                      </button>
-                                                                    )}
-                                                                    <button
-                                                                      type="button"
-                                                                      onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        setConfirmRetryClipModal({
-                                                                          clipId: clip.id,
-                                                                          clipOrder: clip.clip_order,
-                                                                          durationText: clip.duration_text,
-                                                                          topic: m.topic,
-                                                                          hasTranscript: !!clip.transcript,
-                                                                        });
-                                                                      }}
-                                                                      className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
-                                                                      title="重新转写此片段语音"
-                                                                    >
-                                                                      <RotateCw className="w-2.5 h-2.5" />
-                                                                    </button>
-                                                                  </div>
-                                                                )}
-
-                                                                {isPending && (
-                                                                  <span className="flex items-center gap-0.5 text-amber-600 font-medium pl-1">
-                                                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                                                                    <span>转写中</span>
-                                                                  </span>
-                                                                )}
-
-                                                                {isFailed && (
                                                                   <button
-                                                                    onClick={() => setConfirmRetryClipModal({
-                                                                      clipId: clip.id,
-                                                                      clipOrder: clip.clip_order,
-                                                                      durationText: clip.duration_text,
-                                                                      topic: m.topic,
-                                                                      hasTranscript: !!clip.transcript,
-                                                                    })}
-                                                                    className="px-1 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] cursor-pointer"
-                                                                    title="重试转写"
+                                                                    onClick={() => handleOpenAudioPlayer(clip.audio_path, `${m.topic} - 片段 ${clip.clip_order}`)}
+                                                                    className="font-medium flex items-center gap-1 hover:underline cursor-pointer"
+                                                                    title="播放该录音片段"
                                                                   >
-                                                                    重试
+                                                                    <Volume2 className="w-2.5 h-2.5 text-slate-500" />
+                                                                    <span>片段 {clip.clip_order} ({clip.duration_text})</span>
                                                                   </button>
-                                                                )}
-                                                              </div>
-                                                            );
-                                                          })}
-                                                        </div>
-                                                      )}
+
+                                                                  {isTranscribed && (
+                                                                    <div className="flex items-center gap-1 border-l border-slate-200 pl-1 ml-0.5">
+                                                                      {clip.transcript && (
+                                                                        <button
+                                                                          onClick={() => setActiveTranscriptModal({
+                                                                            title: `🎙️ ${m.topic} - 片段 ${clip.clip_order} 转写文稿`,
+                                                                            transcript: clip.transcript!,
+                                                                          })}
+                                                                          className="text-indigo-600 hover:text-indigo-800 cursor-pointer flex items-center gap-0.5"
+                                                                          title="查看转写文稿"
+                                                                        >
+                                                                          <FileText className="w-2.5 h-2.5" />
+                                                                          <span>文稿</span>
+                                                                        </button>
+                                                                      )}
+                                                                      <button
+                                                                        type="button"
+                                                                        onClick={(e) => {
+                                                                          e.stopPropagation();
+                                                                          setConfirmRetryClipModal({
+                                                                            clipId: clip.id,
+                                                                            clipOrder: clip.clip_order,
+                                                                            durationText: clip.duration_text,
+                                                                            topic: m.topic,
+                                                                            hasTranscript: !!clip.transcript,
+                                                                          });
+                                                                        }}
+                                                                        className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer flex items-center rounded hover:bg-slate-100 transition-colors"
+                                                                        title="重新转写此片段语音"
+                                                                      >
+                                                                        <RotateCw className="w-2.5 h-2.5" />
+                                                                      </button>
+                                                                    </div>
+                                                                  )}
+
+                                                                  {isPending && (
+                                                                    <span className="flex items-center gap-0.5 text-amber-600 font-medium pl-1">
+                                                                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                                                      <span>转写中</span>
+                                                                    </span>
+                                                                  )}
+
+                                                                  {isFailed && (
+                                                                    <button
+                                                                      onClick={() => setConfirmRetryClipModal({
+                                                                        clipId: clip.id,
+                                                                        clipOrder: clip.clip_order,
+                                                                        durationText: clip.duration_text,
+                                                                        topic: m.topic,
+                                                                        hasTranscript: !!clip.transcript,
+                                                                      })}
+                                                                      className="px-1 py-0.2 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[9px] cursor-pointer"
+                                                                      title="重试转写"
+                                                                    >
+                                                                      重试
+                                                                    </button>
+                                                                  )}
+                                                                </div>
+                                                              );
+                                                            })}
+                                                          </div>
+                                                        )}
+
+                                                        <button
+                                                          type="button"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleOpenWriteRepoModal({
+                                                              projectId: m.project_id || entry.project_id,
+                                                              meetingId: m.id,
+                                                              topic: m.topic,
+                                                              summary: m.summary || "本次会议暂无详细总结纪要",
+                                                            });
+                                                          }}
+                                                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] bg-slate-800 hover:bg-slate-900 text-white cursor-pointer transition-all font-semibold shadow-2xs hover:shadow-xs active:scale-95"
+                                                          title="将此场会议纪要、录音切片与全部附件图纸一次性写入 Git 版本库"
+                                                        >
+                                                          <GitBranch className="w-3 h-3 text-emerald-400" />
+                                                          <span>写入版本库</span>
+                                                        </button>
+                                                      </div>
                                                     </div>
 
                                                     {/* 会议参考资料（文档与图片） */}
