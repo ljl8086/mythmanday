@@ -2039,6 +2039,72 @@ async fn get_meeting_repo_target_info(
 }
 
 #[tauri::command]
+async fn pick_repo_parent_folder(
+    repo_root: String,
+    current_parent: Option<String>,
+) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let root_path = std::path::PathBuf::from(&repo_root);
+        let init_dir = if let Some(ref cur) = current_parent {
+            let p = root_path.join(cur.trim_start_matches('/'));
+            if p.is_dir() {
+                p
+            } else {
+                root_path.clone()
+            }
+        } else {
+            root_path.clone()
+        };
+
+        // 1. 尝试 zenity 系统图形目录选择器
+        if let Ok(output) = std::process::Command::new("zenity")
+            .arg("--file-selection")
+            .arg("--directory")
+            .arg("--title=选择保存会议纪要的父目录")
+            .arg(format!("--filename={}/", init_dir.display()))
+            .output()
+        {
+            if output.status.success() {
+                let picked_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !picked_str.is_empty() {
+                    let picked_path = std::path::PathBuf::from(&picked_str);
+                    // 计算相对于仓库根目录的相对路径
+                    if let Ok(rel) = picked_path.strip_prefix(&root_path) {
+                        return Ok(Some(rel.to_string_lossy().to_string()));
+                    } else {
+                        // 如果选到了仓库外，则仍返回该选中的绝对路径
+                        return Ok(Some(picked_str));
+                    }
+                }
+            }
+        }
+
+        // 2. 尝试 kdialog (KDE 桌面环境备选)
+        if let Ok(output) = std::process::Command::new("kdialog")
+            .arg("--getexistingdirectory")
+            .arg(init_dir.display().to_string())
+            .output()
+        {
+            if output.status.success() {
+                let picked_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !picked_str.is_empty() {
+                    let picked_path = std::path::PathBuf::from(&picked_str);
+                    if let Ok(rel) = picked_path.strip_prefix(&root_path) {
+                        return Ok(Some(rel.to_string_lossy().to_string()));
+                    } else {
+                        return Ok(Some(picked_str));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn write_meeting_to_git_repo(
     state: State<'_, AppState>,
     project_id: String,
@@ -4816,6 +4882,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             open_material_file,
             get_system_clipboard,
             get_meeting_repo_target_info,
+            pick_repo_parent_folder,
             write_meeting_to_git_repo
         ])
         .run(tauri::generate_context!())

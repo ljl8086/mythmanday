@@ -6437,8 +6437,8 @@ export function App() {
 
               {/* 父目录选择与微调 */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="font-bold text-slate-700 flex items-center gap-1">
+                <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                  <label className="font-bold text-slate-700 flex items-center gap-1.5">
                     <span>📁 归档父目录 (相对路径)</span>
                     {writeRepoData.is_remembered ? (
                       <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200 font-semibold">
@@ -6446,39 +6446,78 @@ export function App() {
                       </span>
                     ) : (
                       <span className="text-[10px] text-violet-600 bg-violet-50 px-1.5 py-0.2 rounded border border-violet-200 font-semibold">
-                        ✨ 启发式/AI推荐
+                        ✨ 智能推荐
                       </span>
                     )}
                   </label>
-                  {writeRepoData.available_dirs.length > 0 && (
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-slate-400">快捷切换:</span>
-                      {writeRepoData.available_dirs.slice(0, 3).map((d) => (
-                        <button
-                          key={d}
-                          type="button"
-                          onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: d })}
-                          className={`text-[10px] px-1.5 py-0.5 rounded border font-mono transition-colors cursor-pointer ${
-                            writeRepoData.parent_dir === d
-                              ? "bg-indigo-600 text-white border-indigo-600"
-                              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
-                          }`}
-                        >
-                          {d}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const picked = await invoke<string | null>("pick_repo_parent_folder", {
+                          repoRoot: writeRepoData.repo_root,
+                          currentParent: writeRepoData.parent_dir || null,
+                        });
+                        if (picked) {
+                          setWriteRepoData((prev) => prev ? { ...prev, parent_dir: picked } : prev);
+                        }
+                      } catch (e: any) {
+                        showToast("打开目录选择器失败: " + e.toString());
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer shadow-2xs"
+                    title="在系统文件管理器中浏览并选择仓库内的文件夹"
+                  >
+                    <FolderOpen className="w-3 h-3 text-indigo-500" />
+                    <span>浏览选择目录...</span>
+                  </button>
                 </div>
-                <input
-                  type="text"
-                  value={writeRepoData.parent_dir}
-                  onChange={(e) => setWriteRepoData({ ...writeRepoData, parent_dir: e.target.value })}
-                  placeholder="例如: docs/meetings 或 doc"
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium"
-                />
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={writeRepoData.parent_dir}
+                    onChange={(e) => setWriteRepoData({ ...writeRepoData, parent_dir: e.target.value })}
+                    placeholder="例如: docs/meetings 或 doc（留空表示仓库根目录）"
+                    className="flex-1 h-9 px-3 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono font-medium"
+                  />
+                </div>
+
+                {/* 候选快捷目录列表 */}
+                {writeRepoData.available_dirs.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5 pt-1 border-t border-slate-100">
+                    <span className="text-[10px] text-slate-400 font-medium">仓库常用目录:</span>
+                    {writeRepoData.available_dirs.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: d })}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border font-mono transition-colors cursor-pointer ${
+                          writeRepoData.parent_dir === d
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setWriteRepoData({ ...writeRepoData, parent_dir: "" })}
+                      className={`text-[10px] px-2 py-0.5 rounded-full border font-mono transition-colors cursor-pointer ${
+                        writeRepoData.parent_dir === ""
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      }`}
+                      title="直接保存在仓库根目录"
+                    >
+                      / (根目录)
+                    </button>
+                  </div>
+                )}
+
                 <p className="text-[10px] text-slate-400 mt-1">
-                  后续写入将自动记住此父目录，无需每次重复选择。
+                  💡 您可直接手动修改输入框、点击上方快捷标签、或点击「浏览选择目录」通过系统对话框挑选。后续将自动记住此选择。
                 </p>
               </div>
 
