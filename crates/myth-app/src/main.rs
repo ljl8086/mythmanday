@@ -2287,16 +2287,42 @@ async fn write_meeting_to_git_repo(
         .trim_start_matches('/')
         .trim_end_matches('/');
 
-    // 严格安全检查：严禁将目标目录指向 .git 元数据目录或其子目录
+    // 1. 严格检查路径组件：严禁 ParentDir (..) 或绝对根路径组件，彻底防止路径穿越 (Path traversal)
+    for comp in std::path::Path::new(rel_parent).components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                return Err("安全拦截：归档父目录不允许包含 '..' 路径遍历符号！".to_string());
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("安全拦截：归档父目录必须为相对路径！".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    for comp in std::path::Path::new(&clean_folder_name).components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                return Err("安全拦截：专属子目录名称不允许包含 '..' 路径遍历符号！".to_string());
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("安全拦截：专属子目录名称必须为纯子目录名！".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    // 2. 检查规范化路径片段：严禁将目标目录指向 .git 元数据目录或其任何子目录
     let normalized_parent = rel_parent.replace('\\', "/");
     let normalized_folder = clean_folder_name.replace('\\', "/");
-    if normalized_parent == ".git"
-        || normalized_parent.starts_with(".git/")
-        || normalized_folder == ".git"
-        || normalized_folder.starts_with(".git/")
-        || normalized_parent.contains("/.git/")
-        || normalized_parent.ends_with("/.git")
-    {
+    let full_rel = if normalized_parent.is_empty() {
+        normalized_folder.clone()
+    } else {
+        format!("{}/{}", normalized_parent, normalized_folder)
+    };
+
+    let segments: Vec<&str> = full_rel.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.iter().any(|&s| s == ".git") {
         return Err("安全拦截：严禁将归档目标目录设置为 Git 元数据目录 (.git)！".to_string());
     }
 
@@ -2306,15 +2332,26 @@ async fn write_meeting_to_git_repo(
         repo_root.join(rel_parent).join(&clean_folder_name)
     };
 
-    // 确保目标路径位于 repo_root 内部，防止路径遍历 (Path traversal)
+    // 3. 校验最近的存在祖先目录，确保严格包含在仓库根目录内
     let canonical_root = repo_root
         .canonicalize()
-        .unwrap_or_else(|_| repo_root.clone());
-    let target_parent_to_check = target_meeting_dir.parent().unwrap_or(&repo_root);
-    if let Ok(canon_parent) = target_parent_to_check.canonicalize() {
-        if !canon_parent.starts_with(&canonical_root) {
+        .map_err(|e| format!("解析仓库根目录绝对路径失败: {}", e))?;
+
+    let mut ancestor = target_meeting_dir.as_path();
+    while !ancestor.exists() {
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            break;
+        }
+    }
+
+    if let Ok(canon_ancestor) = ancestor.canonicalize() {
+        if !canon_ancestor.starts_with(&canonical_root) {
             return Err("安全拦截：目标归档目录超出了指定的 Git 仓库根目录！".to_string());
         }
+    } else {
+        return Err("安全拦截：无法解析目标路径所在祖先目录！".to_string());
     }
 
     let assets_dir = target_meeting_dir.join("assets");
