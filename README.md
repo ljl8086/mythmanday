@@ -7,6 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8.svg?style=flat-square&logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/ljl8086/mythmanday/releases)
+[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo%20Video-red.svg?style=flat-square&logo=youtube)](https://www.youtube.com/watch?v=g36MoGdiNoc)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 **中文说明** | [**English Documentation**](README_EN.md)
@@ -19,6 +20,12 @@
 **终结月底痛苦手搓 Excel 的噩梦，让每一次代码编写、会议扯皮与并行投入，都能合法合规地变成无可辩驳的结算人天。**
 
 ![MythManDay Dashboard](docs/images/dashboard_preview.png)
+
+### 📺 快速上手视频演示 (Video Demo)
+
+[![MythManDay Demo Video](https://img.youtube.com/vi/g36MoGdiNoc/maxresdefault.jpg)](https://www.youtube.com/watch?v=g36MoGdiNoc)
+
+> 💡 **点击上方封面或 [直达 YouTube 视频](https://www.youtube.com/watch?v=g36MoGdiNoc) 观看完整产品实操与功能演练（支持中英双语字幕）。**
 
 ---
 
