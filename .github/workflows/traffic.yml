@@ -1,0 +1,45 @@
+name: Repository Traffic Archiver
+
+on:
+  schedule:
+    # 每天 UTC 03:00 (北京时间 11:00) 自动采集并归档流量
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  administration: read
+
+jobs:
+  archive-traffic:
+    name: Archive Traffic Data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Traffic Archiver
+        env:
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/archive_traffic.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add traffic-data/
+          if git diff --staged --quiet; then
+            echo "No traffic data changes to commit."
+          else
+            git commit -m "chore(traffic): update repository traffic stats [skip ci]"
+            git push origin HEAD:master
+          fi

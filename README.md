@@ -202,6 +202,8 @@ mythmanday
 chmod +x ./install.sh && ./install.sh
 ```
 
+> 💡 **如果 MythManDay 改善了您的工时对账与商业交付体验，请顺手在右上角点亮一颗 ⭐ Star！您的支持是作者持续迭代的最大动力。**
+
 #### 📦 Linux 制作 .deb 安装包 (生成于 dist 目录)
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
@@ -235,9 +237,11 @@ cargo build --release --bin mythmanday-app
 
 ---
 
-## 📈 Star History
+## 📈 Star History & 流量数据
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ljl8086/mythmanday&type=Date)](https://star-history.com/#ljl8086/mythmanday&Date)
+
+- [📊 查阅仓库完整历史访问与代码克隆流量明细 (Traffic Archive)](traffic-data/README.md)
 
 ---
 
