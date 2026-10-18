@@ -196,6 +196,8 @@ mythmanday
 chmod +x ./install.sh && ./install.sh
 ```
 
+> 💡 **If MythManDay helps streamline your timesheet billing, please give us a ⭐ Star on GitHub! Your support keeps this project going.**
+
 #### 📦 Build Debian / Ubuntu `.deb` Package
 ```bash
 chmod +x ./scripts/build-deb.sh && ./scripts/build-deb.sh
@@ -227,9 +229,11 @@ cargo build --release --bin mythmanday-app
 
 ---
 
-## 📈 Star History
+## 📈 Star History & Traffic Archive
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ljl8086/mythmanday&type=Date)](https://star-history.com/#ljl8086/mythmanday&Date)
+
+- [📊 View Full Repository Traffic & Clone History (Traffic Archive)](traffic-data/README.md)
 
 ---
 
