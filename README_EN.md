@@ -10,7 +10,7 @@
 [![YouTube Demo](https://img.shields.io/badge/YouTube-Demo%20Video-red.svg?style=flat-square&logo=youtube)](https://www.youtube.com/watch?v=g36MoGdiNoc)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
-[**中文说明**](README.md) | **English**
+[**中文说明**](README_CN.md) | **English**
 
 > **“In the AI era, adding manpower to a late software project makes it later;  
 > but tracking keystrokes with traditional punch-clocks only punishes your high efficiency.”**  

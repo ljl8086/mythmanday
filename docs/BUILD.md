@@ -1,7 +1,8 @@
 # 跨平台编译与打包发布指南 (Multi-Platform Build Guide)
 
 > **软件全称**：人天神话-开发者人天中台 [简称：MythManDay] V0.1.0  
-> 本文档介绍如何在 **Linux**、**Windows** 和 **macOS** 平台上编译、打包与安装 **人天神话-开发者人天中台 (MythManDay)** 客户端。
+> 本文档介绍如何在 **Linux**、**Windows** 和 **macOS** 平台上编译、打包与安装 **人天神话-开发者人天中台 (MythManDay)** 客户端。  
+> 📺 **功能实操与视频演示**：可先观看 [YouTube 快速上手演练视频](https://www.youtube.com/watch?v=g36MoGdiNoc)（支持中英双语字幕）。
 
 ---
 

@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8D8.svg?style=flat-square&logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey?style=flat-square&logo=linux)](https://github.com/ljl8086/mythmanday/releases)
-[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo%20Video-red.svg?style=flat-square&logo=youtube)](https://www.youtube.com/watch?v=g36MoGdiNoc)
+[![YouTube 视频演示](https://img.shields.io/badge/YouTube-视频演示-red.svg?style=flat-square&logo=youtube)](https://www.youtube.com/watch?v=g36MoGdiNoc)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 **中文说明** | [**English Documentation**](README_EN.md)
