@@ -8,7 +8,10 @@ pub mod player;
 pub mod recorder;
 
 pub use player::AudioPlayer;
-pub use recorder::{convert_wav_to_mp3, ensure_whisper_compatible_wav, AudioError, AudioRecorder};
+pub use recorder::{
+    convert_wav_to_mp3, ensure_whisper_compatible_wav, split_audio_into_chunks, AudioError,
+    AudioRecorder,
+};
 
 #[cfg(test)]
 mod tests {
@@ -59,5 +62,38 @@ mod tests {
         // 清理临时测试文件
         let _ = std::fs::remove_file(&input_wav);
         let _ = std::fs::remove_file(&converted);
+    }
+
+    #[test]
+    fn test_split_audio_into_chunks() {
+        let temp_dir = std::env::temp_dir();
+        let test_wav = temp_dir.join(format!("test_split_input_{}.wav", uuid::Uuid::new_v4()));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        {
+            let mut writer = hound::WavWriter::create(&test_wav, spec).expect("create test wav");
+            // 生成 5 秒钟的音频: 16000 * 5 = 80000 个采样
+            for i in 0..80000 {
+                let sample = ((i as f32 / 50.0).sin() * 5000.0) as i16;
+                writer.write_sample(sample).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+
+        let out_dir = temp_dir.join(format!("test_split_out_{}", uuid::Uuid::new_v4()));
+        // 切割为每段 2 秒
+        let chunks = split_audio_into_chunks(&test_wav, 2, &out_dir).expect("split should succeed");
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks, got {}",
+            chunks.len()
+        );
+
+        let _ = std::fs::remove_file(&test_wav);
+        let _ = std::fs::remove_dir_all(&out_dir);
     }
 }

@@ -351,6 +351,68 @@ pub fn convert_wav_to_mp3(wav_path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// 将过大的音频文件切分为适合云端 API (通常限制 25MB) 转写的分段切片。
+/// 返回切片后的文件绝对路径列表，按时间顺序排列。
+pub fn split_audio_into_chunks(
+    audio_path: &Path,
+    segment_duration_secs: u32,
+    output_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    if !audio_path.exists() {
+        return Err(format!("音频文件不存在: {}", audio_path.display()));
+    }
+
+    std::fs::create_dir_all(output_dir).map_err(|e| format!("创建切片临时目录失败: {}", e))?;
+
+    let ext = audio_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mp3");
+
+    let pattern = output_dir.join(format!("chunk_%04d.{}", ext));
+    let pattern_str = pattern.to_string_lossy().to_string();
+
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-f")
+        .arg("segment")
+        .arg("-segment_time")
+        .arg(segment_duration_secs.to_string())
+        .arg("-c")
+        .arg("copy")
+        .arg(&pattern_str)
+        .output()
+        .map_err(|e| format!("启动 ffmpeg 切分音频失败: {}", e))?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg 切片异常: {}", err_msg));
+    }
+
+    let mut chunk_paths = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    if file_name.starts_with("chunk_") && file_name.ends_with(ext) {
+                        chunk_paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    chunk_paths.sort();
+    if chunk_paths.is_empty() {
+        return Err("音频切片后未发现任何有效切片文件".to_string());
+    }
+
+    Ok(chunk_paths)
+}
+
 /// 确保音频为 whisper.cpp 严格要求的 16kHz 单声道 (Mono) 16-bit PCM WAV 格式。
 /// 若当前音频已符合标准则直接返回；若非 16kHz 或非单声道（如硬件声卡默认 44.1k/48k 双声道），
 /// 则优先调用本地 ffmpeg 转码，或使用内建轻量重采样与声道合并算法生成合规 WAV。
