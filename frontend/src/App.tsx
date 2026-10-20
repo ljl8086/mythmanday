@@ -881,6 +881,18 @@ export function App() {
       unlistenFn = unlisten;
     }).catch(console.error);
 
+    let unlistenErrorFn: (() => void) | undefined;
+    listen<any>("meeting_summary_error", (event) => {
+      const data = event.payload;
+      showToast(`❌ 会议【${data.topic}】${data.error || "提炼纪要失败"}`);
+      refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
+    }).then((unlisten) => {
+      unlistenErrorFn = unlisten;
+    }).catch(console.error);
+
     let unlistenClipFn: (() => void) | undefined;
     listen<any>("meeting_clip_ready", () => {
       setRetryingClipIds(new Set());
@@ -894,6 +906,7 @@ export function App() {
 
     return () => {
       if (unlistenFn) unlistenFn();
+      if (unlistenErrorFn) unlistenErrorFn();
       if (unlistenClipFn) unlistenClipFn();
     };
   }, [selectedProjectId, selectedMonth]);
