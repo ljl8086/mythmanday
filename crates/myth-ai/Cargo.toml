@@ -20,6 +20,7 @@ futures-util = "0.3"
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
 base64 = "0.22"
+uuid.workspace = true
 
 
 [dev-dependencies]

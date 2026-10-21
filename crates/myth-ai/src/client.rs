@@ -1260,10 +1260,113 @@ impl AiSummarizer {
             .cloned()
             .unwrap_or_else(|| "whisper-1".to_string());
 
-        let file_bytes = tokio::fs::read(&actual_audio_path)
+        let url = format!(
+            "{}/audio/transcriptions",
+            asr_api_base.trim_end_matches('/')
+        );
+
+        // 检查音频文件大小。云端 Whisper 接口（Groq、OpenAI 等）普遍限制单个请求体 <= 25MB。
+        // 若音频体积超限（例如超过 20MB），则自动进行分段切片（每段约 10 分钟）并顺序转写合并。
+        const MAX_DIRECT_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
+        let file_meta = tokio::fs::metadata(&actual_audio_path)
             .await
             .map_err(|e| AiError::ParseError(e.to_string()))?;
-        let filename = actual_audio_path
+
+        if file_meta.len() > MAX_DIRECT_UPLOAD_BYTES {
+            let temp_chunks_dir = std::env::temp_dir()
+                .join(format!("myth_asr_chunks_{}", uuid::Uuid::new_v4().simple()));
+            let audio_path_clone = actual_audio_path.clone();
+            let chunks_dir_clone = temp_chunks_dir.clone();
+
+            let chunk_paths_res = tokio::task::spawn_blocking(move || {
+                // 每段 600 秒 (10 分钟)，64kbps MP3 约 4.8MB，远低于 25MB 限制
+                myth_audio::split_audio_into_chunks(&audio_path_clone, 600, &chunks_dir_clone)
+            })
+            .await
+            .map_err(|e| AiError::ParseError(e.to_string()))?;
+
+            let chunk_paths = match chunk_paths_res {
+                Ok(paths) => paths,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&temp_chunks_dir);
+                    return Err(AiError::ParseError(format!("分段切片失败: {}", e)));
+                }
+            };
+
+            let mut aggregated_transcript = String::new();
+            let mut last_context_prompt = effective_prompt.clone();
+
+            for chunk_file in &chunk_paths {
+                let chunk_result = self
+                    .transcribe_single_audio_file(
+                        &url,
+                        &asr_api_key,
+                        &asr_model,
+                        chunk_file,
+                        last_context_prompt.as_deref(),
+                    )
+                    .await;
+
+                match chunk_result {
+                    Ok(chunk_text) => {
+                        let cleaned = clean_repetitive_text(&chunk_text);
+                        if !cleaned.is_empty() {
+                            if !aggregated_transcript.is_empty() {
+                                aggregated_transcript.push('\n');
+                            }
+                            aggregated_transcript.push_str(&cleaned);
+
+                            // 取切片文末最近 100 个字符作为下一段转写的 prompt 上下文，增强长音频接缝识别的连贯性
+                            let prompt_tail: String = cleaned
+                                .chars()
+                                .rev()
+                                .take(100)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            last_context_prompt = match &effective_prompt {
+                                Some(orig) => Some(format!("{}, {}", orig.trim(), prompt_tail)),
+                                None => Some(prompt_tail),
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        let _ = std::fs::remove_dir_all(&temp_chunks_dir);
+                        return Err(e);
+                    }
+                }
+            }
+
+            let _ = std::fs::remove_dir_all(&temp_chunks_dir);
+            return Ok(clean_repetitive_text(&aggregated_transcript));
+        }
+
+        let text = self
+            .transcribe_single_audio_file(
+                &url,
+                &asr_api_key,
+                &asr_model,
+                &actual_audio_path,
+                effective_prompt.as_deref(),
+            )
+            .await?;
+        Ok(clean_repetitive_text(&text))
+    }
+
+    /// 单个音频文件向云端 Whisper ASR 接口发起上传转写
+    async fn transcribe_single_audio_file(
+        &self,
+        url: &str,
+        asr_api_key: &str,
+        asr_model: &str,
+        audio_path: &std::path::Path,
+        prompt: Option<&str>,
+    ) -> Result<String, AiError> {
+        let file_bytes = tokio::fs::read(audio_path)
+            .await
+            .map_err(|e| AiError::ParseError(e.to_string()))?;
+        let filename = audio_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("audio.mp3")
@@ -1282,7 +1385,7 @@ impl AiSummarizer {
 
         let mut form = reqwest::multipart::Form::new()
             .part("file", part)
-            .text("model", asr_model)
+            .text("model", asr_model.to_string())
             .text("response_format", "text");
 
         if let Some(ref lang) = self.config.asr.language {
@@ -1291,20 +1394,15 @@ impl AiSummarizer {
             }
         }
 
-        if let Some(ref p) = effective_prompt {
+        if let Some(p) = prompt {
             if !p.trim().is_empty() {
-                form = form.text("prompt", p.clone());
+                form = form.text("prompt", p.to_string());
             }
         }
 
-        let url = format!(
-            "{}/audio/transcriptions",
-            asr_api_base.trim_end_matches('/')
-        );
-
         let resp = self
             .client
-            .post(&url)
+            .post(url)
             .header("Authorization", format!("Bearer {}", asr_api_key))
             .multipart(form)
             .send()
@@ -1320,7 +1418,7 @@ impl AiSummarizer {
         }
 
         let text = resp.text().await.map_err(AiError::Reqwest)?;
-        Ok(clean_repetitive_text(&text))
+        Ok(text)
     }
 }
 
