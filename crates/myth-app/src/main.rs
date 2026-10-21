@@ -1693,39 +1693,77 @@ async fn finish_meeting(
             .list_materials_for_meeting(&m_id)
             .unwrap_or_default();
 
-        let summary = match summarizer.summarize_meeting(&topic_clone, duration_hours, &notes, &materials, None, Some(&combined_transcript)).await {
-            Ok(sum) => sum,
-            Err(_) => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_clone),
-        };
+        let summary_res = summarizer
+            .summarize_meeting(
+                &topic_clone,
+                duration_hours,
+                &notes,
+                &materials,
+                None,
+                Some(&combined_transcript),
+            )
+            .await;
 
-        // 更新会议记录的 meeting_summary，并清理每日工时中的【会议进行中 🎙️】临时占位符
-        {
-            let guard = db_for_async.lock().unwrap();
-            if let Ok(Some(mut m)) = guard.get_meeting(&m_id) {
-                m.meeting_summary = Some(summary.clone());
-                m.status = "completed".to_string();
-                let _ = guard.insert_meeting(&m);
-            }
-            if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
-                if let Some(ref s) = e.summary {
-                    if s.contains("【会议进行中 🎙️】") {
-                        e.summary = None;
-                        let _ = guard.insert_time_entry(&e);
+        match summary_res {
+            Ok(summary) => {
+                // 更新会议记录的 meeting_summary，并清理每日工时中的【会议进行中 🎙️】临时占位符
+                {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut m)) = guard.get_meeting(&m_id) {
+                        m.meeting_summary = Some(summary.clone());
+                        m.status = "completed".to_string();
+                        let _ = guard.insert_meeting(&m);
+                    }
+                    if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
+                        if let Some(ref s) = e.summary {
+                            if s.contains("【会议进行中 🎙️】") {
+                                e.summary = None;
+                                let _ = guard.insert_time_entry(&e);
+                            }
+                        }
                     }
                 }
+
+                let payload = MeetingSummaryReadyDto {
+                    meeting_id: Some(m_id.to_string()),
+                    project_id: pid.to_string(),
+                    entry_id: Some(entry_id.to_string()),
+                    topic: topic_clone,
+                    audio_path: String::new(),
+                    transcript: combined_transcript,
+                    summary,
+                };
+                let _ = app_handle.emit("meeting_summary_ready", payload);
+            }
+            Err(e) => {
+                let err_msg = format!("AI 提炼会议纪要失败: {}", e);
+                // 严禁私自兜底伪造纪要！状态置为 completed 保留转写文稿与录音，但不写入虚假 summary
+                {
+                    let guard = db_for_async.lock().unwrap();
+                    if let Ok(Some(mut m)) = guard.get_meeting(&m_id) {
+                        m.status = "completed".to_string();
+                        let _ = guard.insert_meeting(&m);
+                    }
+                    if let Ok(Some(mut e)) = guard.get_time_entry(&entry_id) {
+                        if let Some(ref s) = e.summary {
+                            if s.contains("【会议进行中 🎙️】") {
+                                e.summary = None;
+                                let _ = guard.insert_time_entry(&e);
+                            }
+                        }
+                    }
+                }
+
+                let _ = app_handle.emit(
+                    "meeting_summary_error",
+                    serde_json::json!({
+                        "meeting_id": m_id.to_string(),
+                        "topic": topic_clone,
+                        "error": err_msg,
+                    }),
+                );
             }
         }
-
-        let payload = MeetingSummaryReadyDto {
-            meeting_id: Some(m_id.to_string()),
-            project_id: pid.to_string(),
-            entry_id: Some(entry_id.to_string()),
-            topic: topic_clone,
-            audio_path: String::new(),
-            transcript: combined_transcript,
-            summary,
-        };
-        let _ = app_handle.emit("meeting_summary_ready", payload);
     });
 
     Ok(StopMeetingResultDto {
@@ -3842,10 +3880,17 @@ async fn transcribe_entry_audio(
         .map_err(|e| e.to_string())?;
 
     // AI 结构化精炼提取（基于转写文本提取核心议题、技术决议与交付待办）
-    let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &[], &[], Some(&audio_path), Some(&transcript)).await {
-        Ok(sum) if !sum.trim().is_empty() => sum,
-        _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
-    };
+    let ai_summary = summarizer
+        .summarize_meeting(
+            "会议交流与技术讨论",
+            1.0,
+            &[],
+            &[],
+            Some(&audio_path),
+            Some(&transcript),
+        )
+        .await
+        .map_err(|e| format!("AI 提炼纪要失败: {}", e))?;
 
     let guard = db.lock().unwrap();
     if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
@@ -3932,10 +3977,21 @@ async fn resummarize_meeting_entry(
                 .unwrap()
                 .list_materials_for_meeting(&m.id)
                 .unwrap_or_default();
-            let summary = match summarizer.summarize_meeting(&topic_for_sum, duration_hours, &notes, &materials, None, Some(&combined_transcript)).await {
-                Ok(sum) if !sum.trim().is_empty() => sum,
-                _ => format!("1. 【核心议题】{}\n2. 【达成共识】已完成会议沟通与各录音片段归档。\n3. 【后续待办】待人工补充纪要要点。", topic_for_sum),
-            };
+            let summary = summarizer
+                .summarize_meeting(
+                    &topic_for_sum,
+                    duration_hours,
+                    &notes,
+                    &materials,
+                    None,
+                    Some(&combined_transcript),
+                )
+                .await
+                .map_err(|e| format!("AI 提炼纪要失败: {}", e))?;
+
+            if summary.trim().is_empty() {
+                return Err("AI 提炼结果为空".to_string());
+            }
 
             // 重新从数据库获取最新 meeting 实例，防止覆盖 AI 请求期间由 finish_meeting 更新的最新状态
             {
@@ -3966,10 +4022,17 @@ async fn resummarize_meeting_entry(
             .await
             .map_err(|e| format!("语音转写失败: {}", e))?;
 
-        let ai_summary = match summarizer.summarize_meeting("会议交流与技术讨论", 1.0, &notes, &[], Some(&entry_audio_path), Some(&transcript)).await {
-            Ok(sum) if !sum.trim().is_empty() => sum,
-            _ => format!("1. 【核心议题】会议研讨与技术方案沟通\n2. 【讨论要点】已转写录音内容。\n3. 【后续待办】落实会议共识。"),
-        };
+        let ai_summary = summarizer
+            .summarize_meeting(
+                "会议交流与技术讨论",
+                1.0,
+                &notes,
+                &[],
+                Some(&entry_audio_path),
+                Some(&transcript),
+            )
+            .await
+            .map_err(|e| format!("AI 提炼纪要失败: {}", e))?;
 
         let new_summary = if transcript.is_empty() {
             ai_summary
