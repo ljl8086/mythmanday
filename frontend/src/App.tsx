@@ -748,14 +748,26 @@ export function App() {
     }
   };
 
+  const markdownCacheRef = useRef<Map<string, string>>(new Map());
+
   const renderMarkdown = (content: string) => {
     if (!content) return "";
+    const cached = markdownCacheRef.current.get(content);
+    if (cached !== undefined) return cached;
+
+    let html: string;
     try {
       const rawHtml = marked.parse(content, { breaks: true, gfm: true }) as string;
-      return DOMPurify.sanitize(rawHtml);
+      html = DOMPurify.sanitize(rawHtml);
     } catch {
-      return DOMPurify.sanitize(content);
+      html = DOMPurify.sanitize(content);
     }
+
+    if (markdownCacheRef.current.size > 200) {
+      markdownCacheRef.current.clear();
+    }
+    markdownCacheRef.current.set(content, html);
+    return html;
   };
 
 
@@ -824,39 +836,34 @@ export function App() {
   }, [selectedProjectId, selectedMonth]);
 
   // 高性能解耦轮询：消除无差别的每秒全量 IPC 与 SQLite 全表扫描
-  // 1) 仅当有项目运行计时时，每秒仅轻量获取项目计时器状态；
-  // 2) 依赖项仅订阅布尔值 hasRunningProject，避免 setProjects 导致定时器每秒销毁重建
+  // 1) 仅当有项目运行计时时，每秒仅轻量获取项目计时器状态与录音横幅；
+  // 2) 工时流水与会议卡片由事件驱动刷新，绝不在每秒轮询中高频全量重新渲染 DOM
   const hasRunningProject = projects.some((p) => p.is_running);
+  const isRecordingAudio = globalStats.is_recording_audio;
   useEffect(() => {
-    if (!hasRunningProject) {
+    if (!hasRunningProject && !isRecordingAudio) {
       const idleInterval = setInterval(() => {
         refreshData();
         if (selectedProjectId) {
           refreshProjectDetails(selectedProjectId, selectedMonth);
         }
-      }, 30000);
+      }, 60000);
       return () => clearInterval(idleInterval);
     }
 
-    // 仅在有计时任务时，每秒轻量轮询项目计时状态与录音横幅，每 5 秒同步一次工时流水
-    let tickCount = 0;
     const timerInterval = setInterval(async () => {
       try {
         const projs = await invoke<Project[]>("get_projects");
         setProjects(projs);
         const stats = await invoke<GlobalStats>("get_global_stats");
         setGlobalStats(stats);
-        tickCount++;
-        if (tickCount % 5 === 0 && selectedProjectId) {
-          refreshProjectDetails(selectedProjectId, selectedMonth);
-        }
       } catch (e) {
         console.error(e);
       }
     }, 1000);
 
     return () => clearInterval(timerInterval);
-  }, [hasRunningProject, selectedProjectId, selectedMonth]);
+  }, [hasRunningProject, isRecordingAudio, selectedProjectId, selectedMonth]);
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;

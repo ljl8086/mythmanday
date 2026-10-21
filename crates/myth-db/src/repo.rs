@@ -945,6 +945,90 @@ impl Database {
         Ok(())
     }
 
+    /// 批量查询指定项目名下所有会议的录音片段，返回以 meeting_id 为键的映射，彻底消除 N+1 查询
+    pub fn list_audio_clips_for_project(
+        &self,
+        project_id: &Uuid,
+    ) -> Result<std::collections::HashMap<Uuid, Vec<MeetingAudioClip>>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT c.id, c.meeting_id, c.clip_order, c.audio_path, c.duration_secs,
+                      c.transcript, c.status, c.created_at
+               FROM meeting_audio_clips c
+               INNER JOIN meetings m ON c.meeting_id = m.id
+               WHERE m.project_id = ?1
+               ORDER BY c.meeting_id, c.clip_order ASC"#,
+        )?;
+
+        let rows = stmt.query_map(params![project_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let dur: i64 = row.get(4)?;
+            let c_str: String = row.get(7)?;
+            Ok(MeetingAudioClip {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                clip_order: row.get(2)?,
+                audio_path: row.get(3)?,
+                duration_secs: dur.max(0) as u64,
+                transcript: row.get(5)?,
+                status: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        let mut map: std::collections::HashMap<Uuid, Vec<MeetingAudioClip>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let clip = r?;
+            map.entry(clip.meeting_id).or_default().push(clip);
+        }
+        Ok(map)
+    }
+
+    /// 批量查询指定项目名下所有会议的参考资料，返回以 meeting_id 为键的映射，彻底消除 N+1 查询
+    pub fn list_materials_for_project(
+        &self,
+        project_id: &Uuid,
+    ) -> Result<std::collections::HashMap<Uuid, Vec<MeetingMaterial>>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT mat.id, mat.meeting_id, mat.file_name, mat.file_type, mat.file_path,
+                      mat.file_size, mat.extracted_text, mat.created_at
+               FROM meeting_materials mat
+               INNER JOIN meetings m ON mat.meeting_id = m.id
+               WHERE m.project_id = ?1
+               ORDER BY mat.meeting_id, mat.created_at ASC"#,
+        )?;
+
+        let rows = stmt.query_map(params![project_id.to_string()], |row| {
+            let id_str: String = row.get(0)?;
+            let m_id_str: String = row.get(1)?;
+            let f_size: i64 = row.get(5)?;
+            let c_str: String = row.get(7)?;
+            Ok(MeetingMaterial {
+                id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                meeting_id: Uuid::parse_str(&m_id_str).unwrap_or_default(),
+                file_name: row.get(2)?,
+                file_type: row.get(3)?,
+                file_path: row.get(4)?,
+                file_size: f_size.max(0) as u64,
+                extracted_text: row.get(6)?,
+                created_at: DateTime::parse_from_rfc3339(&c_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+
+        let mut map: std::collections::HashMap<Uuid, Vec<MeetingMaterial>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let mat = r?;
+            map.entry(mat.meeting_id).or_default().push(mat);
+        }
+        Ok(map)
+    }
+
     // --- 便签 CRUD ---
     pub fn insert_quick_note(&self, note: &QuickNote) -> Result<()> {
         self.conn.execute(

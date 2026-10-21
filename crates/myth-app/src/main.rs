@@ -527,15 +527,27 @@ fn get_daily_groups(
     month: Option<String>,
 ) -> Result<Vec<DayGroupDto>, String> {
     let pid = Uuid::parse_str(&project_id).map_err(|e| e.to_string())?;
-    let entries = state
-        .db
-        .lock()
-        .unwrap()
-        .list_entries_for_project(&pid)
-        .unwrap_or_default();
-    let projs = state.db.lock().unwrap().list_projects().unwrap_or_default();
+
+    // 一次性获取全量数据，消除原本在循环内逐条查询产生的 N+1 数据库锁竞争与慢查询
+    let (entries, projs, all_meetings, mut clips_by_meeting, mut materials_by_meeting) = {
+        let db = state.db.lock().unwrap();
+        let es = db.list_entries_for_project(&pid).unwrap_or_default();
+        let ps = db.list_projects().unwrap_or_default();
+        let ms = db.list_meetings_for_project(&pid).unwrap_or_default();
+        let clips_map = db.list_audio_clips_for_project(&pid).unwrap_or_default();
+        let mats_map = db.list_materials_for_project(&pid).unwrap_or_default();
+        (es, ps, ms, clips_map, mats_map)
+    };
+
     let proj = projs.iter().find(|p| p.id == pid);
     let currency = proj.map(|p| p.currency.as_str()).unwrap_or("CNY");
+
+    // 将 meetings 按 entry_id 聚类
+    let mut meetings_by_entry: std::collections::HashMap<Uuid, Vec<myth_core::Meeting>> =
+        std::collections::HashMap::new();
+    for m in all_meetings {
+        meetings_by_entry.entry(m.entry_id).or_default().push(m);
+    }
 
     let mut days_map: BTreeMap<String, Vec<EntryDto>> = BTreeMap::new();
     for e in entries {
@@ -565,21 +577,11 @@ fn get_daily_groups(
             "normal".to_string()
         };
 
-        let meetings = state
-            .db
-            .lock()
-            .unwrap()
-            .list_meetings_for_entry(&e.id)
-            .unwrap_or_default();
+        let meetings = meetings_by_entry.remove(&e.id).unwrap_or_default();
         let meeting_dtos: Vec<MeetingDetailDto> = meetings
             .into_iter()
             .map(|m| {
-                let clips = state
-                    .db
-                    .lock()
-                    .unwrap()
-                    .list_audio_clips_for_meeting(&m.id)
-                    .unwrap_or_default();
+                let clips = clips_by_meeting.remove(&m.id).unwrap_or_default();
                 let clip_dtos: Vec<AudioClipDto> = clips
                     .into_iter()
                     .map(|c| AudioClipDto {
@@ -593,12 +595,7 @@ fn get_daily_groups(
                     })
                     .collect();
 
-                let materials = state
-                    .db
-                    .lock()
-                    .unwrap()
-                    .list_materials_for_meeting(&m.id)
-                    .unwrap_or_default();
+                let materials = materials_by_meeting.remove(&m.id).unwrap_or_default();
                 let material_dtos: Vec<MeetingMaterialDto> =
                     materials.iter().map(map_material_to_dto).collect();
 
