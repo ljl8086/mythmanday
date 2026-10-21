@@ -1289,7 +1289,18 @@ impl AiSummarizer {
                 Ok(paths) => paths,
                 Err(e) => {
                     let _ = std::fs::remove_dir_all(&temp_chunks_dir);
-                    return Err(AiError::ParseError(format!("分段切片失败: {}", e)));
+                    tracing::warn!("音频切片失败 ({})，回退尝试直接上传原音频", e);
+                    // 切片工具不可用或切片失败时，优雅降级直接上传，避免直接阻断转写
+                    let text = self
+                        .transcribe_single_audio_file(
+                            &url,
+                            &asr_api_key,
+                            &asr_model,
+                            &actual_audio_path,
+                            effective_prompt.as_deref(),
+                        )
+                        .await?;
+                    return Ok(clean_repetitive_text(&text));
                 }
             };
 

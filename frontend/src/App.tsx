@@ -1465,6 +1465,9 @@ export function App() {
       setMeetingTopic("");
       showToast(res);
       refreshData();
+      if (selectedProjectId) {
+        refreshProjectDetails(selectedProjectId, selectedMonth);
+      }
     } catch (e: any) {
       showToast(e.toString());
     }
