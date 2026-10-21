@@ -410,7 +410,42 @@ pub fn split_audio_into_chunks(
         return Err("音频切片后未发现任何有效切片文件".to_string());
     }
 
-    Ok(chunk_paths)
+    // 严密检查切片体积：确保每个切片均不超过 20MB (20 * 1024 * 1024 字节)
+    // 若原音频采用未压缩格式或高码率，流式拷贝的切片依然可能超过 20MB，此时需对超标切片强制转码压缩
+    const MAX_ALLOWED_CHUNK_BYTES: u64 = 20 * 1024 * 1024;
+    let mut final_paths = Vec::new();
+    for p in chunk_paths {
+        let meta = std::fs::metadata(&p).map_err(|e| format!("读取切片元数据失败: {}", e))?;
+        if meta.len() > MAX_ALLOWED_CHUNK_BYTES {
+            let compressed_chunk = p.with_file_name(format!(
+                "compressed_{}.mp3",
+                p.file_stem().and_then(|s| s.to_str()).unwrap_or("chunk")
+            ));
+            let conv_res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(&p)
+                .arg("-vn")
+                .arg("-ar")
+                .arg("16000")
+                .arg("-ac")
+                .arg("1")
+                .arg("-b:a")
+                .arg("64k")
+                .arg(&compressed_chunk)
+                .output();
+            if let Ok(out) = conv_res {
+                if out.status.success() && compressed_chunk.exists() {
+                    let _ = std::fs::remove_file(&p);
+                    final_paths.push(compressed_chunk);
+                    continue;
+                }
+            }
+        }
+        final_paths.push(p);
+    }
+
+    Ok(final_paths)
 }
 
 /// 确保音频为 whisper.cpp 严格要求的 16kHz 单声道 (Mono) 16-bit PCM WAV 格式。

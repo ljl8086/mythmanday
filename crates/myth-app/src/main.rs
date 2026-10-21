@@ -577,7 +577,9 @@ fn get_daily_groups(
             "normal".to_string()
         };
 
-        let meetings = meetings_by_entry.remove(&e.id).unwrap_or_default();
+        let mut meetings = meetings_by_entry.remove(&e.id).unwrap_or_default();
+        // 保证会议按 start_at 正序（从早到晚）排列，保持既定业务时序
+        meetings.sort_by_key(|m| m.start_at);
         let meeting_dtos: Vec<MeetingDetailDto> = meetings
             .into_iter()
             .map(|m| {
@@ -1366,8 +1368,13 @@ async fn stop_recording_clip(app: AppHandle, state: State<'_, AppState>) -> Resu
 
         let summarizer = AiSummarizer::new(ai_config);
         if audio_file_clone.exists() {
+            // 根据音频文件体积动态缩放超时时间：基准 600 秒，每增加 10MB 递增 300 秒，避免长音频多分段转写超时
+            let file_size_mb = std::fs::metadata(&audio_file_clone)
+                .map(|m| m.len() / (1024 * 1024))
+                .unwrap_or(0);
+            let timeout_secs = 600 + (file_size_mb / 10) * 300;
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(600),
+                std::time::Duration::from_secs(timeout_secs),
                 summarizer
                     .transcribe_audio_with_prompt(&audio_file_clone, dynamic_prompt.as_deref()),
             )
@@ -1487,8 +1494,13 @@ async fn retry_transcribe_audio_clip(
 
         let summarizer = AiSummarizer::new(ai_config);
         if audio_file.exists() {
+            // 根据音频文件体积动态缩放超时时间：基准 600 秒，每增加 10MB 递增 300 秒，避免长音频多分段转写超时
+            let file_size_mb = std::fs::metadata(&audio_file)
+                .map(|m| m.len() / (1024 * 1024))
+                .unwrap_or(0);
+            let timeout_secs = 600 + (file_size_mb / 10) * 300;
             let res = tokio::time::timeout(
-                std::time::Duration::from_secs(600),
+                std::time::Duration::from_secs(timeout_secs),
                 summarizer.transcribe_audio_with_prompt(&audio_file, dynamic_prompt.as_deref()),
             )
             .await;
@@ -3943,8 +3955,9 @@ async fn resummarize_meeting_entry(
     if !meetings.is_empty() {
         let mut final_meeting_summary = String::new();
         let mut all_combined_transcripts = String::new();
+        let mut meeting_summaries: Vec<(Uuid, String)> = Vec::new();
 
-        for m in meetings {
+        for m in &meetings {
             let clips = db
                 .lock()
                 .unwrap()
@@ -3990,21 +4003,24 @@ async fn resummarize_meeting_entry(
                 return Err("AI 提炼结果为空".to_string());
             }
 
-            // 重新从数据库获取最新 meeting 实例，防止覆盖 AI 请求期间由 finish_meeting 更新的最新状态
-            {
-                let guard = db.lock().unwrap();
-                if let Ok(Some(mut fresh_m)) = guard.get_meeting(&m.id) {
-                    fresh_m.meeting_summary = Some(summary.clone());
+            meeting_summaries.push((m.id, summary.clone()));
+            final_meeting_summary = summary;
+            if !combined_transcript.trim().is_empty() {
+                all_combined_transcripts.push_str(&combined_transcript);
+            }
+        }
+
+        // 所有会议均提炼成功后，一次性原子持久化，避免多场会议部分成功部分失败造成状态污染与重复调用
+        {
+            let guard = db.lock().unwrap();
+            for (m_id, sum) in meeting_summaries {
+                if let Ok(Some(mut fresh_m)) = guard.get_meeting(&m_id) {
+                    fresh_m.meeting_summary = Some(sum);
                     if fresh_m.status != "in_progress" {
                         fresh_m.status = "completed".to_string();
                     }
                     let _ = guard.insert_meeting(&fresh_m);
                 }
-            }
-
-            final_meeting_summary = summary;
-            if !combined_transcript.trim().is_empty() {
-                all_combined_transcripts.push_str(&combined_transcript);
             }
         }
 
@@ -4018,6 +4034,23 @@ async fn resummarize_meeting_entry(
             .transcribe_audio(p)
             .await
             .map_err(|e| format!("语音转写失败: {}", e))?;
+
+        // 无论后续提炼纪要是否遭遇短暂异常，优先原子落盘原始转写文本，防止重试时重复发起长音频转写
+        {
+            let guard = db.lock().unwrap();
+            if let Ok(Some(mut entry)) = guard.get_time_entry(&eid) {
+                let prev = entry.summary.unwrap_or_default();
+                if !prev.contains("【转写全文实录】") {
+                    let draft = if prev.is_empty() {
+                        format!("【转写全文实录】\n{}", transcript)
+                    } else {
+                        format!("{}\n\n【转写全文实录】\n{}", prev, transcript)
+                    };
+                    entry.summary = Some(draft);
+                    let _ = guard.insert_time_entry(&entry);
+                }
+            }
+        }
 
         let ai_summary = summarizer
             .summarize_meeting(
